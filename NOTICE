@@ -305,3 +305,10 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+Changes made for ShareCraft
+
+This is a modified version of GridCraft maintained by ThineCraft at https://github.com/ThineCraft/GridCraft and is not the original; it is not endorsed by the ArtCraft team or Tangency Labs. 2026-11-10
+Removed the ArtCraft logo and mark files and their licence text (docs/brand/) and their rows in ATTRIBUTION.md, README.md and AGENTS.md. 2026-11-10
+About dialog (crates/ui-egui/src/dialogs/about.rs): replaced "Part of ArtCraft." with "Based on GridCraft by the ArtCraft team." 2026-11-10
+About dialog: removed the links to the ArtCraft website and Discord, and their now-unused translations in crates/ui-egui/src/i18n. 2026-11-10
