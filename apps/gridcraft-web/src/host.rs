@@ -9,9 +9,10 @@
 //!   parent, or a parent on another origin, there is no bridge: the normal app with downloads.
 //! - `gridcraft:ready` once the app is listening; send a file now. GridCraft reads bytes, so it
 //!   says `file: false` and a host sends `bytes`.
-//! - `gridcraft:open` (from the host): `{ name, bytes }`. It opens like a workbook picked with
-//!   File › Open or dropped on the window; a file over [`MAX_OPEN_BYTES`] is refused before it is
-//!   copied.
+//! - `gridcraft:open` (from the host): `{ name, bytes }`. It arrives on its own queue
+//!   (`Services::host_open`), not the person's picker and drop inbox, so it is the only open that
+//!   gets past the page's file lock, and it replaces whatever workbook is shown; a file over
+//!   [`MAX_OPEN_BYTES`] is refused before it is copied.
 //! - `gridcraft:save` (to the host): `{ name, saveAs, bytes }` for every file GridCraft would
 //!   otherwise download: Save and Save As (an .xlsx workbook) and Export as PDF. The host stores
 //!   it and reports failures itself. GridCraft doesn't tell the host which saves make a file the
@@ -60,8 +61,10 @@ impl Bridge {
 
     /// Send saved and exported files to the host instead of downloading them, and hear files
     /// from it.
-    pub fn connect(&self, services: &mut Services, inbox: Inbox, ctx: egui::Context) {
-        self.listen(inbox, ctx);
+    pub fn connect(&self, services: &mut Services, ctx: egui::Context) {
+        let host_open = Inbox::default();
+        services.host_open = Some(host_open.clone());
+        self.listen(host_open, ctx);
         let bridge = self.clone();
         services.download = Some(Box::new(move |name: &str, bytes: &[u8]| {
             if let Err(e) = bridge.post_save(name, bytes) {
@@ -109,19 +112,19 @@ impl Bridge {
         Ok(())
     }
 
-    fn listen(&self, inbox: Inbox, ctx: egui::Context) {
+    fn listen(&self, queue: Inbox, ctx: egui::Context) {
         self.host.listen(move |message| {
             if let Message::Open { name, data } = message {
-                deliver_open(&inbox, &ctx, &name, &data);
+                deliver_open(&queue, &ctx, &name, &data);
             }
         });
     }
 }
 
-/// The file an open message carries, pushed onto the inbox for the next frame, like a dropped
-/// file. A host's file is untrusted input: an oversized one is refused before it is copied into
-/// the app's memory (the data's own length, not the host's claim).
-fn deliver_open(inbox: &Inbox, ctx: &egui::Context, name: &str, data: &FileData) {
+/// The file an open message carries, pushed onto the host's queue (`Services::host_open`) for
+/// the next frame. A host's file is untrusted input: an oversized one is refused before it is
+/// copied into the app's memory (the data's own length, not the host's claim).
+fn deliver_open(queue: &Inbox, ctx: &egui::Context, name: &str, data: &FileData) {
     let FileData::Bytes(array) = data else {
         log::warn!("host file {name} came as a File; GridCraft reads bytes only; not opened");
         return;
@@ -130,7 +133,7 @@ fn deliver_open(inbox: &Inbox, ctx: &egui::Context, name: &str, data: &FileData)
         log::warn!("host file is {} bytes, over the {} MiB host open limit; not opened", data.size(), MAX_OPEN_BYTES >> 20);
         return;
     }
-    inbox.lock().unwrap_or_else(|e| e.into_inner()).push((open_name(name), array.to_vec()));
+    queue.lock().unwrap_or_else(|e| e.into_inner()).push((open_name(name), array.to_vec()));
     ctx.request_repaint();
 }
 

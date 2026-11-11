@@ -139,7 +139,8 @@ impl SheetApp {
         self.guard_window_close(ctx);
         #[cfg(not(target_arch = "wasm32"))]
         updates_ui::tick(self, ctx);
-        // Files read asynchronously (web file picker, dropped files).
+        // Files read asynchronously (a host's workbook, web file picker, dropped files).
+        self.poll_host_opens();
         self.poll_async_opens();
         self.autosave(ctx);
         self.update_title(ctx);

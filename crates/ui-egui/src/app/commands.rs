@@ -38,12 +38,17 @@ impl SheetApp {
         }
     }
 
-    /// Runs a dialog's OK command. While the files are locked the password dialog only asks for
-    /// the host's file (the person's Open is refused before it can ask), so its open gets past
-    /// the lock, as the host's open from the inbox does.
-    pub(crate) fn run_dialog_command(&mut self, dialog: &str, id: &str, params: Json) -> Result<Json, String> {
-        if self.files_locked && dialog == "openPassword" && id == "file.open" {
-            return self.run_command(id, params);
+    /// Runs a dialog's OK command. While the files are locked, the password dialog of a host's
+    /// workbook (marked by `poll_host_opens`) gets past the lock and, once open, the workbook
+    /// replaces every other, as the host's open does; any other password dialog's open is refused.
+    pub(crate) fn run_dialog_command(&mut self, dialog: &str, id: &str, mut params: Json) -> Result<Json, String> {
+        let host = params.as_object_mut().and_then(|m| m.remove(super::files::HOST_OPEN)).is_some_and(|v| v == json!(true));
+        if self.files_locked && host && dialog == "openPassword" && id == "file.open" {
+            let r = self.run_command(id, params);
+            if r.is_ok() {
+                self.keep_only_active_workbook();
+            }
+            return r;
         }
         self.run(id, params)
     }
@@ -370,6 +375,12 @@ impl SheetApp {
     }
 
     pub fn open_dialog(&mut self, name: &str, params: Json) {
+        // A locked page keeps its workbook: Open (Data ▸ Get Data, the start page's Open…, a
+        // command asking for the picker) starts no file picker.
+        if name == "open" && self.files_locked {
+            self.alert(FILES_LOCKED.into());
+            return;
+        }
         if let Err(e) = self.commit_text_box_edit() {
             self.message = Some(("Text Box".into(), clean_error(&e)));
             return;

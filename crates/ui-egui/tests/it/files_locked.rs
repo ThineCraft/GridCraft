@@ -1,5 +1,6 @@
 //! A host that owns the open file can lock it: the person can't swap it for another workbook
-//! (New, Open, Close), while the host's own open and the person's Save keep working.
+//! (New, Open, Close, the file picker, drops), while the host's own open (`host_open`, which
+//! replaces the workbook shown) and the person's Save keep working.
 
 use egui::os::OperatingSystem;
 use egui::{Event, Key, Modifiers};
@@ -104,29 +105,121 @@ fn locked_keytips_do_not_open_backstage() {
     assert!(swaps_journaled(&h).is_empty(), "{:?}", swaps_journaled(&h));
 }
 
+/// Services with the person's inbox and the host's queue.
+fn queues() -> (Services, Inbox, Inbox) {
+    let (inbox, host_open): (Inbox, Inbox) = Default::default();
+    (Services { inbox: Some(inbox.clone()), host_open: Some(host_open.clone()), ..Default::default() }, inbox, host_open)
+}
+
+fn dialog_name(h: &Harness) -> Option<String> {
+    h.state().dialog.as_ref().map(|d| d.name().to_string())
+}
+
+/// Types the password into the open password dialog and presses OK.
+fn enter_password(h: &mut Harness, pw: &str) {
+    assert_eq!(dialog_name(h).as_deref(), Some("openPassword"));
+    h.state_mut().dialog.as_mut().unwrap().values.insert("password".into(), json!(pw));
+    h.get_by_label("   OK   ").click();
+    h.run_steps(3);
+}
+
 #[test]
 fn locked_host_open_still_opens() {
-    let inbox: Inbox = Default::default();
-    let mut h = harness(true, Services { inbox: Some(inbox.clone()), ..Default::default() });
-    inbox.lock().unwrap().push(("Stored.xlsx".into(), workbook_bytes("42")));
+    let (services, _, host_open) = queues();
+    let mut h = harness(true, services);
+    host_open.lock().unwrap().push(("Stored.xlsx".into(), workbook_bytes("42")));
     h.run_steps(3);
     assert!(h.state().message.is_none(), "{:?}", h.state().message);
     assert_eq!(a1(&h), Value::Number(42.0), "the host's file is the open workbook");
+    assert_eq!(documents(&h).0, 1, "the untouched blank made way");
 }
 
 #[test]
 fn locked_host_open_still_asks_for_a_password() {
-    let inbox: Inbox = Default::default();
-    let mut h = harness(true, Services { inbox: Some(inbox.clone()), ..Default::default() });
+    let (services, _, host_open) = queues();
+    let mut h = harness(true, services);
     let pw = "synthetic-pw-5150";
-    inbox.lock().unwrap().push(("Stored.xlsx".into(), gridcraft_xlsx::testing::encrypt_workbook(&workbook_bytes("42"), pw)));
+    host_open.lock().unwrap().push(("Stored.xlsx".into(), gridcraft_xlsx::testing::encrypt_workbook(&workbook_bytes("42"), pw)));
     h.run_steps(3);
-    assert_eq!(h.state().dialog.as_ref().map(|d| d.name().to_string()).as_deref(), Some("openPassword"));
-    h.state_mut().dialog.as_mut().unwrap().values.insert("password".into(), json!(pw));
-    h.get_by_label("   OK   ").click();
-    h.run_steps(3);
+    enter_password(&mut h, pw);
     assert!(h.state().message.is_none(), "{:?}", h.state().message);
     assert_eq!(a1(&h), Value::Number(42.0), "the host's protected file opens with its password");
+}
+
+#[test]
+fn locked_host_open_replaces_an_edited_blank() {
+    let (services, _, host_open) = queues();
+    let mut h = harness(true, services);
+    h.state_mut().run("cell.set", json!({"cell": "A1", "input": "typed first"})).unwrap();
+    h.run_steps(2);
+    assert!(h.state().session.active().unwrap().is_dirty());
+    host_open.lock().unwrap().push(("Stored.xlsx".into(), workbook_bytes("42")));
+    h.run_steps(3);
+    assert_eq!(documents(&h).0, 1, "the edited blank closed: the host's workbook is the only one");
+    assert_eq!(a1(&h), Value::Number(42.0));
+    assert!(h.state().message.is_none(), "{:?}", h.state().message);
+    assert_eq!(dialog_name(&h), None, "closed without asking to save");
+}
+
+#[test]
+fn locked_host_open_behind_a_password_replaces_an_edited_blank() {
+    let (services, _, host_open) = queues();
+    let mut h = harness(true, services);
+    h.state_mut().run("cell.set", json!({"cell": "A1", "input": "typed first"})).unwrap();
+    h.run_steps(2);
+    let pw = "synthetic-pw-5150";
+    host_open.lock().unwrap().push(("Stored.xlsx".into(), gridcraft_xlsx::testing::encrypt_workbook(&workbook_bytes("42"), pw)));
+    h.run_steps(3);
+    enter_password(&mut h, "wrong");
+    assert!(h.state_mut().message.take().is_some(), "a wrong password says so");
+    enter_password(&mut h, pw);
+    assert!(h.state().message.is_none(), "{:?}", h.state().message);
+    assert_eq!(documents(&h).0, 1, "the edited blank closed once the host's workbook opened");
+    assert_eq!(a1(&h), Value::Number(42.0));
+}
+
+#[test]
+fn locked_picker_workbook_is_refused() {
+    let (services, inbox, _) = queues();
+    let mut h = harness(true, services);
+    let before = documents(&h);
+    inbox.lock().unwrap().push(("Picked.xlsx".into(), workbook_bytes("7")));
+    inbox.lock().unwrap().push(("Picked.csv".into(), b"1,2,3".to_vec()));
+    inbox.lock().unwrap().push(("Protected.xlsx".into(), gridcraft_xlsx::testing::encrypt_workbook(&workbook_bytes("7"), "pw")));
+    h.run_steps(3);
+    assert_eq!(documents(&h), before, "a picked or dropped workbook does not open");
+    assert!(swaps_journaled(&h).is_empty(), "{:?}", swaps_journaled(&h));
+    assert!(h.state().message.is_none(), "refused quietly: {:?}", h.state().message);
+    assert_eq!(dialog_name(&h), None, "not even a password dialog");
+    // A password dialog not raised by the host's own file can't open one either.
+    let b64 = gridcraft_engine::io::base64_encode(&gridcraft_xlsx::testing::encrypt_workbook(&workbook_bytes("7"), "pw"));
+    h.state_mut().open_dialog("openPassword", json!({"name": "Protected.xlsx", "base64": b64}));
+    h.run_steps(2);
+    enter_password(&mut h, "pw");
+    assert_eq!(documents(&h), before, "the password dialog's open is refused");
+}
+
+#[test]
+fn locked_get_data_and_start_open_do_nothing() {
+    for locked in [false, true] {
+        let picks = std::rc::Rc::new(std::cell::Cell::new(0));
+        let counter = picks.clone();
+        let services = Services { open_async: Some(Box::new(move || counter.set(counter.get() + 1))), ..Default::default() };
+        let mut h = harness(locked, services);
+        // What Data > Get Data (Text/CSV) and the start page's Open... do.
+        h.state_mut().open_dialog("open", json!({}));
+        h.run_steps(2);
+        // Get Data from command search or a keytip asks the engine, which asks for the picker.
+        h.state_mut().run_or_alert("data.getData", json!({}));
+        h.run_steps(2);
+        assert_eq!(picks.get(), if locked { 0 } else { 2 }, "file pickers started (locked: {locked})");
+        assert!(h.state().message.is_none(), "{:?}", h.state().message);
+        // Home opens the start page; locked, it has no Open….
+        h.get_by_label("Home").click();
+        h.run_steps(2);
+        assert_eq!(dialog_name(&h).as_deref(), Some("start"));
+        assert_eq!(h.query_by_label("Open…").is_some(), !locked, "start page's Open… (locked: {locked})");
+    }
 }
 
 #[test]
@@ -168,9 +261,16 @@ fn unlocked_new_still_works() {
     assert!(h.state_mut().run("file.new", json!({})).is_ok());
     assert_eq!(documents(&h).0, count + 2);
     assert!(h.state().chrome.file_tab, "the File tab stays");
-    let inbox: Inbox = Default::default();
-    let mut h = harness(false, Services { inbox: Some(inbox.clone()), ..Default::default() });
+    let (services, inbox, host_open) = queues();
+    let mut h = harness(false, services);
     inbox.lock().unwrap().push(("Dropped.xlsx".into(), workbook_bytes("9")));
     h.run_steps(3);
     assert_eq!(a1(&h), Value::Number(9.0), "Open still opens");
+    // Unlocked, a host's workbook opens as a picked one does: beside an edited workbook.
+    h.state_mut().run("cell.set", json!({"cell": "B1", "input": "edited"})).unwrap();
+    let (count, _) = documents(&h);
+    host_open.lock().unwrap().push(("Stored.xlsx".into(), workbook_bytes("42")));
+    h.run_steps(3);
+    assert_eq!(documents(&h).0, count + 1);
+    assert_eq!(a1(&h), Value::Number(42.0));
 }

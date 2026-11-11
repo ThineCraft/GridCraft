@@ -39,8 +39,12 @@ pub struct Services {
     pub download: Option<Download>,
     /// Web: start an asynchronous file pick; the bytes arrive later in `inbox`.
     pub open_async: Option<Box<dyn Fn()>>,
-    /// Files delivered asynchronously (name, bytes), opened on the next frame.
+    /// Files the person delivered asynchronously (web file picker, drops), opened on the next
+    /// frame. While [`crate::SheetApp::files_locked`] a workbook here is refused.
     pub inbox: Option<Inbox>,
+    /// Workbooks a host page sent to edit (its open), opened on the next frame. Kept apart from
+    /// `inbox` so that only these get past [`crate::SheetApp::files_locked`].
+    pub host_open: Option<Inbox>,
     /// Web: hand PDF bytes to the browser's print flow directly (no download,
     /// no intermediate file) — opens the system print dialog on that PDF.
     pub print: Option<PrintPdf>,

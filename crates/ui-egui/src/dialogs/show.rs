@@ -372,7 +372,8 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                             open = false;
                         }
                     }
-                    if ui.button("Open…").clicked() {
+                    // A locked page keeps its workbook: no Open… (it would be refused).
+                    if !app.files_locked && ui.button("Open…").clicked() {
                         app.open_dialog("open", json!({}));
                         open = false;
                     }
