@@ -223,6 +223,10 @@ pub struct SheetApp {
     pub ui: UiState,
     /// The window chrome to draw (see [`Chrome`]).
     pub chrome: Chrome,
+    /// A host owns the open file (it opened it and stores what is saved): the person can't swap it
+    /// for another workbook, so New, Open and Close are refused and the File tab is left out. The
+    /// host's own open (the inbox) and Save still work.
+    pub files_locked: bool,
     /// Scroll position per (window id, sheet uid): each sheet keeps its own when sheets are
     /// inserted, deleted or moved.
     pub views: HashMap<(u64, u64), SheetView>,

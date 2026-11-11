@@ -33,6 +33,7 @@ mod drag_cursor;
 mod equation_editor;
 mod error_checking_menu;
 mod file_menu;
+mod files_locked;
 mod fill_handle_double_click;
 mod fill_handle_right_drag;
 mod fill_options_button;

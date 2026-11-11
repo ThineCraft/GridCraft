@@ -110,6 +110,10 @@ pub fn title_bar(app: &mut SheetApp, ui: &mut Ui) {
                     ("Sort A to Z", "data.sortAscending"),
                     ("Calculate Now", "formulas.calculateNow"),
                 ] {
+                    // A locked page keeps the open workbook: no New or Open here.
+                    if app.files_locked && matches!(id, "file.new" | "file.open") {
+                        continue;
+                    }
                     if ui.button(label).clicked() {
                         app.run_or_alert(id, json!({}));
                     }

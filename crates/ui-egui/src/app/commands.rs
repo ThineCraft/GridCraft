@@ -3,9 +3,15 @@ use super::{
     formula_locale, i18n, json, now_ms, printing,
 };
 
+/// Why a command that would swap the open workbook was refused while the files are locked.
+pub(crate) const FILES_LOCKED: &str = "not available here";
+
 impl SheetApp {
     /// Runs an engine command (or a UI command) and handles UI requests it makes.
     pub fn run(&mut self, id: &str, params: Json) -> Result<Json, String> {
+        if self.files_locked && self.swaps_workbook(id, &params) {
+            return Err(FILES_LOCKED.into());
+        }
         let r = self.run_command(id, params);
         // This copy leaves the system clipboard alone: note what it holds, so Paste can tell
         // that GridCraft's copy is newer while that text is still there.
@@ -14,6 +20,32 @@ impl SheetApp {
             self.cut_text = if id == "edit.cut" { self.clipboard_text_at_copy.clone() } else { None };
         }
         r
+    }
+
+    /// Whether `id` would put another workbook in place of the open one: New (blank or a
+    /// sample), Open, or Close, including closing a workbook's last window. Refused while
+    /// [`SheetApp::files_locked`].
+    fn swaps_workbook(&self, id: &str, params: &Json) -> bool {
+        match id {
+            "file.new" | "file.open" | "file.close" => true,
+            // Closing one of several windows on the workbook leaves it open.
+            "window.close" => gridcraft_engine::Target::from_json(params)
+                .ok()
+                .and_then(|t| self.session.target_window(t).ok())
+                .and_then(|w| self.session.window(w))
+                .is_none_or(|w| self.session.windows().iter().filter(|x| x.doc_uid == w.doc_uid).count() <= 1),
+            _ => false,
+        }
+    }
+
+    /// Runs a dialog's OK command. While the files are locked the password dialog only asks for
+    /// the host's file (the person's Open is refused before it can ask), so its open gets past
+    /// the lock, as the host's open from the inbox does.
+    pub(crate) fn run_dialog_command(&mut self, dialog: &str, id: &str, params: Json) -> Result<Json, String> {
+        if self.files_locked && dialog == "openPassword" && id == "file.open" {
+            return self.run_command(id, params);
+        }
+        self.run(id, params)
     }
 
     pub(super) fn run_command(&mut self, id: &str, params: Json) -> Result<Json, String> {
@@ -138,7 +170,7 @@ impl SheetApp {
     pub(super) fn alert(&mut self, e: String) {
         // Shown in the window the user ends up in, also after a command that switched windows.
         self.follow_active_window();
-        if e.contains("is not available right now") {
+        if e.contains("is not available right now") || e == FILES_LOCKED {
             self.toast = Some((e, now_ms()));
         } else {
             self.message = Some(("GridCraft".into(), clean_error(&e)));
@@ -426,7 +458,7 @@ impl SheetApp {
     /// Opens the File tab's Backstage view on `page`, committing a cell still being edited first
     /// (File actions work on the whole workbook). A draft that can't be committed keeps the sheet.
     pub fn open_backstage(&mut self, page: backstage::Page) {
-        if !self.chrome.file_tab {
+        if !self.chrome.file_tab || self.files_locked {
             return;
         }
         if !self.commit_edit(0, 0, false, false) {

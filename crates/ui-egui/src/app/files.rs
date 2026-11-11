@@ -75,7 +75,8 @@ impl SheetApp {
             .collect()
     }
 
-    /// Opens files that arrived asynchronously (web file picker, dropped files).
+    /// Opens files that arrived asynchronously (web file picker, dropped files, a host's file).
+    /// While the files are locked only the host fills the inbox, so its opens get past the lock.
     pub(super) fn poll_async_opens(&mut self) {
         let arrived: Vec<(String, Vec<u8>)> = self
             .services
@@ -85,7 +86,7 @@ impl SheetApp {
             .unwrap_or_default();
         for (name, bytes) in arrived {
             let b64 = gridcraft_engine::io::base64_encode(&bytes);
-            match self.run("file.open", json!({"name": &name, "base64": &b64})) {
+            match self.run_command("file.open", json!({"name": &name, "base64": &b64})) {
                 // A file picked from File › Open (web) arrives here: show it, not the Backstage.
                 Ok(r) => {
                     self.backstage = None;

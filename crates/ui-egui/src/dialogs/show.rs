@@ -431,7 +431,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
     }
     if confirm && let Some(cmd) = d.command {
         let params = build_params(&d);
-        match app.run(cmd, params) {
+        match app.run_dialog_command(&d.name, cmd, params) {
             Ok(r) => {
                 open = false;
                 if d.name == "solver" {

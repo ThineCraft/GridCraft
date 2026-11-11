@@ -64,6 +64,9 @@ pub fn start() {
                     }
                     let mut app = SheetApp::new(session, services);
                     app.ui.system_theme = true;
+                    // A host opens the file and stores what is saved: the person can't swap it for
+                    // another workbook (New, Open, Close, the File tab).
+                    app.files_locked = app_bridge.is_some();
                     // `?chrome=none|notitlebar|nofiletab`: a host that embeds the sheet in its own window and owns the files
                     // can leave the title bar and/or the File tab undrawn (`Chrome`, #1877). An unknown value keeps
                     // everything, as the default does.
@@ -100,7 +103,7 @@ pub fn start() {
                         bridge.post_ready();
                     }
                     crate::api::install(&mut app, cc.egui_ctx.clone());
-                    Ok(Box::new(WebShell { app, inbox, bridge: app_bridge, prefs }))
+                    Ok(Box::new(WebShell { app, inbox, hosted: app_bridge.is_some(), bridge: app_bridge, prefs }))
                 }),
             )
             .await;
@@ -127,6 +130,8 @@ fn query_param(key: &str) -> Option<String> {
 struct WebShell {
     app: SheetApp,
     inbox: Inbox,
+    /// A host bridge is present (`?host=parent`): the host owns the file, so drops are ignored.
+    hosted: bool,
     bridge: Option<crate::host::Bridge>,
     prefs: crate::prefs::PrefsSync,
 }
@@ -143,6 +148,8 @@ fn stored(key: &str) -> Option<String> {
 impl eframe::App for WebShell {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         let dropped = ctx.input_mut(|i| std::mem::take(&mut i.raw.dropped_files));
+        // Hosted, a dropped file would replace the host's workbook: drops are ignored.
+        let dropped = if self.hosted { Vec::new() } else { dropped };
         for f in dropped {
             let inbox = self.inbox.clone();
             let ctx = ctx.clone();

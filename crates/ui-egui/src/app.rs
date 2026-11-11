@@ -32,6 +32,7 @@ impl SheetApp {
             session,
             ui: UiState::default(),
             chrome: Chrome::default(),
+            files_locked: false,
             views: HashMap::new(),
             editor: None,
             text_box_editor: None,
@@ -211,6 +212,10 @@ impl SheetApp {
         #[cfg(not(target_arch = "wasm32"))]
         updates_ui::show(self, &ctx);
         let t = theme::Tokens::get(&ctx);
+        // A host that locks the file also leaves out the File tab (Backstage's New, Open and Close).
+        if self.files_locked {
+            self.chrome.file_tab = false;
+        }
         // A host can turn the File tab off while Backstage is already open: close it.
         if !self.chrome.file_tab {
             self.backstage = None;
