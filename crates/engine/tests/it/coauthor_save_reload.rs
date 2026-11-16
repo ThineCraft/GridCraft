@@ -9,18 +9,23 @@
 //! paths.
 //!
 //! - `save_reload_lossless`: the reopened workbook, with the values its file holds
-//!   (`DocState::from_saved`, as a checkpoint is loaded), has the same `entered` and `computed`
-//!   digests. Opened as `file.open` opens a file (recalculating), and then both it and the
-//!   original recalculated in full under the sequence's clock and RAND seed, the `computed`
-//!   digests agree too, so the formulas, not only their cached values, survive.
+//!   (`DocState::from_saved`, as a checkpoint is loaded without recalculating), has the same
+//!   `entered` digest. Its `computed` digest is that of the original's values as the file caches
+//!   them, which is not lossless: a circular reference's `#CIRC!` comes back as 0, and `#SPILL!`
+//!   and `#CALC!` (and the Python errors) come back as `#VALUE!` (`as_cached`). Opened as
+//!   `file.open` opens a file (recalculating), and then both it and the original recalculated in
+//!   full under the sequence's clock and RAND seed, the `computed` digests agree, so computed
+//!   values are lossless only when the reopened file is recalculated.
 //! - `save_is_deterministic`: two engines that applied the same commands write identical bytes.
 //! - `save_reload_save_is_stable`: writing, reopening and writing again gives identical bytes.
 //!
-//! - `known_loss_reopen_refits_rows_from_values` (ignored): the one loss left for G4, row heights
-//!   that opening a file re-fits.
+//! - `known_loss_reopen_refits_rows_from_values` (ignored): the one loss of entered content left
+//!   for G4, row heights that opening a file re-fits. It passes while the loss remains.
 //!
 //! Knob: `GRIDCRAFT_COAUTHOR_SAVE_SEEDS` (default 200) generated sequences of 60 steps, seeds
-//! 2000 onwards.
+//! 2000 onwards. The default window (2000 to 2199) holds none of the 8 seeds in 2000 to 11999
+//! that meet the known loss (3996, 4033, 5491, 5580, 6730, 7525, 9347 and 10526), so a run of
+//! `GRIDCRAFT_COAUTHOR_SAVE_SEEDS=10000` is expected to fail on exactly those.
 
 use std::path::PathBuf;
 
@@ -562,7 +567,8 @@ fn zip_parts(bytes: &[u8]) -> Result<Vec<(String, Vec<u8>)>, String> {
 /// its row's height live, and gets a taller row after a save and reopen. (Seed 3996 at 60 steps
 /// meets the same through a circular reference: `#CIRC!` is cached as 0, which a long-date
 /// format shows as a long wrapped text.) A checkpoint loaded without re-fitting rows would keep
-/// the heights as written. Run with `--ignored` to see it.
+/// the heights as written. Run with `--ignored`: it passes while both cases still lose a row
+/// height, and fails once the loss is fixed.
 #[test]
 #[ignore = "known loss for G4: opening re-fits rows the live engine left alone"]
 fn known_loss_reopen_refits_rows_from_values() {
@@ -573,14 +579,12 @@ fn known_loss_reopen_refits_rows_from_values() {
     ];
     let mut cases = vec![case("wrapped-formula-grows", 1, steps)];
     cases.push(Case { name: "seed 3996".into(), seq: generate(3_996, 60) });
-    let failures: Vec<String> = cases.iter().filter_map(|c| lossless(c).err()).collect();
-    assert!(
-        failures.is_empty(),
-        "{}",
-        failures.join(
-            "
-
-"
-        )
-    );
+    // Both cases still lose a row height. When G4 fixes the loss this fails, and the test (and
+    // the module notes about it) should go.
+    for c in &cases {
+        match lossless(c) {
+            Ok(()) => panic!("{}: no longer loses a row height; the known loss is fixed", c.name),
+            Err(e) => assert!(e.contains("!row "), "{}: lost something other than a row height:\n{e}", c.name),
+        }
+    }
 }
