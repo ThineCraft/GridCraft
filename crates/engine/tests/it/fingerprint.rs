@@ -294,6 +294,16 @@ fn blank_cells_that_change_nothing_are_skipped() {
     let with_row = fp(wb.clone());
     blank(&mut wb, "F7");
     assert_ne!(fp(wb), with_row, "a default cell in a bold row is a format");
+    // A row or column whose style is the default one carries no style, so a blank cell in it is
+    // skipped too, as the line itself is.
+    let mut wb = base();
+    let sheet = wb.sheet_mut(0).unwrap();
+    sheet.rows.insert(6, LineInfo { style: Some(StyleId::DEFAULT), ..LineInfo::default() });
+    sheet.cols.insert(5, LineInfo { style: Some(StyleId::DEFAULT), ..LineInfo::default() });
+    let with_default_lines = fp(wb.clone());
+    assert_eq!(with_default_lines, before, "a default-styled row or column changes nothing");
+    blank(&mut wb, "F7");
+    assert_eq!(fp(wb), with_default_lines, "a blank cell in a default-styled row and column changes nothing");
     // And a formatted blank cell counts.
     let mut wb = base();
     let bold = bold_style(&mut wb);

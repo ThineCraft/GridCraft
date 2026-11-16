@@ -279,8 +279,10 @@ fn entered_sheet(wb: &Workbook, si: usize, sheet: &Sheet, out: &mut dyn FnMut(St
     for (c, cell) in sheet.cells.iter() {
         // A blank cell (no content, the default style) where no row or column style applies
         // changes nothing a person sees, and a save need not keep it. The store never keeps one
-        // through `set`, but an in-place edit or a deserialized store can.
-        if cell.is_blank() && sheet.rows.get(&c.row).and_then(|r| r.style).is_none() && sheet.cols.get(&c.col).and_then(|r| r.style).is_none() {
+        // through `set`, but an in-place edit or a deserialized store can. A line style of
+        // `Some(DEFAULT)` is no style, as in the line loop below and the file's column writer.
+        let line_style = |info: Option<&gridcraft_model::LineInfo>| info.and_then(|l| l.style).filter(|s| *s != gridcraft_model::StyleId::DEFAULT);
+        if cell.is_blank() && line_style(sheet.rows.get(&c.row)).is_none() && line_style(sheet.cols.get(&c.col)).is_none() {
             continue;
         }
         let style = style_text(wb.styles.get(cell.style));
