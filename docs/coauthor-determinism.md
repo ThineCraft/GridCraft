@@ -19,7 +19,7 @@ parameters (`crates/engine/tests/fixtures/coauthor/selection_readers.md`), so no
 proves agreement on filters.
 
 Audited at branch `coauthor-proofs` after `43d635b0`, November 2026. The long run was re-run at
-`d0f5983b` (see Long run), after later engine and fingerprint changes.
+`f92a4178` (see Long run), after later engine and fingerprint changes.
 
 ## Evidence
 
@@ -183,10 +183,10 @@ per-workbook results.
 
 ## Long run
 
-`cargo test --release --offline -p gridcraft-engine --test it coauthor_replay::long_replay -- --ignored --nocapture`,
-seeds 100000 to 109999, 60 random steps each, on x86_64 Windows, at `d0f5983b`:
+`cargo test --release --locked --offline -p gridcraft-engine --test it coauthor_replay::long_replay -- --ignored --nocapture`,
+seeds 100000 to 109999, 60 random steps each, on x86_64 Windows, at `f92a4178`:
 
-- Passed in 248.4 s: 10,000 sequences, 625,130 steps, 0.0 % errors, 18.5 % structural.
+- Passed in 311.1 s: 10,000 sequences, 625,130 steps, 0.0 % errors, 18.5 % structural.
 - The `entered` digest changed on 463,024 of 509,684 non-structural steps (90.8 %); the
   `computed` digest changed on 443,516 of 625,130 steps (70.9 %).
 - No seed failed. The two engines agreed on outcome and both digests after every step, with
@@ -196,6 +196,8 @@ seeds 100000 to 109999, 60 random steps each, on x86_64 Windows, at `d0f5983b`:
   share the seed and the RNG state lives in `Calc`, not the workbook (see Random numbers). The
   run proves nothing about rollback against straight application, or about a client that loaded
   a checkpoint, and nothing across platforms (Task 4).
+- A run at `d0f5983b` (248.4 s), before the row-height writer fix (`723f2f70`) and the fingerprint's
+  blank-cell rule (`93951043`), gave exactly the same counts.
 - An earlier run at `965571a1` (241.8 s, the same counts except 463,022 `entered` changes)
   predates later changes to a shared command (`home.borders` re-fits rows, `4b362647`) and to
-  what the fingerprint compares (`6f612608`, `dba599ee`); it is superseded by the run above.
+  what the fingerprint compares (`6f612608`, `dba599ee`); it is superseded by the runs above.
