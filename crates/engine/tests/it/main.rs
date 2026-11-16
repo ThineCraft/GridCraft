@@ -5,6 +5,7 @@ mod cf_formula_validate;
 mod chart_area_stacked100;
 mod chart_workbook_names;
 mod coauthor_replay;
+mod coauthor_save_reload;
 mod command_sequence_fuzz;
 mod cross_sheet_cut;
 mod csv_export_budget;
