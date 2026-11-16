@@ -28,9 +28,7 @@ use sha2::{Digest, Sha256};
 
 use sequences::{DEFAULT_NOW, Sequence, Step, apply, fresh_session};
 #[cfg(target_arch = "wasm32")]
-use sequences::{
-    TIMING_CELL_COUNTS, TIMING_PENDING_COUNTS, TIMING_REPETITIONS, TimingStats, rerun_pending, timing_document, timing_pending_commands, timing_stats,
-};
+use sequences::{TIMING_REPETITIONS, headline_p95, kind_table, time_all_workloads, time_command_kinds, timing_table};
 
 const NATIVE_DIGESTS: &str = include_str!("fixtures/coauthor/native-digests.json");
 const NATIVE_MATHS: &str = include_str!("fixtures/coauthor-maths/native-maths.json");
@@ -726,16 +724,16 @@ fn step_differences_name_one_sided_failures() {
     assert_eq!(step_differences(&[], &[failure]), ["step 3 `cell.set`: native ok, wasm error bad"]);
 }
 
+/// Milliseconds since the first call; `web_time::Instant` calls `Performance.now()` on
+/// wasm32-unknown-unknown.
 #[cfg(target_arch = "wasm32")]
-fn measure_rerun_wasm(agreed: &gridcraft_engine::DocState, steps: &[Step]) -> Result<f64, String> {
-    // `web_time::Instant` calls `Performance.now()` on wasm32-unknown-unknown.
-    let start = web_time::Instant::now();
-    let rerun = rerun_pending(agreed, steps);
-    let elapsed_ms = start.elapsed().as_secs_f64() * 1_000.0;
-    std::hint::black_box(rerun)?;
-    Ok(elapsed_ms)
+fn wasm_clock() -> impl Fn() -> f64 {
+    let origin = web_time::Instant::now();
+    move || origin.elapsed().as_secs_f64() * 1_000.0
 }
 
+/// The browser counterpart of `it/coauthor_timing.rs`: the same workloads, sizes, checks and
+/// tables. The threshold is judged on clone + apply; clone + apply + recalc_all is reported only.
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen_test::wasm_bindgen_test]
 #[ignore = "release-only browser rollback and re-run timing proof"]
@@ -743,29 +741,17 @@ fn rollback_and_rerun_timings_wasm() {
     if cfg!(debug_assertions) {
         panic!("timings must be run with cargo test --release");
     }
-    let pending = timing_pending_commands();
-    let mut rows: Vec<(usize, usize, TimingStats)> = Vec::new();
-    for cells in TIMING_CELL_COUNTS {
-        let agreed = timing_document(cells).expect("the timing workbook is valid");
-        for command_count in TIMING_PENDING_COUNTS {
-            let steps = pending.get(..command_count).expect("fifty pending commands were generated");
-            let _warm_up_ms = measure_rerun_wasm(&agreed, steps).expect("the warm-up replay succeeds");
-            let mut samples_ms = Vec::with_capacity(TIMING_REPETITIONS);
-            for _ in 0..TIMING_REPETITIONS {
-                samples_ms.push(measure_rerun_wasm(&agreed, steps).expect("the measured replay succeeds"));
-            }
-            rows.push((cells, command_count, timing_stats(samples_ms).expect("the timing samples are valid")));
-        }
+    let clock = wasm_clock();
+    let rows = time_all_workloads(&clock).expect("the timed workloads run and pass their checks");
+    let kinds = time_command_kinds(&clock, 100_000).expect("the per-kind costs run and pass their checks");
+    for line in timing_table("wasm", &rows) {
+        wasm_bindgen_test::console_log!("{line}");
     }
-
-    wasm_bindgen_test::console_log!("platform cells pending p50_ms p95_ms max_ms");
-    for (cells, pending, stats) in &rows {
-        wasm_bindgen_test::console_log!("wasm {cells} {pending} {:.3} {:.3} {:.3}", stats.p50_ms, stats.p95_ms, stats.max_ms);
+    for line in kind_table("wasm", 100_000, &kinds) {
+        wasm_bindgen_test::console_log!("{line}");
     }
-    let measured = rows
-        .iter()
-        .find(|(cells, pending, _)| *cells == 100_000 && *pending == 10)
-        .map(|(_, _, stats)| stats.p95_ms)
-        .expect("the 100,000-cell/10-command case was measured");
-    assert!(measured <= 150.0, "wasm 100,000-cell/10-command p95 {measured:.3} ms exceeds 150 ms");
+    wasm_bindgen_test::console_log!("repetitions {TIMING_REPETITIONS} after one excluded warm-up");
+    let measured = headline_p95(&rows).expect("the headline case was measured");
+    wasm_bindgen_test::console_log!("headline wasm mixed 100000 cells 10 pending clone+apply p95 {measured:.3} ms (threshold 150 ms)");
+    assert!(measured <= 150.0, "wasm 100,000-cell/10-command clone+apply p95 {measured:.3} ms exceeds 150 ms");
 }

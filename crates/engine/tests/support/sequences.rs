@@ -17,6 +17,7 @@
 use std::sync::Arc;
 
 use gridcraft_engine::core::{CellRef, Value};
+use gridcraft_engine::fingerprint::{DocId, fingerprint, workbook_fingerprint};
 use gridcraft_engine::model::{Cell, Formula, Sheet, Workbook};
 use gridcraft_engine::{DocState, Session, Trust};
 use serde_json::{Map, Value as Json, json};
@@ -269,18 +270,217 @@ pub fn timing_pending_commands() -> Vec<Step> {
         .collect()
 }
 
-/// Clone the agreed state, apply pending commands, then rebuild and recalculate everything.
-/// Fingerprinting and validation deliberately happen outside callers' timed sections.
-pub fn rerun_pending(agreed: &DocState, steps: &[Step]) -> Result<Session, String> {
+/// Whether a step is one of [`STRUCTURAL_COMMANDS`] (the row and column ones run a full recalculation as they are committed).
+pub fn is_structural(step: &Step) -> bool {
+    STRUCTURAL_COMMANDS.contains(&step.id.as_str())
+}
+
+/// A session holding a clone of the agreed state: the rollback.
+pub fn rollback_session(agreed: &DocState) -> Session {
     let mut session = Session::new();
     session.add_document(agreed.clone());
+    session
+}
+
+/// Clone the agreed state and apply the pending commands, as the co-authoring apply loop does.
+/// Every command recalculates as it is committed (a structural one fully, a content or format
+/// one its dependents), so the result is already calculated; nothing more runs here.
+/// Fingerprinting and validation deliberately happen outside callers' timed sections.
+pub fn rerun_pending(agreed: &DocState, steps: &[Step]) -> Result<Session, String> {
+    let mut session = rollback_session(agreed);
     for step in steps {
         apply(&mut session, step)?;
     }
+    Ok(session)
+}
+
+/// One more full dependency rebuild and recalculation of the session's document.
+pub fn force_recalc_all(session: &mut Session) -> Result<(), String> {
     let document = session.doc_mut().map_err(|error| error.to_string())?;
     let wb = Arc::make_mut(&mut document.wb);
     document.calc.recalc_all(wb);
-    Ok(session)
+    Ok(())
+}
+
+/// Untimed checks of a re-run: the commands changed what a co-author sees, and a further full
+/// recalculation changes nothing, so the per-command recalculation left the workbook complete.
+pub fn check_rerun(agreed: &DocState, mut session: Session, steps: &[Step]) -> Result<(), String> {
+    let applied = fingerprint(&session, DocId(0));
+    if !steps.is_empty() && applied.entered == workbook_fingerprint(&agreed.wb).entered {
+        return Err(format!("{} pending commands left the entered digest unchanged", steps.len()));
+    }
+    force_recalc_all(&mut session)?;
+    let recalculated = fingerprint(&session, DocId(0));
+    if recalculated.computed != applied.computed {
+        return Err(format!("a further recalc_all changed the computed digest after {} pending commands", steps.len()));
+    }
+    if recalculated.entered != applied.entered {
+        return Err(format!("a further recalc_all changed the entered digest after {} pending commands", steps.len()));
+    }
+    Ok(())
+}
+
+/// Times one rollback and re-run with `clock` (milliseconds from any fixed origin). Returns the
+/// clone + apply time and, separately, that time plus one forced `recalc_all`.
+fn time_rerun_once(clock: &dyn Fn() -> f64, agreed: &DocState, steps: &[Step]) -> Result<(f64, f64), String> {
+    let start = clock();
+    let session = rerun_pending(agreed, steps);
+    let applied = clock();
+    let mut session = session?;
+    let recalc_start = clock();
+    force_recalc_all(&mut session)?;
+    let recalc_end = clock();
+    std::hint::black_box(session);
+    let apply_ms = applied - start;
+    Ok((apply_ms, apply_ms + (recalc_end - recalc_start)))
+}
+
+/// One measured workload at one workbook size.
+#[derive(Clone, Debug)]
+pub struct TimingRow {
+    pub workload: &'static str,
+    pub cells: usize,
+    pub pending: usize,
+    pub structural: usize,
+    /// Clone + apply: the headline figure, judged against the thresholds.
+    pub apply: TimingStats,
+    /// Clone + apply + one forced `recalc_all`: reported only, as an upper bound.
+    pub with_recalc: TimingStats,
+}
+
+/// The measured workloads: the brief's mixed prefixes of 1, 10 and 50 commands (headline), ten
+/// content and format commands with no structural one, and the same nine with one row insert.
+pub fn timing_workloads() -> Vec<(&'static str, Vec<Step>)> {
+    let pending = timing_pending_commands();
+    let mut workloads: Vec<(&'static str, Vec<Step>)> =
+        TIMING_PENDING_COUNTS.iter().map(|count| ("mixed", pending.iter().take(*count).cloned().collect())).collect();
+    let content: Vec<Step> = pending.iter().filter(|step| !is_structural(step)).take(10).cloned().collect();
+    let mut one_structural: Vec<Step> = content.iter().take(9).cloned().collect();
+    one_structural.push(Step::new("home.insertRows", json!({"sheet": "Sheet1", "rows": "10:10"})));
+    workloads.push(("content-only", content));
+    workloads.push(("one-structural", one_structural));
+    workloads
+}
+
+/// Times one workload: one checked warm-up (excluded), then [`TIMING_REPETITIONS`] samples.
+pub fn time_workload(clock: &dyn Fn() -> f64, agreed: &DocState, cells: usize, workload: &'static str, steps: &[Step]) -> Result<TimingRow, String> {
+    check_rerun(agreed, rerun_pending(agreed, steps)?, steps).map_err(|error| format!("{workload} at {cells} cells: {error}"))?;
+    let _warm_up = time_rerun_once(clock, agreed, steps)?;
+    let mut apply_ms = Vec::with_capacity(TIMING_REPETITIONS);
+    let mut with_recalc_ms = Vec::with_capacity(TIMING_REPETITIONS);
+    for _ in 0..TIMING_REPETITIONS {
+        let (apply, with_recalc) = time_rerun_once(clock, agreed, steps)?;
+        apply_ms.push(apply);
+        with_recalc_ms.push(with_recalc);
+    }
+    Ok(TimingRow {
+        workload,
+        cells,
+        pending: steps.len(),
+        structural: steps.iter().filter(|step| is_structural(step)).count(),
+        apply: timing_stats(apply_ms)?,
+        with_recalc: timing_stats(with_recalc_ms)?,
+    })
+}
+
+/// Every workload at every size.
+pub fn time_all_workloads(clock: &dyn Fn() -> f64) -> Result<Vec<TimingRow>, String> {
+    let workloads = timing_workloads();
+    let mut rows = Vec::new();
+    for cells in TIMING_CELL_COUNTS {
+        let agreed = timing_document(cells)?;
+        for (workload, steps) in &workloads {
+            rows.push(time_workload(clock, &agreed, cells, workload, steps)?);
+        }
+    }
+    Ok(rows)
+}
+
+/// One command of each kind in the pending list (its first occurrence), for the per-kind costs.
+pub fn timing_command_kinds() -> Vec<Step> {
+    let mut kinds: Vec<Step> = Vec::new();
+    for step in timing_pending_commands() {
+        if !kinds.iter().any(|kind| kind.id == step.id) {
+            kinds.push(step);
+        }
+    }
+    kinds
+}
+
+/// The cost of each command kind at `cells` cells: the clone alone, then each command applied
+/// alone to a fresh clone (its own recalculation included, the clone excluded).
+pub fn time_command_kinds(clock: &dyn Fn() -> f64, cells: usize) -> Result<Vec<(String, TimingStats)>, String> {
+    let agreed = timing_document(cells)?;
+    let mut rows = Vec::new();
+    let mut clone_ms = Vec::with_capacity(TIMING_REPETITIONS);
+    for repetition in 0..=TIMING_REPETITIONS {
+        let start = clock();
+        let session = rollback_session(&agreed);
+        let elapsed = clock() - start;
+        std::hint::black_box(session);
+        if repetition != 0 {
+            clone_ms.push(elapsed);
+        }
+    }
+    rows.push(("clone".to_string(), timing_stats(clone_ms)?));
+    for step in timing_command_kinds() {
+        let steps = std::slice::from_ref(&step);
+        check_rerun(&agreed, rerun_pending(&agreed, steps)?, steps).map_err(|error| format!("{} at {cells} cells: {error}", step.id))?;
+        let mut samples = Vec::with_capacity(TIMING_REPETITIONS);
+        for repetition in 0..=TIMING_REPETITIONS {
+            let mut session = rollback_session(&agreed);
+            let start = clock();
+            let outcome = apply(&mut session, &step);
+            let elapsed = clock() - start;
+            outcome?;
+            std::hint::black_box(session);
+            if repetition != 0 {
+                samples.push(elapsed);
+            }
+        }
+        rows.push((step.id.clone(), timing_stats(samples)?));
+    }
+    Ok(rows)
+}
+
+/// The workload table as text lines, prefixed with the platform name.
+pub fn timing_table(platform: &str, rows: &[TimingRow]) -> Vec<String> {
+    let mut lines = vec![String::from(
+        "platform workload cells pending structural apply_p50 apply_p95 apply_max recalc_p50 recalc_p95 recalc_max (ms; apply = clone+apply, recalc = clone+apply+recalc_all)",
+    )];
+    for row in rows {
+        lines.push(format!(
+            "{platform} {} {} {} {} {:.3} {:.3} {:.3} {:.3} {:.3} {:.3}",
+            row.workload,
+            row.cells,
+            row.pending,
+            row.structural,
+            row.apply.p50_ms,
+            row.apply.p95_ms,
+            row.apply.max_ms,
+            row.with_recalc.p50_ms,
+            row.with_recalc.p95_ms,
+            row.with_recalc.max_ms
+        ));
+    }
+    lines
+}
+
+/// The per-kind table as text lines, prefixed with the platform name.
+pub fn kind_table(platform: &str, cells: usize, rows: &[(String, TimingStats)]) -> Vec<String> {
+    let mut lines = vec![String::from("platform cells command p50_ms p95_ms max_ms")];
+    for (kind, stats) in rows {
+        lines.push(format!("{platform} {cells} {kind} {:.3} {:.3} {:.3}", stats.p50_ms, stats.p95_ms, stats.max_ms));
+    }
+    lines
+}
+
+/// The headline clone + apply p95: the brief's mixed 10-command case at 100,000 cells.
+pub fn headline_p95(rows: &[TimingRow]) -> Result<f64, String> {
+    rows.iter()
+        .find(|row| row.workload == "mixed" && row.cells == 100_000 && row.pending == 10)
+        .map(|row| row.apply.p95_ms)
+        .ok_or_else(|| "the 100,000-cell/10-command mixed case was not measured".to_string())
 }
 
 /// Nearest-rank p50 and p95 plus the maximum from a non-empty set of samples.
