@@ -266,7 +266,11 @@ fn edge_cases() -> Vec<Case> {
 
 fn fixture_cases() -> Vec<Case> {
     let mut paths: Vec<PathBuf> = std::fs::read_dir(fixtures_dir())
-        .map(|d| d.filter_map(|e| e.ok().map(|e| e.path())).filter(|p| p.extension().is_some_and(|x| x == "json")).collect())
+        .map(|d| {
+            d.filter_map(|e| e.ok().map(|e| e.path()))
+                .filter(|p| p.extension().is_some_and(|x| x == "json") && p.file_name().is_none_or(|x| x != "native-digests.json"))
+                .collect()
+        })
         .unwrap_or_default();
     paths.sort();
     assert!(paths.len() >= 26, "the coauthor fixtures are missing ({} found)", paths.len());
