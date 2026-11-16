@@ -797,9 +797,9 @@ pub(crate) mod tests {
     }
 
     /// Two arrays laid out in one pass that overlap: a read of the shared cells sees the anchor
-    /// that comes first in row-major order, the one write-back keeps (the other is `#SPILL!`),
-    /// whatever order the pass met them in. Hash order (which differs between platforms and
-    /// between a replay and a rollback) never decides it.
+    /// that comes first in row-major order, whatever order the pass met them in. Hash order
+    /// (which differs between platforms and between a replay and a rollback) never decides it.
+    /// This is about reads within the pass; which array write-back lays out is decided there.
     #[test]
     fn overlapping_spills_in_a_pass_read_the_first_anchor() {
         let mut wb = Workbook::new();

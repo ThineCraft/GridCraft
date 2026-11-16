@@ -581,8 +581,9 @@ impl Host for PassHost<'_> {
             return self.compute(k);
         }
         // A cell covered by a spill computed in this pass. Where several overlap, the anchor first
-        // in row-major order counts: write-back lays that one out and blocks the others. Never
-        // `spills`' hash order, which differs between platforms and between calculation histories.
+        // in row-major order counts, never `spills`' hash order, which differs between platforms
+        // and between calculation histories. Which array write-back then lays out is decided
+        // there (it walks the dirty cells, and can block this anchor and lay out another).
         let covering = match self.spill_index.covering(sheet, c) {
             Cover::None => None,
             Cover::One(a) => self.spills.get_key_value(&(sheet, a)),
