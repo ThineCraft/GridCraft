@@ -27,6 +27,10 @@ use serde_json::json;
 use sha2::{Digest, Sha256};
 
 use sequences::{DEFAULT_NOW, Sequence, Step, apply, fresh_session};
+#[cfg(target_arch = "wasm32")]
+use sequences::{
+    TIMING_CELL_COUNTS, TIMING_PENDING_COUNTS, TIMING_REPETITIONS, TimingStats, rerun_pending, timing_document, timing_pending_commands, timing_stats,
+};
 
 const NATIVE_DIGESTS: &str = include_str!("fixtures/coauthor/native-digests.json");
 const NATIVE_MATHS: &str = include_str!("fixtures/coauthor-maths/native-maths.json");
@@ -720,4 +724,48 @@ fn step_differences_name_one_sided_failures() {
     let failure = StepFailure { step: 3, id: "cell.set".into(), error: "bad".into() };
     assert_eq!(step_differences(std::slice::from_ref(&failure), std::slice::from_ref(&failure)), Vec::<String>::new());
     assert_eq!(step_differences(&[], &[failure]), ["step 3 `cell.set`: native ok, wasm error bad"]);
+}
+
+#[cfg(target_arch = "wasm32")]
+fn measure_rerun_wasm(agreed: &gridcraft_engine::DocState, steps: &[Step]) -> Result<f64, String> {
+    // `web_time::Instant` calls `Performance.now()` on wasm32-unknown-unknown.
+    let start = web_time::Instant::now();
+    let rerun = rerun_pending(agreed, steps);
+    let elapsed_ms = start.elapsed().as_secs_f64() * 1_000.0;
+    std::hint::black_box(rerun)?;
+    Ok(elapsed_ms)
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen_test::wasm_bindgen_test]
+#[ignore = "release-only browser rollback and re-run timing proof"]
+fn rollback_and_rerun_timings_wasm() {
+    if cfg!(debug_assertions) {
+        panic!("timings must be run with cargo test --release");
+    }
+    let pending = timing_pending_commands();
+    let mut rows: Vec<(usize, usize, TimingStats)> = Vec::new();
+    for cells in TIMING_CELL_COUNTS {
+        let agreed = timing_document(cells).expect("the timing workbook is valid");
+        for command_count in TIMING_PENDING_COUNTS {
+            let steps = pending.get(..command_count).expect("fifty pending commands were generated");
+            let _warm_up_ms = measure_rerun_wasm(&agreed, steps).expect("the warm-up replay succeeds");
+            let mut samples_ms = Vec::with_capacity(TIMING_REPETITIONS);
+            for _ in 0..TIMING_REPETITIONS {
+                samples_ms.push(measure_rerun_wasm(&agreed, steps).expect("the measured replay succeeds"));
+            }
+            rows.push((cells, command_count, timing_stats(samples_ms).expect("the timing samples are valid")));
+        }
+    }
+
+    wasm_bindgen_test::console_log!("platform cells pending p50_ms p95_ms max_ms");
+    for (cells, pending, stats) in &rows {
+        wasm_bindgen_test::console_log!("wasm {cells} {pending} {:.3} {:.3} {:.3}", stats.p50_ms, stats.p95_ms, stats.max_ms);
+    }
+    let measured = rows
+        .iter()
+        .find(|(cells, pending, _)| *cells == 100_000 && *pending == 10)
+        .map(|(_, _, stats)| stats.p95_ms)
+        .expect("the 100,000-cell/10-command case was measured");
+    assert!(measured <= 150.0, "wasm 100,000-cell/10-command p95 {measured:.3} ms exceeds 150 ms");
 }
