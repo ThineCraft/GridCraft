@@ -16,8 +16,9 @@
 //! Knobs: `GRIDCRAFT_COAUTHOR_SEEDS` (default 500), `GRIDCRAFT_COAUTHOR_STEPS` (default 60),
 //! `GRIDCRAFT_COAUTHOR_SEED=17` replays one seed, `GRIDCRAFT_COAUTHOR_FIRST` starts the seed range
 //! elsewhere (seeds `FIRST..FIRST+SEEDS`). `GRIDCRAFT_COAUTHOR_WRITE_FIXTURES=1` rewrites the
-//! fixtures from the generator and the hand-written sequences. The long run:
-//! `GRIDCRAFT_COAUTHOR_SEEDS=10000 cargo test --release -p gridcraft-engine --test it coauthor_replay::two_engines`.
+//! fixtures from the generator and the hand-written sequences.
+//! - `long_replay` (ignored): the 10,000-sequence run, in release:
+//!   `cargo test --release -p gridcraft-engine --test it coauthor_replay::long_replay -- --ignored --nocapture`.
 
 use std::path::PathBuf;
 
@@ -121,6 +122,54 @@ fn replay_two(name: &str, seq: &Sequence, tally: &mut Tally) -> Result<(Session,
     Ok((a, b))
 }
 
+/// Replays generated sequences for `seeds` (of `steps` random steps each) into `tally`, returning
+/// one message per failing seed (at most `max_failures`), each with its replay command.
+fn replay_seeds(seeds: &[u64], steps: usize, max_failures: usize, tally: &mut Tally) -> Vec<String> {
+    let mut failures = Vec::new();
+    for &seed in seeds {
+        let seq = generate(seed, steps);
+        if let Err(e) = replay_two(&format!("seed {seed}"), &seq, tally) {
+            failures.push(format!(
+                "{e}\n  replay: GRIDCRAFT_COAUTHOR_SEED={seed} GRIDCRAFT_COAUTHOR_STEPS={steps} cargo test -p gridcraft-engine --test it coauthor_replay::two_engines"
+            ));
+            if failures.len() >= max_failures {
+                break;
+            }
+        }
+    }
+    failures
+}
+
+/// Prints the tally and asserts that the sequences did real work: few errors, a share of
+/// structural steps, and most edits changing what the digests cover.
+fn check_tally(label: &str, sequences: usize, tally: &Tally) {
+    let error_share = tally.errors as f64 / tally.steps.max(1) as f64;
+    let structural_share = tally.structural as f64 / tally.steps.max(1) as f64;
+    let non_structural = tally.steps - tally.structural;
+    let entered_share = tally.entered_changed as f64 / non_structural.max(1) as f64;
+    let computed_share = tally.computed_changed as f64 / tally.steps.max(1) as f64;
+    eprintln!(
+        "{label}: {} sequences, {} steps, {:.1} % errors, {:.1} % structural; entered changed by {} of {} non-structural steps ({:.1} %), computed changed by {} of {} steps ({:.1} %)",
+        sequences,
+        tally.steps,
+        error_share * 100.0,
+        structural_share * 100.0,
+        tally.entered_changed,
+        non_structural,
+        entered_share * 100.0,
+        tally.computed_changed,
+        tally.steps,
+        computed_share * 100.0
+    );
+    // A generator whose steps mostly fail would prove little; it also has to change structure.
+    assert!(error_share < 0.10, "{:.1} % of steps failed", error_share * 100.0);
+    assert!((0.08..0.25).contains(&structural_share), "{:.1} % structural steps", structural_share * 100.0);
+    // Steps that change nothing prove nothing: most edits must land on the workbook, and enough
+    // must change what formulas calculate.
+    assert!(entered_share >= 0.70, "only {:.1} % of non-structural steps changed the entered digest", entered_share * 100.0);
+    assert!(computed_share >= 0.30, "only {:.1} % of steps changed the computed digest", computed_share * 100.0);
+}
+
 #[test]
 fn two_engines_agree_on_random_sequences() {
     let steps = env_num("GRIDCRAFT_COAUTHOR_STEPS", STEPS as u64) as usize;
@@ -132,18 +181,7 @@ fn two_engines_agree_on_random_sequences() {
         }
     };
     let mut tally = Tally::default();
-    let mut failures = Vec::new();
-    for &seed in &seeds {
-        let seq = generate(seed, steps);
-        if let Err(e) = replay_two(&format!("seed {seed}"), &seq, &mut tally) {
-            failures.push(format!(
-                "{e}\n  replay: GRIDCRAFT_COAUTHOR_SEED={seed} GRIDCRAFT_COAUTHOR_STEPS={steps} cargo test -p gridcraft-engine --test it coauthor_replay::"
-            ));
-            if failures.len() >= 5 {
-                break;
-            }
-        }
-    }
+    let mut failures = replay_seeds(&seeds, steps, 5, &mut tally);
     // The checked-in fixtures, as files: the inputs the browser runs read.
     for path in fixture_paths() {
         let text = std::fs::read_to_string(&path).unwrap_or_default();
@@ -158,31 +196,29 @@ fn two_engines_agree_on_random_sequences() {
         }
     }
     assert!(failures.is_empty(), "{} replay failure(s)\n\n{}", failures.len(), failures.join("\n\n"));
-    // A generator whose steps mostly fail would prove little; it also has to change structure.
-    let error_share = tally.errors as f64 / tally.steps.max(1) as f64;
-    let structural_share = tally.structural as f64 / tally.steps.max(1) as f64;
-    let non_structural = tally.steps - tally.structural;
-    let entered_share = tally.entered_changed as f64 / non_structural.max(1) as f64;
-    let computed_share = tally.computed_changed as f64 / tally.steps.max(1) as f64;
-    eprintln!(
-        "coauthor replay: {} sequences, {} steps, {:.1} % errors, {:.1} % structural; entered changed by {} of {} non-structural steps ({:.1} %), computed changed by {} of {} steps ({:.1} %)",
-        seeds.len(),
-        tally.steps,
-        error_share * 100.0,
-        structural_share * 100.0,
-        tally.entered_changed,
-        non_structural,
-        entered_share * 100.0,
-        tally.computed_changed,
-        tally.steps,
-        computed_share * 100.0
-    );
-    assert!(error_share < 0.10, "{:.1} % of steps failed", error_share * 100.0);
-    assert!((0.08..0.25).contains(&structural_share), "{:.1} % structural steps", structural_share * 100.0);
-    // Steps that change nothing prove nothing: most edits must land on the workbook, and enough
-    // must change what formulas calculate.
-    assert!(entered_share >= 0.70, "only {:.1} % of non-structural steps changed the entered digest", entered_share * 100.0);
-    assert!(computed_share >= 0.30, "only {:.1} % of steps changed the computed digest", computed_share * 100.0);
+    check_tally("coauthor replay", seeds.len(), &tally);
+}
+
+/// The long run (plan G1, Task 3): 10,000 generated sequences, by default seeds 100000..110000,
+/// a range neither CI (1000..1500) nor the fixtures (1..=20) use. Every failing seed is listed,
+/// not only the first few, so each can become a fixture and a fix, or an entry in
+/// `docs/coauthor-determinism.md`. Release only:
+/// `cargo test --release -p gridcraft-engine --test it coauthor_replay::long_replay -- --ignored --nocapture`.
+/// `GRIDCRAFT_COAUTHOR_LONG_SEEDS`, `GRIDCRAFT_COAUTHOR_LONG_FIRST` and `GRIDCRAFT_COAUTHOR_STEPS`
+/// change its size.
+#[test]
+#[ignore = "long: 10,000 sequences, run in release"]
+#[allow(clippy::disallowed_methods)] // native only, where the clock exists; it times the run
+fn long_replay() {
+    let steps = env_num("GRIDCRAFT_COAUTHOR_STEPS", STEPS as u64) as usize;
+    let first = env_num("GRIDCRAFT_COAUTHOR_LONG_FIRST", 100_000);
+    let seeds: Vec<u64> = (first..first + env_num("GRIDCRAFT_COAUTHOR_LONG_SEEDS", 10_000)).collect();
+    let started = std::time::Instant::now();
+    let mut tally = Tally::default();
+    let failures = replay_seeds(&seeds, steps, usize::MAX, &mut tally);
+    eprintln!("long replay: seeds {first}..{}, {:.1} s", first + seeds.len() as u64, started.elapsed().as_secs_f64());
+    assert!(failures.is_empty(), "{} failing seed(s)\n\n{}", failures.len(), failures.join("\n\n"));
+    check_tally("long replay", seeds.len(), &tally);
 }
 
 // ---------------------------------------------------------------- hand-written sequences
