@@ -8,6 +8,10 @@
 //!   over awkward inputs (the platform maths library differs: the C runtime natively, Rust's
 //!   libm port on wasm32). Every computed difference there must be listed, with its ULP
 //!   distance, in `fixtures/coauthor-maths/allowed-differences.json`; a new or vanished one fails.
+//!   The record also holds every formula cell's displayed text under each of
+//!   [`DISPLAY_FORMATS`], and every text that differs must be listed in
+//!   `fixtures/coauthor-maths/allowed-text-differences.json`, checked the same way. A 1-ULP
+//!   difference can change the 15-digit text (`&`, CONCAT) while the General cell display agrees.
 //!
 //! A computed difference is reported with every function in the formula, the arguments as this
 //! engine evaluates them, the precedent cells' values on both sides, the ULP distance, and
@@ -33,6 +37,7 @@ use sequences::{TIMING_REPETITIONS, headline_p95, kind_table, time_all_workloads
 const NATIVE_DIGESTS: &str = include_str!("fixtures/coauthor/native-digests.json");
 const NATIVE_MATHS: &str = include_str!("fixtures/coauthor-maths/native-maths.json");
 const ALLOWED_MATHS_DIFFERENCES: &str = include_str!("fixtures/coauthor-maths/allowed-differences.json");
+const ALLOWED_TEXT_DIFFERENCES: &str = include_str!("fixtures/coauthor-maths/allowed-text-differences.json");
 
 const FIXTURES: [(&str, &str); 26] = [
     ("hand-1-arithmetic-across-sheets.json", include_str!("fixtures/coauthor/hand-1-arithmetic-across-sheets.json")),
@@ -103,6 +108,34 @@ struct MathsRecord {
     entered: String,
     computed: String,
     items: Vec<NativeItem>,
+    /// Every formula cell's displayed text, one per [`DISPLAY_FORMATS`] entry, in that order.
+    displayed: Vec<Displayed>,
+}
+
+/// How a value is shown as text, as the comparison of displayed text names it: [`CONCAT_TEXT`]
+/// is the text `&`, CONCAT and other text conversions give (`core::number_to_text`, up to 15
+/// significant digits); every other entry is a number format code applied to the value, as a
+/// cell with that format shows it (`General` fits the number to 11 characters, as a cell of the
+/// default width does). The other three are the formats the grid's TEXT formulas use.
+const DISPLAY_FORMATS: [&str; 5] = [CONCAT_TEXT, "General", "0.000000000000000E+00", "#,##0.00", "0.0000000000"];
+const CONCAT_TEXT: &str = "&\"\"";
+
+/// One formula cell's displayed text under each of [`DISPLAY_FORMATS`].
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+struct Displayed {
+    cell: String,
+    texts: Vec<String>,
+}
+
+/// One formula cell whose displayed text under one format differs between the native record and
+/// this engine.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+struct TextDifference {
+    cell: String,
+    formula: String,
+    format: String,
+    native: String,
+    wasm: String,
 }
 
 /// One computed cell whose value differs between the native record and this engine.
@@ -372,6 +405,55 @@ fn step_differences(native: &[StepFailure], wasm: &[StepFailure]) -> Vec<String>
     out
 }
 
+/// Every formula cell's displayed text under each of [`DISPLAY_FORMATS`], in walk order.
+fn displayed_texts(session: &Session) -> Vec<Displayed> {
+    let Some(document) = session.documents().first() else { return Vec::new() };
+    let wb = &document.wb;
+    let mut out = Vec::new();
+    for sheet in &wb.sheets {
+        for (c, cell) in sheet.cells.iter() {
+            if cell.formula.is_none() {
+                continue;
+            }
+            let texts = DISPLAY_FORMATS
+                .iter()
+                .map(|code| if *code == CONCAT_TEXT { cell.value.display() } else { gridcraft_engine::display::value_text_as(wb, &cell.value, code) })
+                .collect();
+            out.push(Displayed { cell: format!("{}!{}", sheet.name, c.a1()), texts });
+        }
+    }
+    out
+}
+
+/// Every displayed text that differs between the record and `actual`, in walk order, then format
+/// order. A cell on one side only is reported under every format.
+fn text_differences(expected: &[Displayed], actual: &[Displayed], session: &Session) -> Vec<TextDifference> {
+    let native: BTreeMap<&str, &[String]> = expected.iter().map(|d| (d.cell.as_str(), d.texts.as_slice())).collect();
+    let wasm: BTreeMap<&str, &[String]> = actual.iter().map(|d| (d.cell.as_str(), d.texts.as_slice())).collect();
+    let mut cells: Vec<&str> = actual.iter().map(|d| d.cell.as_str()).collect();
+    cells.extend(expected.iter().map(|d| d.cell.as_str()).filter(|c| !wasm.contains_key(c)));
+    let formula = |key: &str| -> String {
+        let Some((sheet, cell)) = locate(session, key) else { return String::new() };
+        let wb = session.documents().first().map(|d| &d.wb);
+        wb.and_then(|wb| wb.sheet(sheet)).and_then(|s| s.cell(cell)).and_then(|c| c.formula.as_ref()).map(|f| f.text.clone()).unwrap_or_default()
+    };
+    let mut out = Vec::new();
+    for key in cells {
+        for (i, format) in DISPLAY_FORMATS.iter().enumerate() {
+            let text = |side: &BTreeMap<&str, &[String]>| side.get(key).and_then(|t| t.get(i)).cloned().unwrap_or_else(|| "absent".into());
+            let (n, w) = (text(&native), text(&wasm));
+            if n != w {
+                out.push(TextDifference { cell: key.to_string(), formula: formula(key), format: format.to_string(), native: n, wasm: w });
+            }
+        }
+    }
+    out
+}
+
+fn describe_text(d: &TextDifference) -> String {
+    format!("text {} ={} as {}: native {:?} != wasm {:?}", d.cell, d.formula, d.format, d.native, d.wasm)
+}
+
 // ---------------------------------------------------------------- the 26 fixtures
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -587,7 +669,7 @@ fn platform() -> String {
 fn write_native_maths() {
     let session = maths_session();
     let (entered, computed) = fingerprint(&session, DocId(0)).hex();
-    let record = MathsRecord { platform: platform(), entered, computed, items: recorded_items(&session) };
+    let record = MathsRecord { platform: platform(), entered, computed, items: recorded_items(&session), displayed: displayed_texts(&session) };
     write_fixture_file("tests/fixtures/coauthor-maths/native-maths.json", &pretty(&record));
 }
 
@@ -628,6 +710,26 @@ fn allowed_maths_differences_match_the_record() {
     }
 }
 
+/// The record holds a displayed text for every formula cell of the grid under every format (so
+/// the browser comparison cannot pass on a short list), and each allowed text difference names a
+/// cell and format of the record with the record's own text.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn allowed_text_differences_match_the_record() {
+    let record: MathsRecord = serde_json::from_str(NATIVE_MATHS).expect("native-maths.json is valid JSON");
+    let current = displayed_texts(&maths_session());
+    assert_eq!(current.len(), maths_inputs().len() * MATHS_FORMULAS.len(), "every formula cell has displayed texts");
+    let cells = |d: &[Displayed]| d.iter().map(|x| (x.cell.clone(), x.texts.len())).collect::<Vec<_>>();
+    assert_eq!(cells(&record.displayed), cells(&current), "run the ignored write_native_maths test to refresh the maths record");
+    let allowed: Vec<TextDifference> = serde_json::from_str(ALLOWED_TEXT_DIFFERENCES).expect("allowed-text-differences.json is valid JSON");
+    for d in &allowed {
+        let index = DISPLAY_FORMATS.iter().position(|f| *f == d.format);
+        let recorded = record.displayed.iter().find(|x| x.cell == d.cell).zip(index).and_then(|(x, i)| x.texts.get(i));
+        assert_eq!(recorded, Some(&d.native), "allowed text difference {} as {} does not match the record", d.cell, d.format);
+        assert_ne!(d.native, d.wasm, "allowed text difference {} as {} has equal texts", d.cell, d.format);
+    }
+}
+
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen_test::wasm_bindgen_test]
 fn wasm_maths_matches_native_within_the_allowed_list() {
@@ -651,6 +753,36 @@ fn wasm_maths_matches_native_within_the_allowed_list() {
         allowed.len(),
         found.iter().filter(|d| !allowed.contains(d)).map(describe).collect::<Vec<_>>().join("\n"),
         allowed.iter().filter(|d| !found.contains(d)).map(describe).collect::<Vec<_>>().join("\n"),
+        serde_json::to_string_pretty(&found).unwrap_or_default()
+    );
+}
+
+/// Every formula cell's displayed text, under each of [`DISPLAY_FORMATS`], against the record:
+/// every text that differs must be listed in `allowed-text-differences.json`, exactly.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen_test::wasm_bindgen_test]
+fn wasm_maths_displayed_text_matches_native_within_the_allowed_list() {
+    let record: MathsRecord = serde_json::from_str(NATIVE_MATHS).expect("native-maths.json is valid JSON");
+    let allowed: Vec<TextDifference> = serde_json::from_str(ALLOWED_TEXT_DIFFERENCES).expect("allowed-text-differences.json is valid JSON");
+    let session = maths_session();
+    let actual = displayed_texts(&session);
+    assert_eq!(actual.len(), record.displayed.len(), "the grid's formula cells differ from the record's");
+    let found = text_differences(&record.displayed, &actual, &session);
+    wasm_bindgen_test::console_log!(
+        "displayed text: {} formula cells x {} formats compared, {} differ ({} allowed)",
+        actual.len(),
+        DISPLAY_FORMATS.len(),
+        found.len(),
+        allowed.len()
+    );
+    assert!(
+        found == allowed,
+        "displayed text differences from the {} record changed: {} found, {} allowed\nnot allowed:\n{}\nallowed but not found:\n{}\nfound, as allowed-text-differences.json would list them:\n{}",
+        record.platform,
+        found.len(),
+        allowed.len(),
+        found.iter().filter(|d| !allowed.contains(d)).map(describe_text).collect::<Vec<_>>().join("\n"),
+        allowed.iter().filter(|d| !found.contains(d)).map(describe_text).collect::<Vec<_>>().join("\n"),
         serde_json::to_string_pretty(&found).unwrap_or_default()
     );
 }
@@ -692,6 +824,26 @@ fn difference_reports_root_functions_and_inputs() {
     let text = report(&native, &wasm, &session);
     assert!(text.starts_with("2 computed difference(s), 1 root(s)"), "{text}");
     assert!(text.contains("computed Sheet1!B2 (root)"), "{text}");
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn text_differences_name_the_cell_formula_and_format() {
+    let session = diagnostic_session();
+    let native = displayed_texts(&session);
+    let cells: Vec<&str> = native.iter().map(|d| d.cell.as_str()).collect();
+    assert_eq!(cells, ["Sheet1!A1", "Sheet1!B2"], "formula cells only, in walk order");
+    let mut wasm = native.clone();
+    wasm[1].texts[0] = "-0.6932".into();
+    let found = text_differences(&native, &wasm, &session);
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert_eq!((found[0].cell.as_str(), found[0].formula.as_str(), found[0].format.as_str()), ("Sheet1!B2", "ROUND(LN(C3),4)", CONCAT_TEXT));
+    assert_eq!((found[0].native.as_str(), found[0].wasm.as_str()), ("-0.6931", "-0.6932"));
+    assert!(describe_text(&found[0]).contains("text Sheet1!B2 =ROUND(LN(C3),4) as &\"\""), "{}", describe_text(&found[0]));
+    // A cell on one side only differs under every format.
+    let missing = text_differences(&native, &wasm[..1], &session);
+    assert_eq!(missing.len(), DISPLAY_FORMATS.len(), "{missing:?}");
+    assert!(missing.iter().all(|d| d.cell == "Sheet1!B2" && d.wasm == "absent"));
 }
 
 #[cfg(not(target_arch = "wasm32"))]

@@ -17,14 +17,25 @@ cargo test -p gridcraft-engine --test wasm_replay native_digests_are_current
 that wrote it (named in the file; currently x86_64 Windows, MSVC), so only its entered content
 is checked natively. Every computed difference the browser engine shows against it must be
 listed, exactly, in `allowed-differences.json` (cell, formula, arguments, both values and the
-distance in ULP); a new or vanished difference fails. Rewrite the record on the same platform:
+distance in ULP); a new or vanished difference fails. The record also holds every formula
+cell's displayed text: as `&` and CONCAT convert it (15 significant digits), under General (as a
+default-width cell shows it), and under the three formats the grid's TEXT formulas use. Every
+text the browser engine shows differently must be listed, exactly, in
+`allowed-text-differences.json` (cell, formula, format and both texts), checked the same way.
+Not every displayed text agrees: a 1-ULP difference can change the 15-digit text while the
+General display agrees (3 cells, 6 texts when this was written). Rewrite the record on the same
+platform:
 
 ```sh
 cargo test -p gridcraft-engine --test wasm_replay write_native_maths -- --ignored --nocapture
 ```
 
-then run the WebAssembly tests: on failure they print the list as `allowed-differences.json`
-would hold it.
+then run the WebAssembly tests: on failure they print the lists as `allowed-differences.json`
+and `allowed-text-differences.json` would hold them.
+
+A regenerated record (`native-digests.json` or `native-maths.json`) is evidence of agreement
+only after the WebAssembly tests have passed against it: the native checks make it current
+without running the browser engine, and CI does not run the WebAssembly tests.
 
 Run the WebAssembly side under Node (the `wasm-bindgen-test` default):
 
