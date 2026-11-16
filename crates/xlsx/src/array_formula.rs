@@ -20,7 +20,9 @@ impl Shape {
     }
 }
 
-pub(crate) fn needs_array(wb: &Workbook, sheet: usize, at: CellRef, formula: &Formula) -> bool {
+/// Whether a formula needs array evaluation where it stands, so a file marks it as a dynamic
+/// array (the writer does so for every such formula without a legacy array range).
+pub fn needs_array(wb: &Workbook, sheet: usize, at: CellRef, formula: &Formula) -> bool {
     let Some(expr) = formula.expr_arc() else { return false };
     // The budget covers every node of a formula as long as Excel allows (8,192 characters make
     // at most about 8,200 nodes), so only names that expand a lot fall back to array evaluation.

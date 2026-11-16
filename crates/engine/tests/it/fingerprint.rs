@@ -259,3 +259,72 @@ fn first_difference_names_the_cell() {
     assert!(first_difference(&a, &empty, DocId(0)).is_some());
     assert_eq!(first_difference(&empty, &Session::new(), DocId(0)), None);
 }
+
+/// A stored cell with no content, the default style and no row or column style to override (a
+/// "blank" cell) changes nothing a person sees, and a save need not keep it. `CellStore::set`
+/// never stores one, but one can be left behind by editing a stored cell in place or by a store
+/// deserialized as it was written. The fingerprint skips it, so it can't show as a false loss
+/// after save and reopen. A blank cell in a styled row or column overrides that style, and counts.
+#[test]
+fn blank_cells_that_change_nothing_are_skipped() {
+    // Stores a bold blank cell, then makes it default-styled in place: `set` would drop it.
+    let blank = |wb: &mut Workbook, a1: &str| {
+        let bold = bold_style(wb);
+        let s = wb.sheet_mut(0).unwrap();
+        s.cells.set(at(a1), Cell { value: Value::Empty, formula: None, style: bold, py: None });
+        s.cells.get_mut(at(a1)).unwrap().style = StyleId::DEFAULT;
+        assert!(s.cells.get(at(a1)).is_some_and(Cell::is_blank), "a blank cell is stored at {a1}");
+    };
+    let before = fp(base());
+    let mut wb = base();
+    blank(&mut wb, "Z99");
+    assert_eq!(fp(wb), before, "a stored blank cell changes nothing");
+    // In a bold column, the default-styled cell is not bold: it counts.
+    let mut wb = base();
+    let bold = bold_style(&mut wb);
+    wb.sheet_mut(0).unwrap().cols.insert(5, LineInfo { style: Some(bold), ..LineInfo::default() });
+    let with_column = fp(wb.clone());
+    blank(&mut wb, "F7");
+    assert_eq!(wb.sheet(0).unwrap().style_id(at("F7")), StyleId::DEFAULT);
+    assert_ne!(fp(wb), with_column, "a default cell in a bold column is a format");
+    // The same in a bold row.
+    let mut wb = base();
+    let bold = bold_style(&mut wb);
+    wb.sheet_mut(0).unwrap().rows.insert(6, LineInfo { style: Some(bold), ..LineInfo::default() });
+    let with_row = fp(wb.clone());
+    blank(&mut wb, "F7");
+    assert_ne!(fp(wb), with_row, "a default cell in a bold row is a format");
+    // And a formatted blank cell counts.
+    let mut wb = base();
+    let bold = bold_style(&mut wb);
+    wb.sheet_mut(0).unwrap().cells.set(at("Z99"), Cell { value: Value::Empty, formula: None, style: bold, py: None });
+    assert_ne!(fp(wb), before, "a bold blank cell is a format");
+}
+
+fn bold_style(wb: &mut Workbook) -> StyleId {
+    wb.styles.derive(StyleId::DEFAULT, |s| s.font.bold = true)
+}
+
+/// A formula's dynamic-array state is fingerprinted as a file writes it: the writer marks a
+/// formula as a dynamic array when it was read as one or when its shape needs array evaluation,
+/// and the reader then reads it as one. So a formula the shape analysis marks anyway has the same
+/// fingerprint whether or not its flag is set (as after a save and reopen), while the flag on a
+/// formula the analysis would not mark is content.
+#[test]
+fn dynamic_array_state_is_fingerprinted_as_written() {
+    let with = |text: &str, dynamic: bool| {
+        let mut wb = base();
+        let mut f = Formula::new(text);
+        f.dynamic = dynamic;
+        wb.sheet_mut(0).unwrap().cells.set(at("C1"), Cell::formula(f));
+        fp(wb)
+    };
+    // A lookup over deleted ranges: its shape is unknown, so the writer marks it.
+    let lookup = "=XLOOKUP(1,#REF!,#REF!,\"none\")";
+    assert_eq!(with(lookup, false), with(lookup, true));
+    let lifted = "=A1:A2*2";
+    assert_eq!(with(lifted, false), with(lifted, true));
+    // A scalar formula read with dynamic-array metadata keeps it: that is content.
+    let scalar = "=SUM(A1:A2)";
+    assert_ne!(with(scalar, false), with(scalar, true));
+}

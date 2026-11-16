@@ -3,9 +3,10 @@
 //! can be compared cheaply and exactly.
 //!
 //! - `entered` covers what people typed and formatted: each sheet's name and hidden state; each
-//!   stored cell's position, formula (as the formula printer prints it) or literal value, and its
-//!   style resolved to values (number format, font, fill, borders, alignment, protection), never
-//!   a style id; row heights and column widths that differ from the default, hidden rows and
+//!   stored cell's position (a blank one that no row or column style applies to is skipped),
+//!   formula (as the formula printer prints it) or literal value, and its style resolved to
+//!   values (number format, font, fill, borders, alignment, protection), never a style id; row
+//!   heights and column widths that differ from the default, hidden rows and
 //!   columns and whole-row or whole-column styles; merges, sorted; the filter range and its
 //!   criteria; and the defined names, sorted.
 //! - `computed` covers what the cells calculate to: each cell's value and each spilled value.
@@ -180,7 +181,10 @@ fn value_text(v: &Value) -> String {
 }
 
 /// A cell's entered content: Python code, a formula as the printer prints it, or the literal.
-fn content_text(cell: &Cell) -> String {
+/// A formula is marked `dynamic` as a file writes it: when it was read as a dynamic array, when
+/// it anchors a spill, or when its shape needs array evaluation (the writer marks all three,
+/// and the reader reads them back as dynamic arrays).
+fn content_text(wb: &Workbook, si: usize, sheet: &Sheet, c: CellRef, cell: &Cell) -> String {
     if let Some(py) = &cell.py {
         return format!("python {}", quote(&py.code));
     }
@@ -190,7 +194,9 @@ fn content_text(cell: &Cell) -> String {
         if let Some(r) = f.array {
             s.push_str(&format!(" array {}", r.a1()));
         }
-        if f.dynamic {
+        let written_dynamic = f.array.is_none()
+            && (f.dynamic || sheet.spill_ranges.get(&c).is_some_and(|r| !r.is_single()) || gridcraft_xlsx::needs_array(wb, si, c, f));
+        if written_dynamic {
             s.push_str(" dynamic");
         }
         return s;
@@ -220,7 +226,7 @@ fn walk(wb: &Workbook, out: &mut dyn FnMut(Stream, &str, &str)) {
                 sheet.default_row_height.to_bits()
             ),
         );
-        entered_sheet(wb, sheet, out);
+        entered_sheet(wb, i, sheet, out);
         out(Stream::Computed, &sheet_key, &format!("name {}", quote(&sheet.name)));
         computed_sheet(sheet, out);
     }
@@ -249,10 +255,16 @@ fn walk(wb: &Workbook, out: &mut dyn FnMut(Stream, &str, &str)) {
     }
 }
 
-fn entered_sheet(wb: &Workbook, sheet: &Sheet, out: &mut dyn FnMut(Stream, &str, &str)) {
+fn entered_sheet(wb: &Workbook, si: usize, sheet: &Sheet, out: &mut dyn FnMut(Stream, &str, &str)) {
     for (c, cell) in sheet.cells.iter() {
+        // A blank cell (no content, the default style) where no row or column style applies
+        // changes nothing a person sees, and a save need not keep it. The store never keeps one
+        // through `set`, but an in-place edit or a deserialized store can.
+        if cell.is_blank() && sheet.rows.get(&c.row).and_then(|r| r.style).is_none() && sheet.cols.get(&c.col).and_then(|r| r.style).is_none() {
+            continue;
+        }
         let style = style_text(wb.styles.get(cell.style));
-        out(Stream::Entered, &cell_key(sheet, c), &format!("{} style {style}", content_text(cell)));
+        out(Stream::Entered, &cell_key(sheet, c), &format!("{} style {style}", content_text(wb, si, sheet, c, cell)));
     }
     for (what, lines, default) in [("row", &sheet.rows, sheet.default_row_height), ("column", &sheet.cols, sheet.default_col_width)] {
         for (index, info) in lines.iter() {
