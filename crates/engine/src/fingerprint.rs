@@ -39,6 +39,17 @@ pub struct Fingerprint {
     pub computed: [u8; 32],
 }
 
+/// One item in the canonical walk used to build a [`Fingerprint`].
+///
+/// Cross-platform tests persist these items beside the native digests so a mismatch can name the
+/// first visible workbook property or computed cell that differs, rather than only two hashes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FingerprintItem {
+    pub stream: &'static str,
+    pub key: String,
+    pub canonical: String,
+}
+
 impl Fingerprint {
     /// Both digests as lowercase hex, `entered` first, for messages and reports.
     pub fn hex(&self) -> (String, String) {
@@ -70,6 +81,15 @@ pub fn fingerprint(session: &Session, doc: DocId) -> Fingerprint {
         Some(d) => workbook_fingerprint(&d.wb),
         None => digest(|out| missing(out)),
     }
+}
+
+/// The canonical items hashed by [`fingerprint`], in their digest order.
+pub fn fingerprint_items(session: &Session, doc: DocId) -> Vec<FingerprintItem> {
+    let items = match session.documents().get(doc.0) {
+        Some(d) => collect(|out| walk(&d.wb, out)),
+        None => collect(|out| missing(out)),
+    };
+    items.into_iter().map(|(stream, key, canonical)| FingerprintItem { stream: stream.label(), key, canonical }).collect()
 }
 
 /// The fingerprint of a workbook.
