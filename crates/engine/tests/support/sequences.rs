@@ -14,7 +14,10 @@
 
 #![allow(dead_code)]
 
-use gridcraft_engine::model::Workbook;
+use std::sync::Arc;
+
+use gridcraft_engine::core::{CellRef, Value};
+use gridcraft_engine::model::{Cell, Formula, Sheet, Workbook};
 use gridcraft_engine::{DocState, Session, Trust};
 use serde_json::{Map, Value as Json, json};
 
@@ -183,6 +186,111 @@ pub fn apply(s: &mut Session, step: &Step) -> Result<Json, String> {
     let r = s.execute(&step.id, step.params.clone()).map_err(|e| e.to_string());
     s.take_ui_requests();
     r
+}
+
+/// Workbook sizes measured by the rollback-and-re-run proof.
+pub const TIMING_CELL_COUNTS: [usize; 3] = [10_000, 100_000, 1_000_000];
+/// Pending-command counts measured at each workbook size.
+pub const TIMING_PENDING_COUNTS: [usize; 3] = [1, 10, 50];
+/// Measured repetitions after the excluded warm-up.
+pub const TIMING_REPETITIONS: usize = 30;
+
+/// Percentiles reported by one timing case, in milliseconds.
+#[derive(Clone, Copy, Debug)]
+pub struct TimingStats {
+    pub p50_ms: f64,
+    pub p95_ms: f64,
+    pub max_ms: f64,
+}
+
+/// A deterministic two-sheet workbook with exactly `cells` stored cells and one formula in five.
+/// The proof sizes divide evenly across two 100-column sheets.
+pub fn timing_workbook(cells: usize) -> Result<Workbook, String> {
+    const SHEETS: usize = 2;
+    const COLS: usize = 100;
+    let row_width = SHEETS * COLS;
+    if cells == 0 || !cells.is_multiple_of(row_width) {
+        return Err(format!("timing workbook cell count must be a positive multiple of {row_width}, got {cells}"));
+    }
+    let rows = cells / row_width;
+    let rows = u32::try_from(rows).map_err(|_| format!("timing workbook has too many rows: {rows}"))?;
+    let mut wb = Workbook::new();
+    wb.sheets.push(Arc::new(Sheet::new("Data")));
+    for sheet_index in 0..SHEETS {
+        let other = if sheet_index == 0 { "Data" } else { "Sheet1" };
+        let sheet = wb.sheet_mut(sheet_index).ok_or_else(|| format!("timing workbook is missing sheet {sheet_index}"))?;
+        for row in 0..rows {
+            for col in 0..COLS as u32 {
+                let ordinal = sheet_index * rows as usize * COLS + row as usize * COLS + col as usize;
+                let cell = if ordinal.is_multiple_of(5) {
+                    let formula = if row == 0 && col == 0 { "=SUM(B:B)".to_string() } else { format!("={other}!B{}+1", row + 1) };
+                    Cell::formula(Formula::new(&formula))
+                } else {
+                    Cell::value(Value::Number((ordinal % 10_000) as f64))
+                };
+                sheet.set_cell(CellRef::new(row, col), cell);
+            }
+        }
+    }
+    Ok(wb)
+}
+
+/// The agreed document cloned by every timing repetition.
+pub fn timing_document(cells: usize) -> Result<DocState, String> {
+    let mut document = DocState::new(timing_workbook(cells)?, None, format!("Timing-{cells}"), Trust::Local);
+    document.calc.fixed_now = Some(DEFAULT_NOW);
+    document.calc.set_rand_seed(0xC0A7_7402_0000_0006);
+    let wb = Arc::make_mut(&mut document.wb);
+    document.calc.recalc_all(wb);
+    Ok(document)
+}
+
+/// Fifty deterministic shared commands with explicit targets. Seven are structural (14 %), close
+/// to the 15 % mix in co-author replay sequences; insert/delete pairs keep later targets stable.
+pub fn timing_pending_commands() -> Vec<Step> {
+    (0..50)
+        .map(|index| {
+            let row = 2 + index;
+            match index % 7 {
+                0 => Step::new("cell.set", json!({"sheet": "Sheet1", "cell": format!("B{row}"), "input": (10_000 + index).to_string()})),
+                1 => Step::new("home.bold", json!({"sheet": "Sheet1", "range": format!("C{row}:D{row}"), "on": true})),
+                2 => Step::new("home.fillColor", json!({"sheet": "Data", "range": format!("E{row}:F{row}"), "color": "#C6EFCE"})),
+                3 => Step::new("home.numberFormat", json!({"sheet": "Sheet1", "range": format!("G{row}:H{row}"), "code": "0.00"})),
+                4 => Step::new("home.alignRight", json!({"sheet": "Data", "range": format!("I{row}:J{row}"), "on": true})),
+                5 => Step::new("home.borders", json!({"sheet": "Sheet1", "range": format!("K{row}:L{row}"), "preset": "bottom"})),
+                _ => match index / 7 % 4 {
+                    0 => Step::new("home.insertRows", json!({"sheet": "Sheet1", "rows": "10:10"})),
+                    1 => Step::new("home.deleteRows", json!({"sheet": "Sheet1", "rows": "10:10"})),
+                    2 => Step::new("home.insertColumns", json!({"sheet": "Data", "cols": "M:M"})),
+                    _ => Step::new("home.deleteColumns", json!({"sheet": "Data", "cols": "M:M"})),
+                },
+            }
+        })
+        .collect()
+}
+
+/// Clone the agreed state, apply pending commands, then rebuild and recalculate everything.
+/// Fingerprinting and validation deliberately happen outside callers' timed sections.
+pub fn rerun_pending(agreed: &DocState, steps: &[Step]) -> Result<Session, String> {
+    let mut session = Session::new();
+    session.add_document(agreed.clone());
+    for step in steps {
+        apply(&mut session, step)?;
+    }
+    let document = session.doc_mut().map_err(|error| error.to_string())?;
+    let wb = Arc::make_mut(&mut document.wb);
+    document.calc.recalc_all(wb);
+    Ok(session)
+}
+
+/// Nearest-rank p50 and p95 plus the maximum from a non-empty set of samples.
+pub fn timing_stats(mut samples_ms: Vec<f64>) -> Result<TimingStats, String> {
+    if samples_ms.is_empty() || samples_ms.iter().any(|sample| !sample.is_finite() || *sample < 0.0) {
+        return Err("timing samples must be non-empty, finite and non-negative".into());
+    }
+    samples_ms.sort_by(f64::total_cmp);
+    let rank = |percent: usize| (samples_ms.len() * percent).div_ceil(100).saturating_sub(1);
+    Ok(TimingStats { p50_ms: samples_ms[rank(50)], p95_ms: samples_ms[rank(95)], max_ms: samples_ms[samples_ms.len() - 1] })
 }
 
 // ---------------------------------------------------------------- generator
