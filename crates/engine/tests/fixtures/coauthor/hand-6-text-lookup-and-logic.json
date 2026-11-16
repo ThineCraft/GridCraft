@@ -1,0 +1,93 @@
+{
+  "now": 46302.5,
+  "seed": 9005,
+  "steps": [
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "A1",
+        "input": "  hello world ",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "B1",
+        "input": "=UPPER(TRIM(A1))",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "C1",
+        "input": "=LEN(B1)",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "D1",
+        "input": "=IF(C1>10,\"long\",\"short\")",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "G1",
+        "input": "1",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "H1",
+        "input": "a",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "G2",
+        "input": "2",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "H2",
+        "input": "b",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "E1",
+        "input": "=VLOOKUP(2,G1:H2,2,FALSE)",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "home.insertColumns",
+      "params": {
+        "cols": "A:A",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "H2",
+        "input": "3",
+        "sheet": "Sheet1"
+      }
+    }
+  ]
+}

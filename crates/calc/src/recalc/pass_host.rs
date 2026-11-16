@@ -580,12 +580,14 @@ impl Host for PassHost<'_> {
         if self.pending.contains(&k) || self.results.contains_key(&k) {
             return self.compute(k);
         }
-        // A cell covered by a spill computed in this pass. Where several overlap, the first in
-        // `spills`' iteration order counts, as it always has.
+        // A cell covered by a spill computed in this pass. Where several overlap, the anchor first
+        // in row-major order counts, never `spills`' hash order, which differs between platforms
+        // and between calculation histories. Which array write-back then lays out is decided
+        // there (it walks the dirty cells, and can block this anchor and lay out another).
         let covering = match self.spill_index.covering(sheet, c) {
             Cover::None => None,
             Cover::One(a) => self.spills.get_key_value(&(sheet, a)),
-            Cover::Many => self.spills.iter().find(|(a, arr)| a.0 == sheet && spill_covers(a.1, arr, c)),
+            Cover::Many => self.spills.iter().filter(|(a, arr)| a.0 == sheet && spill_covers(a.1, arr, c)).min_by_key(|(a, _)| (a.1.row, a.1.col)),
         };
         if let Some((anchor, arr)) = covering {
             let (dr, dc) = ((c.row - anchor.1.row) as usize, (c.col - anchor.1.col) as usize);
@@ -637,8 +639,8 @@ impl Host for PassHost<'_> {
             if self.iterate && hits.iter().any(|a| self.tainted.contains(&(sheet, *a))) {
                 self.taint = true;
             }
-            // Where areas overlap inside the range, the last in `spills`' iteration order wins,
-            // as it always has; otherwise the order doesn't matter.
+            // Where areas overlap inside the range, the anchor first in row-major order wins (it is
+            // put last), as in `cell_value`; otherwise the order doesn't matter.
             let ordered = hits.len() > MAX_UNORDERED_HITS || spill_hits_overlap(&self.spill_index, sheet, &hits, range);
             let mut put = |anchor: CellRef, arr: &Array| {
                 if arr.rows == 0 || arr.cols == 0 {
@@ -659,10 +661,10 @@ impl Host for PassHost<'_> {
             };
             if ordered {
                 let wanted: HashSet<Key> = hits.iter().map(|a| (sheet, *a)).collect();
-                for (a, arr) in &self.spills {
-                    if wanted.contains(a) {
-                        put(a.1, arr);
-                    }
+                let mut found: Vec<(&Key, &std::sync::Arc<Array>)> = self.spills.iter().filter(|(a, _)| wanted.contains(a)).collect();
+                found.sort_unstable_by_key(|(a, _)| std::cmp::Reverse((a.1.row, a.1.col)));
+                for (a, arr) in found {
+                    put(a.1, arr);
                 }
             } else {
                 for a in &hits {

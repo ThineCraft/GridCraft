@@ -1,0 +1,509 @@
+{
+  "now": 50786.48263888889,
+  "seed": 14,
+  "steps": [
+    {
+      "id": "home.insertSheet",
+      "params": {
+        "before": 0,
+        "name": "2026"
+      }
+    },
+    {
+      "id": "home.insertSheet",
+      "params": {
+        "before": 0,
+        "name": "Totals"
+      }
+    },
+    {
+      "id": "home.insertSheet",
+      "params": {
+        "before": 3,
+        "name": "Sales-2"
+      }
+    },
+    {
+      "id": "home.insertSheet",
+      "params": {
+        "before": 3,
+        "name": "Übersicht"
+      }
+    },
+    {
+      "id": "home.insertSheet",
+      "params": {
+        "before": 2,
+        "name": "Ref"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "B1",
+        "input": "=SUMIF('Sales-2'!G4:I4,\"<>\")+B20",
+        "sheet": "Übersicht"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "J8",
+        "input": "",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "home.insertRows",
+      "params": {
+        "rows": "80:82",
+        "sheet": "Sales-2"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "C21",
+        "input": "a\"quote",
+        "sheet": "Ref"
+      }
+    },
+    {
+      "id": "home.insertRows",
+      "params": {
+        "rows": "1:3",
+        "sheet": "Übersicht"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "C21",
+        "input": "340",
+        "sheet": "Ref"
+      }
+    },
+    {
+      "id": "home.insertRows",
+      "params": {
+        "rows": "8:10",
+        "sheet": "2026"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "D22",
+        "input": "29.07",
+        "sheet": "Ref"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "J23",
+        "input": "267",
+        "sheet": "2026"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "J8",
+        "input": "=IFERROR(XLOOKUP(J10,K3:K13,L3:L13,\"none\"),-1)",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "C23",
+        "input": "796",
+        "sheet": "Ref"
+      }
+    },
+    {
+      "id": "home.borders",
+      "params": {
+        "preset": "left",
+        "range": "J22:K26",
+        "sheet": "2026"
+      }
+    },
+    {
+      "id": "home.fillColor",
+      "params": {
+        "color": "none",
+        "range": "E25:G28",
+        "sheet": "Sales-2"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "S186",
+        "input": "=SUMIF(T187:Y197,10)+68",
+        "sheet": "Totals"
+      }
+    },
+    {
+      "id": "home.borders",
+      "params": {
+        "preset": "outside",
+        "range": "C1:D8",
+        "sheet": "Übersicht",
+        "style": "double"
+      }
+    },
+    {
+      "id": "home.bold",
+      "params": {
+        "on": false,
+        "range": "J23:M28",
+        "sheet": "2026"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "I23",
+        "input": "=MEDIAN(K24:L28)",
+        "sheet": "2026"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "C34",
+        "input": "-530",
+        "sheet": "Sales-2"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "B33",
+        "input": "-743",
+        "sheet": "Sales-2"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "J25",
+        "input": -58,
+        "sheet": "2026"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "I23",
+        "input": "971",
+        "sheet": "Totals"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "C1",
+        "input": "-431",
+        "sheet": "Übersicht"
+      }
+    },
+    {
+      "id": "home.alignRight",
+      "params": {
+        "on": true,
+        "range": "B11:B17",
+        "sheet": "Totals"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "G2",
+        "input": "=IFERROR(INT(A1),-1)",
+        "sheet": "Übersicht"
+      }
+    },
+    {
+      "id": "home.alignMiddle",
+      "params": {
+        "range": "I22:I24",
+        "sheet": "Ref"
+      }
+    },
+    {
+      "id": "home.deleteRows",
+      "params": {
+        "rows": "21:21",
+        "sheet": "Ref"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "C34",
+        "input": "=LEN(\"abc\")",
+        "sheet": "Sales-2"
+      }
+    },
+    {
+      "id": "home.deleteColumns",
+      "params": {
+        "cols": "J:K",
+        "sheet": "2026"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "A29",
+        "input": "2026-03-13",
+        "sheet": "Sales-2"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "K6",
+        "input": "2026-05-14",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "home.numberFormat",
+      "params": {
+        "format": "Text",
+        "range": "B1:B40",
+        "sheet": "Übersicht"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "H22",
+        "input": "=POWER(Ref!C23,0)",
+        "sheet": "2026"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "J22",
+        "input": "61%",
+        "sheet": "Totals"
+      }
+    },
+    {
+      "id": "edit.clearContents",
+      "params": {
+        "range": "K24:L27",
+        "sheet": "2026"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "H19",
+        "input": "TRUE",
+        "sheet": "Sales-2"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "C34",
+        "input": "TRUE",
+        "sheet": "Sales-2"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "C22",
+        "input": "339.03",
+        "sheet": "Ref"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "D20",
+        "input": "-269",
+        "sheet": "Ref"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "R188",
+        "input": -77,
+        "sheet": "Totals"
+      }
+    },
+    {
+      "id": "home.fontName",
+      "params": {
+        "name": "Georgia",
+        "range": "H25:K31",
+        "sheet": "2026"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "T66",
+        "input": "=OR(A18>0,A28<50)",
+        "sheet": "Sales-2"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "I24",
+        "input": "south",
+        "sheet": "2026"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "B30",
+        "input": "-218",
+        "sheet": "Sales-2"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "A1",
+        "input": "123456789012345",
+        "sheet": "Übersicht"
+      }
+    },
+    {
+      "id": "home.deleteSheet",
+      "params": {
+        "sheet": "Totals"
+      }
+    },
+    {
+      "id": "home.numberFormat",
+      "params": {
+        "code": "0.0%",
+        "range": "K6:N9",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "A34",
+        "input": "=RIGHT(G17,0)+Ref!F26",
+        "sheet": "Sales-2"
+      }
+    },
+    {
+      "id": "home.deleteRows",
+      "params": {
+        "rows": "23:24",
+        "sheet": "Ref"
+      }
+    },
+    {
+      "id": "home.alignTop",
+      "params": {
+        "range": "40:42",
+        "sheet": "Sales-2"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "A35",
+        "input": "-93.84",
+        "sheet": "Sales-2"
+      }
+    },
+    {
+      "id": "home.fillColor",
+      "params": {
+        "color": "none",
+        "range": "C13:E18",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "F31",
+        "input": "=MEDIAN('Übersicht'!G8:H10)",
+        "sheet": "Ref"
+      }
+    },
+    {
+      "id": "home.borders",
+      "params": {
+        "preset": "outside",
+        "range": "B24:E27",
+        "sheet": "Ref"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "A1",
+        "input": 50,
+        "sheet": "Übersicht"
+      }
+    },
+    {
+      "id": "home.bold",
+      "params": {
+        "on": true,
+        "range": "A1:G37",
+        "sheet": "Übersicht"
+      }
+    },
+    {
+      "id": "home.bold",
+      "params": {
+        "on": true,
+        "range": "D22:M37",
+        "sheet": "Ref"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "J10",
+        "input": "TRUE story",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "home.deleteRows",
+      "params": {
+        "rows": "1:3",
+        "sheet": "Übersicht"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "I10",
+        "input": "119.52",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "edit.clearContents",
+      "params": {
+        "range": "J7:K13",
+        "sheet": "Sheet1"
+      }
+    }
+  ]
+}

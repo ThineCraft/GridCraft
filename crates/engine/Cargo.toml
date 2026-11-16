@@ -25,7 +25,16 @@ gridcraft-chart = { workspace = true }
 gridcraft-pdf = { workspace = true }
 gridcraft-math = { workspace = true }
 image = { workspace = true }
+sha2 = { workspace = true }
 
 [dev-dependencies]
 gridcraft-xlsx = { workspace = true, features = ["test-support"] }
 zip = { workspace = true }
+
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+# Node-hosted browser-engine parity tests. MIT OR Apache-2.0.
+# 0.3.79 uses wasm-bindgen 0.2.129, matching this workspace's locked version.
+# Test-only crates it adds: wasm-bindgen-test-macro and wasm-bindgen-test-shared
+# (MIT OR Apache-2.0), cast (MIT OR Apache-2.0), minicov (MIT OR Apache-2.0, only
+# under an unstable coverage cfg), nu-ansi-term (MIT), oorandom (MIT).
+wasm-bindgen-test = "=0.3.79"

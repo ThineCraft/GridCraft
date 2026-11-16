@@ -1,0 +1,44 @@
+{
+  "now": 46302.5,
+  "seed": 9002,
+  "steps": [
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "B1",
+        "input": "5",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "C1",
+        "input": "=B1*2",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "D1",
+        "input": "=C1+1",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "home.insertColumns",
+      "params": {
+        "cols": "A:A",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "home.deleteColumns",
+      "params": {
+        "cols": "C:C",
+        "sheet": "Sheet1"
+      }
+    }
+  ]
+}

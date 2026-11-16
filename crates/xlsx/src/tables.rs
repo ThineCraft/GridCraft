@@ -326,8 +326,25 @@ pub fn pt_to_px(pt: f64) -> f32 {
     if !pt.is_finite() || pt <= 0.0 { 0.0 } else { (pt.min(409.5) * 4.0 / 3.0) as f32 }
 }
 
+/// Model px → row height in points: in hundredths of a point, as Excel writes them, when that
+/// reads back ([`pt_to_px`]) as the same px; otherwise with as many decimals as reading back
+/// exactly needs, so an automatic height computed to a fraction of a pixel survives a save.
+/// At 546 px (409.5 pt, the most a file can hold) and above, [`pt_to_px`] clamps, so nothing
+/// reads back exactly; such a height is written in hundredths rather than with the `f32`'s noise.
 pub fn px_to_pt(px: f32) -> f64 {
-    ((px.max(0.0) as f64) * 0.75 * 100.0).round() / 100.0
+    let pt = (px.max(0.0) as f64) * 0.75;
+    if px >= 546.0 {
+        return (pt * 100.0).round() / 100.0;
+    }
+    let mut scale = 100.0;
+    for _ in 0..8 {
+        let rounded = (pt * scale).round() / scale;
+        if pt_to_px(rounded) == px {
+            return rounded;
+        }
+        scale *= 10.0;
+    }
+    pt
 }
 
 /// EMU per px at 96 dpi.
@@ -346,6 +363,12 @@ mod tests {
         }
         assert_eq!(pt_to_px(15.0), 20.0);
         assert_eq!(px_to_pt(20.0), 15.0);
+        assert_eq!(px_to_pt(21.0), 15.75);
+        assert_eq!(px_to_pt(32.727272), 24.545454);
+        // Above the 409.5 pt cap nothing reads back exactly: hundredths, not the f32's noise.
+        assert_eq!(px_to_pt(546.0), 409.5);
+        assert_eq!(px_to_pt(600.3333), 450.25);
+        assert_eq!(px_to_pt(1000.0), 750.0);
     }
 
     #[test]

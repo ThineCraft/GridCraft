@@ -1,6 +1,7 @@
 //! Integration-style tests: round trips, hand-written fixtures, hostile input and CSV.
 
 mod array_export;
+mod blank_columns;
 mod cellmetadata;
 mod chart_book_names;
 mod chart_bool_default;
@@ -26,6 +27,7 @@ mod phonetic_tests;
 mod pivot_tests;
 mod richdata_tests;
 mod roundtrip;
+mod row_height_precision;
 mod shape_text_rtl;
 mod shared_media;
 mod sheet_data_pin;

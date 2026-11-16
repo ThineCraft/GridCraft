@@ -425,6 +425,12 @@ fn borders(s: &mut Session, p: &Json) -> Result<Json> {
             if r.count() > 2_000_000 {
                 return Err(bad("home.borders", "selection too large"));
             }
+            // A border stores cells where a row or column format applied (a 24 pt column's
+            // cell becomes a stored 24 pt cell), and rows fit their stored cells: re-fit them,
+            // as `apply_style` does, so the row is what opening the saved file makes it.
+            if r.height() <= 100_000 {
+                cx.fit_rows.extend((r.start.row..=r.end.row).map(|row| (sheet, row)));
+            }
             for c in r.iter() {
                 let (top, bottom, left, right) = (c.row == r.start.row, c.row == r.end.row, c.col == r.start.col, c.col == r.end.col);
                 let st = cx.wb.sheet(sheet).map(|sh| sh.style_id(c)).unwrap_or_default();
@@ -837,6 +843,25 @@ mod tests {
         assert_eq!(v(&mut s, "B1"), Json::Null);
         assert_eq!(v(&mut s, "B2"), Json::Null);
         assert_eq!(v(&mut s, "D1"), json!(4.0));
+    }
+
+    /// Borders store a cell where a column or row format applied: a border across a column
+    /// formatted at 24 pt stores a 24 pt cell. Its row is re-fitted, as after any formatting, so
+    /// the row is as tall as opening the saved file makes it (opening fits rows to their cells).
+    #[test]
+    fn borders_refit_the_rows_they_store_cells_in() {
+        let mut s = crate::Session::new();
+        s.new_workbook();
+        s.execute("home.fontSize", json!({"range": "D:D", "size": 24})).unwrap();
+        let height = |s: &crate::Session| s.doc().unwrap().wb.sheet(0).unwrap().rows.get(&6).and_then(|r| r.size);
+        assert_eq!(height(&s), None, "an empty row in a 24 pt column keeps the default height");
+        s.execute("home.borders", json!({"range": "A7:D7", "preset": "topBottom"})).unwrap();
+        assert!(s.doc().unwrap().wb.sheet(0).unwrap().cells.get(CellRef::new(6, 3)).is_some(), "D7 is stored");
+        let fitted = height(&s);
+        assert!(fitted.is_some_and(|h| h > 30.0), "the row fits D7's 24 pt font: {fitted:?}");
+        let bytes = crate::io::save_bytes(&s.doc().unwrap().wb, "Book1.xlsx").unwrap();
+        let (back, _) = crate::io::open_bytes("Book1.xlsx", &bytes).unwrap();
+        assert_eq!(back.sheet(0).unwrap().rows.get(&6).and_then(|r| r.size), fitted, "and reopening keeps that height");
     }
 
     #[test]

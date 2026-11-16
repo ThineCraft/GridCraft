@@ -175,6 +175,18 @@ impl Calc {
         Self::default()
     }
 
+    /// Starts RAND, RANDBETWEEN and RANDARRAY from `seed`, so two calculations given the same
+    /// seed and edits draw the same numbers (with [`Calc::fixed_now`], volatile results become
+    /// repeatable). The seed is mixed (SplitMix64) so that nearby seeds give unrelated draws, and
+    /// a zero state, which xorshift never leaves, is replaced.
+    pub fn set_rand_seed(&mut self, seed: u64) {
+        let mut z = seed.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        z ^= z >> 31;
+        self.rng = if z == 0 { 0x9E37_79B9_7F4A_7C15 } else { z };
+    }
+
     fn now(&self) -> f64 {
         if let Some(n) = self.fixed_now {
             return n;
@@ -784,6 +796,49 @@ pub(crate) mod tests {
         }
     }
 
+    /// Two arrays laid out in one pass that overlap: a read of the shared cells sees the anchor
+    /// that comes first in row-major order, whatever order the pass met them in. Hash order
+    /// (which differs between platforms and between a replay and a rollback) never decides it.
+    /// This is about reads within the pass; which array write-back lays out is decided there.
+    #[test]
+    fn overlapping_spills_in_a_pass_read_the_first_anchor() {
+        let mut wb = Workbook::new();
+        let mut python = HashMap::default();
+        let pairs = 24u32;
+        let array = |rows: usize, cols: usize, v: f64| {
+            Value::Array(std::sync::Arc::new(gridcraft_core::Array::new(rows, cols, vec![Value::Number(v); rows * cols]).unwrap()))
+        };
+        for i in 0..pairs {
+            let sh = wb.sheet_mut(0).unwrap();
+            // First (row-major): B(10i+1) spilling down three rows; second: A(10i+2) spilling 2 x 2,
+            // over B(10i+2):B(10i+3) too.
+            let (first, second) = (CellRef::new(10 * i, 1), CellRef::new(10 * i + 1, 0));
+            for (at, v) in [(first, 100.0 + f64::from(i)), (second, 200.0 + f64::from(i))] {
+                let py = gridcraft_model::PyCode::new("x");
+                sh.set_cell(at, Cell { value: Value::Number(0.0), py: Some(std::sync::Arc::new(py)), ..Cell::default() });
+                python.insert((0, at), if at == first { array(3, 1, v) } else { array(2, 2, v) });
+            }
+        }
+        let exprs = HashMap::default();
+        let mut rng = 1u64;
+        let mut host = PassHost::new(&wb, &exprs, &mut rng, 0.0).with_python(python);
+        for i in 0..pairs {
+            // Met in either order.
+            let (first, second) = (CellRef::new(10 * i, 1), CellRef::new(10 * i + 1, 0));
+            let order = if i % 2 == 0 { [first, second] } else { [second, first] };
+            for at in order {
+                host.cell_value(0, at);
+            }
+        }
+        for i in 0..pairs {
+            let want = Value::Number(100.0 + f64::from(i));
+            let shared = CellRef::new(10 * i + 2, 1);
+            assert_eq!(host.cell_value(0, shared), want, "pair {i}: one cell");
+            let area = RangeRef::new(CellRef::new(10 * i + 1, 1), shared);
+            assert_eq!(host.range_values(0, area), vec![want.clone(), want], "pair {i}: a range");
+        }
+    }
+
     #[test]
     fn intervals_match_a_linear_scan() {
         let mut iv: Intervals<u32> = Intervals::default();
@@ -1162,5 +1217,31 @@ pub(crate) mod tests {
             true
         })
         .then_some(seen)
+    }
+
+    /// RAND draws from the generator `set_rand_seed` starts: the same seed gives the same draws in
+    /// two calculations, another seed gives others, and seed 0 (which would stall xorshift) still
+    /// draws numbers in [0, 1).
+    #[test]
+    fn rand_seed_sets_the_draws() {
+        let draws = |seed: u64| {
+            let mut wb = Workbook::new();
+            if let Some(sh) = wb.sheet_mut(0) {
+                sh.cells.set(CellRef::new(0, 0), Cell::formula(Formula::new("=RAND()")));
+                sh.cells.set(CellRef::new(1, 0), Cell::formula(Formula::new("=RAND()")));
+            }
+            let mut calc = Calc::new();
+            calc.set_rand_seed(seed);
+            calc.recalc_all(&mut wb);
+            let v = |r: u32| wb.sheet(0).and_then(|s| s.value(CellRef::new(r, 0)).as_f64()).unwrap_or(f64::NAN);
+            (v(0), v(1))
+        };
+        assert_eq!(draws(7), draws(7));
+        assert_ne!(draws(7), draws(8));
+        for seed in [0, 1, 7, u64::MAX] {
+            let (a, b) = draws(seed);
+            assert!((0.0..1.0).contains(&a) && (0.0..1.0).contains(&b), "seed {seed}: {a} {b}");
+            assert_ne!(a, b, "seed {seed} stalls");
+        }
     }
 }

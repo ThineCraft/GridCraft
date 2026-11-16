@@ -1,0 +1,480 @@
+{
+  "now": 38072.78472222222,
+  "seed": 12,
+  "steps": [
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "G33",
+        "input": "=AND(F35>0,52<50)",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "home.insertColumns",
+      "params": {
+        "cols": "H:H",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "home.fillColor",
+      "params": {
+        "color": {
+          "theme": 5,
+          "tint": 0.4
+        },
+        "range": "H2:J2",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "H35",
+        "input": "=MOD(G32,1)",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "G34",
+        "input": "2026-02-06",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "F35",
+        "input": "473",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "E36",
+        "input": "-139.36",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "A6",
+        "input": "'=not a formula",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "A4",
+        "input": "=LOWER(\"abc\")",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "edit.clearContents",
+      "params": {
+        "range": "F34:G41",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "sheet.rename",
+      "params": {
+        "name": "Notes",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "home.insertColumns",
+      "params": {
+        "cols": "H:I",
+        "sheet": "Notes"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "G34",
+        "input": "10.25",
+        "sheet": "Notes"
+      }
+    },
+    {
+      "id": "home.fillColor",
+      "params": {
+        "color": "none",
+        "range": "D40",
+        "sheet": "Notes"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "F32",
+        "input": "TRUE",
+        "sheet": "Notes"
+      }
+    },
+    {
+      "id": "home.insertRows",
+      "params": {
+        "rows": "7:9",
+        "sheet": "Notes"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "G37",
+        "input": "a\"quote",
+        "sheet": "Notes"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "E20",
+        "input": "=RANDBETWEEN(1,6)+$I$34",
+        "sheet": "Notes"
+      }
+    },
+    {
+      "id": "home.italic",
+      "params": {
+        "on": true,
+        "range": "B6:D12",
+        "sheet": "Notes"
+      }
+    },
+    {
+      "id": "edit.clearContents",
+      "params": {
+        "range": "C1:D6",
+        "sheet": "Notes"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "H34",
+        "input": "TRUE",
+        "sheet": "Notes"
+      }
+    },
+    {
+      "id": "home.deleteColumns",
+      "params": {
+        "cols": "G:G",
+        "sheet": "Notes"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "E37",
+        "input": "123456789012345",
+        "sheet": "Notes"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "A2",
+        "input": "=RIGHT(E19,3)",
+        "sheet": "Notes"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "I26",
+        "input": "-345.96",
+        "sheet": "Notes"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "G36",
+        "input": "155",
+        "sheet": "Notes"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "E37",
+        "input": "=RIGHT(A6,0)",
+        "sheet": "Notes"
+      }
+    },
+    {
+      "id": "home.fontSize",
+      "params": {
+        "range": "G32:J32",
+        "sheet": "Notes",
+        "size": 10
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "G36",
+        "input": "=MEDIAN(G35:H41)+F14",
+        "sheet": "Notes"
+      }
+    },
+    {
+      "id": "home.italic",
+      "params": {
+        "on": true,
+        "range": "G39:J46",
+        "sheet": "Notes"
+      }
+    },
+    {
+      "id": "home.fillColor",
+      "params": {
+        "color": {
+          "theme": 5,
+          "tint": 0.4
+        },
+        "range": "E34:F37",
+        "sheet": "Notes"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "E39",
+        "input": "372.28",
+        "sheet": "Notes"
+      }
+    },
+    {
+      "id": "edit.clearContents",
+      "params": {
+        "range": "A5:B10",
+        "sheet": "Notes"
+      }
+    },
+    {
+      "id": "home.bold",
+      "params": {
+        "on": true,
+        "range": "F39:H46",
+        "sheet": "Notes"
+      }
+    },
+    {
+      "id": "home.insertRows",
+      "params": {
+        "rows": "37:37",
+        "sheet": "Notes"
+      }
+    },
+    {
+      "id": "home.alignCenter",
+      "params": {
+        "on": true,
+        "range": "G32:O39",
+        "sheet": "Notes"
+      }
+    },
+    {
+      "id": "home.deleteRows",
+      "params": {
+        "rows": "39:40",
+        "sheet": "Notes"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "J26",
+        "input": "=TODAY()",
+        "sheet": "Notes"
+      }
+    },
+    {
+      "id": "home.numberFormat",
+      "params": {
+        "code": "0.00",
+        "range": "G36:J36",
+        "sheet": "Notes"
+      }
+    },
+    {
+      "id": "home.numberFormat",
+      "params": {
+        "format": "Percentage",
+        "range": "52:53",
+        "sheet": "Notes"
+      }
+    },
+    {
+      "id": "home.italic",
+      "params": {
+        "on": true,
+        "range": "H35:N58",
+        "sheet": "Notes"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "F32",
+        "input": "283.33",
+        "sheet": "Notes"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "F36",
+        "input": "x y z",
+        "sheet": "Notes"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "D35",
+        "input": "south",
+        "sheet": "Notes"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "S167",
+        "input": "350",
+        "sheet": "Notes"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "A2",
+        "input": "-343",
+        "sheet": "Notes"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "F39",
+        "input": "TRUE story",
+        "sheet": "Notes"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "G34",
+        "input": "-47%",
+        "sheet": "Notes"
+      }
+    },
+    {
+      "id": "home.fontSize",
+      "params": {
+        "range": "A5:A10",
+        "sheet": "Notes",
+        "size": 10
+      }
+    },
+    {
+      "id": "home.insertRows",
+      "params": {
+        "rows": "33:34",
+        "sheet": "Notes"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "E31",
+        "input": "-19%",
+        "sheet": "Notes"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "D36",
+        "input": "=AND(G31>0,81<50)",
+        "sheet": "Notes"
+      }
+    },
+    {
+      "id": "home.fillColor",
+      "params": {
+        "color": "#C6EFCE",
+        "range": "F37:I39",
+        "sheet": "Notes"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "S165",
+        "input": "=MEDIAN(E16:F16)",
+        "sheet": "Notes"
+      }
+    },
+    {
+      "id": "home.numberFormat",
+      "params": {
+        "format": "Long Date",
+        "range": "A3:J36",
+        "sheet": "Notes"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "E27",
+        "input": "=AND(B3>0,$C$35<50)+39",
+        "sheet": "Notes"
+      }
+    },
+    {
+      "id": "home.insertColumns",
+      "params": {
+        "cols": "B:B",
+        "sheet": "Notes"
+      }
+    },
+    {
+      "id": "home.deleteRows",
+      "params": {
+        "rows": "24:26",
+        "sheet": "Notes"
+      }
+    },
+    {
+      "id": "home.borders",
+      "params": {
+        "color": "#00B050",
+        "preset": "none",
+        "range": "S169:AA199",
+        "sheet": "Notes"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "G34",
+        "input": "=MATCH(E31,C6:E31,0)",
+        "sheet": "Notes"
+      }
+    }
+  ]
+}

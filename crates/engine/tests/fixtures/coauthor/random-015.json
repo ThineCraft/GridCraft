@@ -1,0 +1,479 @@
+{
+  "now": 38087.26527777778,
+  "seed": 15,
+  "steps": [
+    {
+      "id": "home.fontName",
+      "params": {
+        "name": "Georgia",
+        "range": "D20:E27",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "AC165",
+        "input": "south",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "edit.clearContents",
+      "params": {
+        "range": "A2:D4",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "home.borders",
+      "params": {
+        "preset": "thickBottom",
+        "range": "J191:L198",
+        "sheet": "Sheet1",
+        "style": "medium"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "AC166",
+        "input": "=INT(F74)",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "AD166",
+        "input": "x y z",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "home.insertRows",
+      "params": {
+        "rows": "166:167",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "home.fontSize",
+      "params": {
+        "range": "G5:I10",
+        "sheet": "Sheet1",
+        "size": 12
+      }
+    },
+    {
+      "id": "home.insertColumns",
+      "params": {
+        "cols": "AD:AE",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "home.insertColumns",
+      "params": {
+        "cols": "AB:AC",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "AC165",
+        "input": "-237",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "edit.clearContents",
+      "params": {
+        "range": "AB167:AD170",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "home.borders",
+      "params": {
+        "color": "#00B050",
+        "preset": "insideHorizontal",
+        "range": "AB164:AD167",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "G7",
+        "input": "-420.10",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "A4",
+        "input": "1st",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "home.alignTop",
+      "params": {
+        "range": "AC163:AD169",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "P18",
+        "input": "=CONCAT(AD167,\"-\",69)",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "AD164",
+        "input": "ÄÖÜ ß",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "AC165",
+        "input": "TRUE",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "F5",
+        "input": "-829",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "A38",
+        "input": "=MAX(B5:D10)+D72",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "O17",
+        "input": "1st",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "home.borders",
+      "params": {
+        "color": "#FF0000",
+        "preset": "thickBottom",
+        "range": "G5:G7",
+        "sheet": "Sheet1",
+        "style": "medium"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "F5",
+        "input": 7,
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "AD165",
+        "input": "=TEXT($O$18,\"#,##0\")+-8",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "G7",
+        "input": "#N/A",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "home.italic",
+      "params": {
+        "on": true,
+        "range": "G3:J10",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "home.numberFormat",
+      "params": {
+        "format": "Fraction",
+        "range": "G37:J40",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "B36",
+        "input": "apple",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "home.alignMiddle",
+      "params": {
+        "range": "G8:I14",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "B35",
+        "input": "-67.39",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "home.insertRows",
+      "params": {
+        "rows": "22:24",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "H8",
+        "input": "south",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "home.numberFormat",
+      "params": {
+        "format": "Scientific",
+        "range": "O18:P23",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "A3",
+        "input": "TRUE",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "edit.clearContents",
+      "params": {
+        "range": "AB163:AB167",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "I27",
+        "input": "467.66",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "edit.clearContents",
+      "params": {
+        "range": "J26:M33",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "H36",
+        "input": "74",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "H36",
+        "input": "1st",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "edit.clearContents",
+      "params": {
+        "range": "C37:C43",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "home.borders",
+      "params": {
+        "color": "#FF0000",
+        "preset": "insideHorizontal",
+        "range": "I35:L37",
+        "sheet": "Sheet1",
+        "style": "thick"
+      }
+    },
+    {
+      "id": "home.deleteColumns",
+      "params": {
+        "cols": "B:C",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "home.numberFormat",
+      "params": {
+        "format": "Long Date",
+        "range": "I9:Q35",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "A38",
+        "input": "TRUE",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "home.fontName",
+      "params": {
+        "name": "Calibri",
+        "range": "AD165:AD170",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "home.fontSize",
+      "params": {
+        "range": "E3:F10",
+        "sheet": "Sheet1",
+        "size": 10
+      }
+    },
+    {
+      "id": "home.wrapText",
+      "params": {
+        "on": true,
+        "range": "AD165:AD185",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "I35",
+        "input": "=COUNTIF(AC163:AD164,10)",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "edit.clearContents",
+      "params": {
+        "range": "H5:H12",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "home.deleteRows",
+      "params": {
+        "rows": "165:165",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "I38",
+        "input": "9.99999999999999E+307",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "A1",
+        "input": "=OR(Y125>0,O18<50)",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "home.numberFormat",
+      "params": {
+        "code": "0.000E+00",
+        "range": "E26:E29",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "home.fillColor",
+      "params": {
+        "color": {
+          "theme": 5,
+          "tint": 0.4
+        },
+        "range": "AC167:AC172",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "AD166",
+        "input": "North",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "home.deleteRows",
+      "params": {
+        "rows": "16:16",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "H37",
+        "input": "63.36",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "Z140",
+        "input": "=PRODUCT(H7:J14,D27)",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "edit.clearContents",
+      "params": {
+        "range": "I36:I41",
+        "sheet": "Sheet1"
+      }
+    }
+  ]
+}

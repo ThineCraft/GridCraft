@@ -4,6 +4,9 @@ mod autofit_filter_buttons;
 mod cf_formula_validate;
 mod chart_area_stacked100;
 mod chart_workbook_names;
+mod coauthor_replay;
+mod coauthor_save_reload;
+mod coauthor_timing;
 mod command_sequence_fuzz;
 mod cross_sheet_cut;
 mod csv_export_budget;
@@ -12,6 +15,7 @@ mod custom_filter_blanks;
 mod custom_view_freeze;
 mod dynamicmetadata;
 mod extreme_selection_moves;
+mod fingerprint;
 mod font_scheme_minor;
 mod format_as_table_restyle;
 mod hidden_sheet_navigation;
@@ -35,3 +39,7 @@ mod table_total_row_last_row;
 mod trace_error;
 mod workbook_author;
 mod wrap_row_height;
+
+/// Sequences of shared commands for the co-authoring proofs, shared with the browser-engine runs.
+#[path = "../support/sequences.rs"]
+mod sequences;
