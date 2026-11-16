@@ -82,6 +82,12 @@ fn move_view(s: &mut Session, rng: &mut Rng) -> Result<(), String> {
 /// Engine A keeps its own view (the commands move it as they do); before every step engine B is
 /// moved to a random sheet and selection from a separate random stream.
 fn replay_two(name: &str, seq: &Sequence, tally: &mut Tally) -> Result<(Session, Session), String> {
+    replay_pair(name, seq, tally, None)
+}
+
+/// [`replay_two`], optionally giving engine B one extra step (`extra`: before which step, and
+/// what), so a test can prove the replay notices engines that drift apart.
+fn replay_pair(name: &str, seq: &Sequence, tally: &mut Tally, extra: Option<(usize, &Step)>) -> Result<(Session, Session), String> {
     let mut a = fresh_session(seq);
     let mut b = fresh_session(seq);
     let mut view = Rng::new(seq.seed ^ 0x5E1E_C710_4B1E_77A2);
@@ -95,6 +101,11 @@ fn replay_two(name: &str, seq: &Sequence, tally: &mut Tally) -> Result<(Session,
             return Err(format!("{name}: step {i} `{}` is not a shared command", step.id));
         }
         move_view(&mut b, &mut view).map_err(|e| format!("{name}, before step {i}: moving engine B's view failed: {e}"))?;
+        if let Some((before_step, injected)) = extra
+            && before_step == i
+        {
+            apply(&mut b, injected).map_err(|e| format!("{name}, before step {i}: the extra step failed: {e}"))?;
+        }
         let ra = apply(&mut a, step);
         let rb = apply(&mut b, step);
         tally.steps += 1;
@@ -219,6 +230,23 @@ fn long_replay() {
     eprintln!("long replay: seeds {first}..{}, {:.1} s", first + seeds.len() as u64, started.elapsed().as_secs_f64());
     assert!(failures.is_empty(), "{} failing seed(s)\n\n{}", failures.len(), failures.join("\n\n"));
     check_tally("long replay", seeds.len(), &tally);
+}
+
+/// The replay is not vacuous: one extra step on engine B, in a cell no step touches, fails it at
+/// the next step, naming that cell.
+#[test]
+fn replay_two_notices_an_extra_step_on_one_engine() {
+    let steps = vec![set("Sheet1", "A1", "1"), set("Sheet1", "A2", "=A1*2"), set("Sheet1", "A3", "3"), set("Sheet1", "A4", "4")];
+    let seq = Sequence { seed: 7, now: DEFAULT_NOW, steps };
+    assert!(replay_two("clean", &seq, &mut Tally::default()).is_ok(), "the sequence alone replays");
+    let extra = set("Sheet1", "D9", "99");
+    let error = match replay_pair("drifted", &seq, &mut Tally::default(), Some((2, &extra))) {
+        Ok(_) => panic!("an extra step on engine B went unnoticed"),
+        Err(e) => e,
+    };
+    assert!(error.contains("step 2 of 4"), "the failure names the step: {error}");
+    assert!(error.contains("fingerprints differ"), "{error}");
+    assert!(error.contains("Sheet1!D9"), "the failure names the cell: {error}");
 }
 
 // ---------------------------------------------------------------- hand-written sequences
@@ -576,6 +604,12 @@ fn explicit_targets_leave_the_active_sheet_alone() {
             set("Sheet1", "C3", "=Other!B2*2"),
             // Middle-aligned, so Top and Bottom (the default) both change something.
             Step::new("home.alignMiddle", json!({"sheet": "Other", "range": "A1:A2"})),
+            // The active cell is styled (bold, italic, wrapped, centred), so a toggle that read the
+            // active cell instead of its target would turn the target's format off, not on.
+            Step::new("home.bold", json!({"sheet": "Sheet1", "range": "C3", "on": true})),
+            Step::new("home.italic", json!({"sheet": "Sheet1", "range": "C3", "on": true})),
+            Step::new("home.wrapText", json!({"sheet": "Sheet1", "range": "C3", "on": true})),
+            Step::new("home.alignCenter", json!({"sheet": "Sheet1", "range": "C3", "on": true})),
         ] {
             apply(&mut s, &step).unwrap();
         }
@@ -680,6 +714,18 @@ fn explicit_targets_leave_the_active_sheet_alone() {
         }
         if after.first() != cells.first() {
             failures.push(format!("`{}` on Other changed Sheet1!B2: {:?}", step.id, after.first()));
+        }
+    }
+    // Without `on`, the toggles still decide from the active cell (`selection_readers.md`, left
+    // for G3): C3 already has each format, so the target, which lacks it, is left as it was.
+    // This pins the known reader, so the test changes when G3 makes the toggles target-explicit.
+    for id in ["home.bold", "home.italic", "home.wrapText", "home.alignCenter"] {
+        let mut s = base();
+        let before = fingerprint(&s, DocId(0));
+        if let Err(e) = apply(&mut s, &on(id, json!({"range": "A1:B2"}))) {
+            failures.push(format!("`{id}` without `on` failed: {e}"));
+        } else if fingerprint(&s, DocId(0)).entered != before.entered {
+            failures.push(format!("`{id}` without `on` no longer toggles from the active cell; update selection_readers.md"));
         }
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
