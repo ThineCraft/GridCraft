@@ -13,9 +13,13 @@ is one of:
 
 "Shared commands" are the Stage 2 candidates the replay drives (`crates/engine/tests/support/sequences.rs`,
 `SHARED_COMMANDS`): cell content, number format, font, fill, borders, alignment, row and column
-insert and delete, and sheet add, rename and delete.
+insert and delete, and sheet add, rename and delete. Set and clear filter are candidates too, but
+the replay does not drive them: both read the active sheet or selection even with explicit
+parameters (`crates/engine/tests/fixtures/coauthor/selection_readers.md`), so nothing here
+proves agreement on filters.
 
-Audited at branch `coauthor-proofs` after `43d635b0`, November 2026.
+Audited at branch `coauthor-proofs` after `43d635b0`, November 2026. The long run was re-run at
+`d0f5983b` (see Long run), after later engine and fingerprint changes.
 
 ## Evidence
 
@@ -115,9 +119,10 @@ already show in the replay.
 | `phonetics`, `seen` (twice) | `write.rs` | Safe | Lookup and first-seen tests. |
 | `used_names`, `used`, `next` (table names) | `sheet_write.rs`, `sheet_write/parts.rs` | Safe | Unique-name lookups in table order. Cells are written from the row-major store, or from a `BTreeSet` when extra cells merge in. |
 | Pivot writer `index`, `taken`, `next_suffix`, `hidden` | `pivot/write.rs` | Safe | Lookups. |
-| `PicturesOut::indices: HashMap<*const CellPicture, u32>` | `richdata.rs` | Safe for order | Keyed by address, but only to share one rich value between cells that share one picture; the list is in first-use order. Which cells share an `Arc` depends on how the picture got there (copy versus reload), so the same content can give a different number of rich values. Cell pictures are not shared commands. |
+| `PicturesOut::indices: HashMap<*const CellPicture, u32>` | `richdata.rs` | Left for G3 | Iteration order is safe: the map is keyed by address only to share one rich value between cells that share one picture, and the list is in first-use order. But which cells share an `Arc` depends on how the picture got there (copy versus reload), so the same content can give a different number of rich values in the written file. Cell pictures are not shared commands; if they become one, the writer must share rich values by content. |
 | `cache` (picture reuse on read) | `richdata.rs` | Safe | Lookup. |
 | Passthrough `used`, `written`, `ids`, `NameMap`, `SheetIds`, `reachable`, `by_name`, `dropped_ids`, `gone` | `passthrough/write.rs`, `passthrough/rebase.rs` | Safe | Membership and renaming; kept parts are written in their `Vec` order, filtered by these sets. |
+| Passthrough reader `defaults`, `overrides` (content types), `seen`, `local`, `drop` (control shape ids) | `passthrough/read.rs` | Safe | Lookups and membership tests while reading kept parts in the file's own order. |
 | Reader maps: `persons`, `num_fmts`, `index`, `SheetNames`, `shared` (shared formulas), `by_id` (threaded comments), `fmts`, `used`, `shared_fmts`, pivot cache `by_id`/`parsed`, controls `by_number`/`rel_by_id`/`props_by_part`/`listed`/`read`/`modelled`, `Package::names` | `read.rs`, `styles.rs`, `sheet_read.rs`, `sheet_read/parts.rs`, `pivot/read.rs`, `controls.rs`, `package.rs` | Safe | Lookups while reading the file in its own order; `Package::names()` sorts (test only). |
 | XLS reader `formats`, `shared`, `arrays`, `failed`, `offsets`, `seen` | `xls.rs`, `xls/styles.rs` | Safe | Lookups. |
 
@@ -148,7 +153,7 @@ already show in the replay.
 | Source | Class | Why |
 | --- | --- | --- |
 | `Arc::ptr_eq` shortcuts (unchanged sheets, bands and workbooks) | Safe | A pointer match means the content is the same; a miss falls back to comparing content. |
-| `PicturesOut` keyed by `*const CellPicture` | Safe | See xlsx above. |
+| `PicturesOut` keyed by `*const CellPicture` | Left for G3 | See xlsx above: the order is safe, but `Arc` sharing can change how many rich values are written. |
 | Undo history bound (`CellStore::retained_bytes_against`) | Left for G3 | Uses `size_of` (different on wasm32) and `Arc` sharing, so how much undo history a client keeps differs between platforms. The undo history is outside the fingerprint. G3's per-person undo must not assume clients keep the same depth. |
 | Sheet, document and recording uids (`NEXT_SHEET_UID`, `NEXT_UID`, `NEXT_RECORDING`) | Safe | Process counters; never written to a file or the fingerprint. G3 gives sheets shared identities of its own. |
 
@@ -158,7 +163,7 @@ already show in the replay.
 | --- | --- | --- |
 | Rust float formatting (`{}`, `{:.*}`, `{:e}`) | Safe | Exact and platform-independent. The fingerprint hashes IEEE-754 bits, not text. |
 | Basic arithmetic, `floor`, `round`, `ceil`, `sqrt` | Safe | Correctly rounded IEEE-754 on every target. |
-| Transcendental functions (`exp`, `ln`, `log10`, `powf`, `sin`, …) in `functions` (distributions, financial, engineering, math) and `powi` in `numfmt` | Task 4, then G3 | They come from the platform's maths library on the desktop and from Rust's own on wasm32, and may differ in the last bit. `powi` is documented as unspecified precision. A last-bit difference reaches computed values and, through `core::number_to_text` (`log10().floor()`), possibly the shown text of a number, which formulas such as `&` and Remove Duplicates read. Task 4 lists the differences; if they matter, G3 makes the server's computed values the agreed ones or pins a maths library. |
+| Transcendental functions (`exp`, `ln`, `log10`, `powf`, `sin`, …) in `functions` (distributions, financial, engineering, math) and `powi` in `numfmt` | Task 4, then G3 | They come from the platform's maths library on the desktop and from Rust's own on wasm32, and may differ in the last bit. `powi` is documented as unspecified precision. A last-bit difference reaches computed values and, through `core::number_to_text` (`log10().floor()`), possibly the shown text of a number, which formulas such as `&` and Remove Duplicates read. Task 4's maths grid (x86_64 Windows MSVC against wasm32 under Node): entered content always agrees. 64 of 1,584 maths cells differ by 1 ULP. In a default-width cell they look the same, but at 15-digit text (`&`, CONCAT, the formula bar) 3 of them differ: `SIN(pi/4)`, `POWER(2,-0.5)` and `1e5^0.37` (6 texts, with the 15-digit scientific TEXT format; `allowed-text-differences.json`). So the computed digest cannot be the cross-platform agreement check: G3 makes the server's computed values the agreed ones, or pins a maths library. |
 | Row auto-fit after formatting | Safe | `auto_row_height` uses `approx_text_width` arithmetic, not the host's font measurement, so the row heights in the fingerprint are the same everywhere. |
 | AutoFit Column Width | Left for G3 | Uses the host's `Session::text_width` (font metrics) when set, so desktop and browser give different widths. Not a shared command; the originator would send the widths. |
 
@@ -178,14 +183,19 @@ per-workbook results.
 
 ## Long run
 
-`cargo test --release -p gridcraft-engine --test it coauthor_replay::long_replay -- --ignored --nocapture`,
-seeds 100000 to 109999, 60 random steps each, on the owner's Windows 11 desktop (x86_64):
+`cargo test --release --offline -p gridcraft-engine --test it coauthor_replay::long_replay -- --ignored --nocapture`,
+seeds 100000 to 109999, 60 random steps each, on x86_64 Windows, at `d0f5983b`:
 
-- Passed in 241.8 s, with the spill-order fix in place: 10,000 sequences, 625,130 steps,
-  0.0 % errors, 18.5 % structural.
-- The `entered` digest changed on 463,022 of 509,684 non-structural steps (90.8 %); the
+- Passed in 248.4 s: 10,000 sequences, 625,130 steps, 0.0 % errors, 18.5 % structural.
+- The `entered` digest changed on 463,024 of 509,684 non-structural steps (90.8 %); the
   `computed` digest changed on 443,516 of 625,130 steps (70.9 %).
-- No seed failed, so no new fixture or audit entry came from the run. The two engines agreed on
-  outcome and both digests after every step, with engine B's view moved before each step.
-- This is one process on one platform. It proves agreement across `std` hash seeds and
-  allocation, not across platforms (Task 4) and not across rollback and re-apply (G3).
+- No seed failed. The two engines agreed on outcome and both digests after every step, with
+  engine B's view moved before each step.
+- Scope: identical command histories from a new workbook, in one process on x86_64 Windows. Set
+  and clear filter are not driven (`selection_readers.md`). RAND agrees only because both engines
+  share the seed and the RNG state lives in `Calc`, not the workbook (see Random numbers). The
+  run proves nothing about rollback against straight application, or about a client that loaded
+  a checkpoint, and nothing across platforms (Task 4).
+- An earlier run at `965571a1` (241.8 s, the same counts except 463,022 `entered` changes)
+  predates later changes to a shared command (`home.borders` re-fits rows, `4b362647`) and to
+  what the fingerprint compares (`6f612608`, `dba599ee`); it is superseded by the run above.
