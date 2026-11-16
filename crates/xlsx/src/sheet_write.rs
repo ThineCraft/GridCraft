@@ -147,8 +147,17 @@ pub fn write_sheet(wb: &Workbook, si: usize, selected: bool, out: &mut Out) -> (
     }
     s.push_str("/>");
 
-    // cols: runs of identical settings.
-    if !sheet.cols.is_empty() {
+    // cols: runs of identical settings. A column's default style is no style (columns are the
+    // last place a cell's style falls back to), and an entry that then carries nothing is not
+    // written: the reader drops it, so a save of the reopened workbook would differ.
+    let cols: Vec<(u32, LineInfo)> = sheet
+        .cols
+        .iter()
+        .filter(|(c, _)| **c < gridcraft_core::MAX_COLS)
+        .map(|(c, i)| (*c, LineInfo { style: i.style.filter(|s| *s != gridcraft_model::StyleId::DEFAULT), ..*i }))
+        .filter(|(_, i)| *i != LineInfo { custom: i.custom, ..LineInfo::default() })
+        .collect();
+    if !cols.is_empty() {
         s.push_str("<cols>");
         let mut run: Option<(u32, u32, LineInfo)> = None;
         let flush = |s: &mut String, r: (u32, u32, LineInfo)| {
@@ -172,17 +181,14 @@ pub fn write_sheet(wb: &Workbook, si: usize, selected: bool, out: &mut Out) -> (
             }
             s.push_str("/>");
         };
-        for (&c, info) in &sheet.cols {
-            if c >= gridcraft_core::MAX_COLS {
-                continue;
-            }
+        for (c, info) in cols {
             run = match run {
-                Some((a, b, i)) if b + 1 == c && i == *info => Some((a, c, i)),
+                Some((a, b, i)) if b + 1 == c && i == info => Some((a, c, i)),
                 Some(r) => {
                     flush(&mut s, r);
-                    Some((c, c, *info))
+                    Some((c, c, info))
                 }
-                None => Some((c, c, *info)),
+                None => Some((c, c, info)),
             };
         }
         if let Some(r) = run {
