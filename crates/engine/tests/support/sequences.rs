@@ -232,7 +232,7 @@ pub fn sheet_prefix(name: &str) -> String {
 
 /// Generates `steps` random shared commands (after the steps that add the starting sheets).
 pub fn generate(seed: u64, steps: usize) -> Sequence {
-    let mut g = Gen { rng: Rng::new(seed), sheets: vec!["Sheet1".to_string()], renamed: 0 };
+    let mut g = Gen { rng: Rng::new(seed), sheets: vec!["Sheet1".to_string()], renamed: 0, written: Vec::new() };
     let now = g.rng.int(36_526, 54_789) as f64 + g.rng.int(0, 1439) as f64 / 1440.0;
     let mut out = Vec::new();
     // 1 to 6 sheets to start with.
@@ -252,6 +252,9 @@ struct Gen {
     sheets: Vec<String>,
     /// Names handed out, for unique fallbacks once the list is used up.
     renamed: u32,
+    /// Cells the sequence has written (sheet, row, column), as entered. Row and column inserts
+    /// and deletes are not followed: the list only steers later steps towards filled areas.
+    written: Vec<(String, u32, u32)>,
 }
 
 impl Gen {
@@ -286,17 +289,17 @@ impl Gen {
     fn step(&mut self) -> Step {
         let roll = self.rng.below(100);
         match roll {
-            0..30 => self.cell_set(false),
-            30..48 => self.cell_set(true),
-            48..53 => self.with_range("edit.clearContents", Map::new(), false),
-            53..59 => self.number_format(),
-            59..68 => self.font(),
-            68..73 => {
+            0..35 => self.cell_set(false),
+            35..57 => self.cell_set(true),
+            57..62 => self.with_range("edit.clearContents", Map::new(), false),
+            62..67 => self.number_format(),
+            67..73 => self.font(),
+            73..77 => {
                 let color = self.rng.pick(&[json!("#FFFF00"), json!("#C6EFCE"), json!("none"), json!({"theme": 5, "tint": 0.4})]).clone();
                 self.with_range("home.fillColor", obj(&[("color", color)]), true)
             }
-            73..78 => self.borders(),
-            78..85 => self.alignment(),
+            77..81 => self.borders(),
+            81..85 => self.alignment(),
             _ => self.structural(),
         }
     }
@@ -305,20 +308,38 @@ impl Gen {
     /// rows or columns now and then.
     fn with_range(&mut self, id: &str, mut extra: Map<String, Json>, lines: bool) -> Step {
         let sheet = self.sheet();
-        let range = if lines && self.rng.chance(8) { self.lines_range() } else { self.range() };
+        let range = if lines && self.rng.chance(8) { self.lines_range() } else { self.range(&sheet) };
         extra.insert("sheet".into(), json!(sheet));
         extra.insert("range".into(), json!(range));
         Step::new(id, Json::Object(extra))
     }
 
-    fn cell(&mut self) -> String {
-        format!("{}{}", letters(self.rng.below(COLS as u64) as u32), 1 + self.rng.below(ROWS as u64))
+    /// A cell of `sheet` (row, column), zero-based: mostly next to or on a cell already written
+    /// there, else mostly in the block A1:J40, sometimes anywhere in A1:AD200. So formulas read
+    /// filled cells and clears and formats land on content, with some blanks left.
+    fn spot(&mut self, sheet: &str) -> (u32, u32) {
+        let near: Vec<(u32, u32)> = self.written.iter().filter(|(s, _, _)| s == sheet).map(|(_, r, c)| (*r, *c)).collect();
+        if !near.is_empty() && self.rng.chance(75) {
+            let (r, c) = *self.rng.pick(&near);
+            let dr = self.rng.int(-2, 2);
+            let dc = self.rng.int(-1, 1);
+            return ((r as i64 + dr).clamp(0, ROWS as i64 - 1) as u32, (c as i64 + dc).clamp(0, COLS as i64 - 1) as u32);
+        }
+        if self.rng.chance(70) {
+            (self.rng.below(40) as u32, self.rng.below(10) as u32)
+        } else {
+            (self.rng.below(ROWS as u64) as u32, self.rng.below(COLS as u64) as u32)
+        }
     }
 
-    /// A small block, mostly, inside A1:AD200.
-    fn range(&mut self) -> String {
-        let r0 = self.rng.below(ROWS as u64) as u32;
-        let c0 = self.rng.below(COLS as u64) as u32;
+    fn cell(&mut self, sheet: &str) -> String {
+        let (r, c) = self.spot(sheet);
+        format!("{}{}", letters(c), r + 1)
+    }
+
+    /// A small block of `sheet`, mostly, starting at a [`spot`](Self::spot).
+    fn range(&mut self, sheet: &str) -> String {
+        let (r0, c0) = self.spot(sheet);
         let (h, w) = if self.rng.chance(10) {
             (self.rng.int(1, 40) as u32, self.rng.int(1, 10) as u32)
         } else {
@@ -342,7 +363,9 @@ impl Gen {
 
     fn cell_set(&mut self, formula: bool) -> Step {
         let sheet = self.sheet();
-        let cell = self.cell();
+        let (r, c) = self.spot(&sheet);
+        self.written.push((sheet.clone(), r, c));
+        let cell = format!("{}{}", letters(c), r + 1);
         let input = if formula { self.formula(&sheet) } else { self.literal() };
         Step::new("cell.set", json!({"sheet": sheet, "cell": cell, "input": input}))
     }
@@ -364,20 +387,20 @@ impl Gen {
         }
     }
 
-    /// A reference to a cell or block, on this sheet or (30 %) another.
-    fn prefix(&mut self, here: &str) -> String {
+    /// The sheet a reference points at, this one or (30 %) another, and the prefix it needs.
+    fn target(&mut self, here: &str) -> (String, String) {
         if self.sheets.len() > 1 && self.rng.chance(30) {
             let other = self.sheet();
             if other != here {
-                return sheet_prefix(&other);
+                return (sheet_prefix(&other), other);
             }
         }
-        String::new()
+        (String::new(), here.to_string())
     }
 
     fn cell_ref(&mut self, here: &str) -> String {
-        let p = self.prefix(here);
-        let c = self.cell();
+        let (p, on) = self.target(here);
+        let c = self.cell(&on);
         if self.rng.chance(15) {
             let (letters_part, digits): (String, String) = c.chars().partition(|ch| ch.is_ascii_alphabetic());
             format!("{p}${letters_part}${digits}")
@@ -387,8 +410,8 @@ impl Gen {
     }
 
     fn range_ref(&mut self, here: &str) -> String {
-        let p = self.prefix(here);
-        let r = self.range();
+        let (p, on) = self.target(here);
+        let r = self.range(&on);
         let r = if r.contains(':') { r } else { format!("{r}:{r}") };
         format!("{p}{r}")
     }
@@ -431,7 +454,7 @@ impl Gen {
                 }
             }
             "SUMPRODUCT" => {
-                let r = self.range();
+                let r = self.range(here);
                 let (a, b) = r.split_once(':').unwrap_or((&r, &r));
                 let shift = |c: &str| -> String {
                     // The same shape one column to the right, so the arrays match.
@@ -460,10 +483,11 @@ impl Gen {
             "INDEX" => format!("{},{},1", self.range_ref(here), self.rng.int(1, 3)),
             "MATCH" => format!("{},{},0", self.num(here), self.range_ref(here)),
             "XLOOKUP" => {
-                let col = letters(self.rng.below(COLS as u64 - 1) as u32);
-                let next = letters(gridcraft_engine::core::CellRef::parse(&format!("{col}1")).map_or(0, |x| x.col) + 1);
-                let (r0, r1) = (1 + self.rng.below(100), 101 + self.rng.below(100));
-                let p = self.prefix(here);
+                let (p, on) = self.target(here);
+                let (r, c) = self.spot(&on);
+                let c = c.min(COLS - 2);
+                let (col, next) = (letters(c), letters(c + 1));
+                let (r0, r1) = (r.saturating_sub(5) + 1, r + 6);
                 format!("{},{p}{col}{r0}:{col}{r1},{p}{next}{r0}:{next}{r1},\"none\"", self.num(here))
             }
             "DATE" => format!("2026,{},{}", self.rng.int(1, 12), self.num(here)),
@@ -573,16 +597,16 @@ impl Gen {
         match roll {
             0..7 => {
                 let id = if roll < 4 { "home.insertRows" } else { "home.deleteRows" };
-                let a = 1 + self.rng.below(ROWS as u64);
-                let b = a + self.rng.below(3);
                 let sheet = self.sheet();
+                let a = 1 + self.spot(&sheet).0 as u64;
+                let b = a + self.rng.below(3);
                 Step::new(id, json!({"sheet": sheet, "rows": format!("{a}:{b}")}))
             }
             7..12 => {
                 let id = if roll < 10 { "home.insertColumns" } else { "home.deleteColumns" };
-                let a = self.rng.below(COLS as u64) as u32;
-                let b = a + self.rng.below(2) as u32;
                 let sheet = self.sheet();
+                let a = self.spot(&sheet).1;
+                let b = a + self.rng.below(2) as u32;
                 Step::new(id, json!({"sheet": sheet, "cols": format!("{}:{}", letters(a), letters(b))}))
             }
             12 if self.sheets.len() < MAX_SHEETS => self.add_sheet(),
@@ -591,11 +615,15 @@ impl Gen {
                 let old = self.sheets[i].clone();
                 let name = self.fresh_name();
                 self.sheets[i] = name.clone();
+                for w in self.written.iter_mut().filter(|w| w.0 == old) {
+                    w.0 = name.clone();
+                }
                 Step::new("sheet.rename", json!({"sheet": old, "name": name}))
             }
             _ if self.sheets.len() > 1 => {
                 let i = self.rng.below(self.sheets.len() as u64) as usize;
                 let name = self.sheets.remove(i);
+                self.written.retain(|w| w.0 != name);
                 Step::new("home.deleteSheet", json!({"sheet": name}))
             }
             _ => self.add_sheet(),

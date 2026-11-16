@@ -27,7 +27,7 @@ use gridcraft_engine::fingerprint::{DocId, fingerprint, first_difference};
 use gridcraft_engine::model::{BorderStyle, Color, Fill, HAlign, Style};
 use serde_json::json;
 
-use crate::sequences::{DEFAULT_NOW, SHARED_COMMANDS, STRUCTURAL_COMMANDS, Sequence, Step, apply, fresh_session, generate};
+use crate::sequences::{DEFAULT_NOW, Rng, SHARED_COMMANDS, STRUCTURAL_COMMANDS, Sequence, Step, apply, fresh_session, generate};
 
 /// Random steps per generated sequence (after the steps that add its starting sheets).
 const STEPS: usize = 60;
@@ -44,31 +44,62 @@ fn fixtures_dir() -> PathBuf {
 
 // ---------------------------------------------------------------- the replay
 
-/// What one replay saw, for the error-rate check.
+/// What one replay saw: the error rate, and how many steps really changed the workbook.
 #[derive(Default)]
 struct Tally {
     steps: usize,
     errors: usize,
     structural: usize,
+    /// Steps that changed the `entered` digest, among the non-structural steps.
+    entered_changed: usize,
+    /// Steps that changed the `computed` digest.
+    computed_changed: usize,
+}
+
+/// Moves `s` to a random sheet and selection (one or two areas) with the person's own view
+/// commands, as a co-author looking elsewhere would be. View state is not in the fingerprint, so
+/// only a shared command that reads it can make the engines differ.
+fn move_view(s: &mut Session, rng: &mut Rng) -> Result<(), String> {
+    let sheets = s.doc().map(|d| d.wb.sheets.len()).unwrap_or(1) as u64;
+    s.execute("sheet.activate", json!({"sheet": rng.below(sheets)})).map_err(|e| format!("sheet.activate: {e}"))?;
+    let area = |rng: &mut Rng| {
+        let (r, c) = (1 + rng.below(60), rng.below(12) as u32);
+        let (h, w) = (rng.below(6), rng.below(4) as u32);
+        let (c0, c1) = (gridcraft_engine::core::col_to_letters(c), gridcraft_engine::core::col_to_letters(c + w));
+        format!("{c0}{r}:{c1}{}", r + h)
+    };
+    let mut range = area(rng);
+    if rng.chance(20) {
+        range = format!("{range},{}", area(rng));
+    }
+    s.execute("selection.set", json!({"range": range})).map_err(|e| format!("selection.set {range}: {e}"))?;
+    s.take_ui_requests();
+    Ok(())
 }
 
 /// Applies `seq` to two fresh sessions, comparing outcomes and fingerprints after every step.
+/// Engine A keeps its own view (the commands move it as they do); before every step engine B is
+/// moved to a random sheet and selection from a separate random stream.
 fn replay_two(name: &str, seq: &Sequence, tally: &mut Tally) -> Result<(Session, Session), String> {
     let mut a = fresh_session(seq);
     let mut b = fresh_session(seq);
+    let mut view = Rng::new(seq.seed ^ 0x5E1E_C710_4B1E_77A2);
     let doc = DocId(0);
-    if fingerprint(&a, doc) != fingerprint(&b, doc) {
+    let mut before = fingerprint(&a, doc);
+    if before != fingerprint(&b, doc) {
         return Err(format!("{name}: the fresh sessions differ"));
     }
     for (i, step) in seq.steps.iter().enumerate() {
         if !SHARED_COMMANDS.contains(&step.id.as_str()) {
             return Err(format!("{name}: step {i} `{}` is not a shared command", step.id));
         }
+        move_view(&mut b, &mut view).map_err(|e| format!("{name}, before step {i}: moving engine B's view failed: {e}"))?;
         let ra = apply(&mut a, step);
         let rb = apply(&mut b, step);
         tally.steps += 1;
         tally.errors += usize::from(ra.is_err());
-        tally.structural += usize::from(STRUCTURAL_COMMANDS.contains(&step.id.as_str()));
+        let structural = STRUCTURAL_COMMANDS.contains(&step.id.as_str());
+        tally.structural += usize::from(structural);
         let at = || format!("{name}, step {i} of {}: `{}` {}", seq.steps.len(), step.id, step.params);
         if let Err(e) = &ra
             && e.contains("panic")
@@ -78,10 +109,14 @@ fn replay_two(name: &str, seq: &Sequence, tally: &mut Tally) -> Result<(Session,
         if ra != rb {
             return Err(format!("{}\n  outcomes differ: {ra:?} vs {rb:?}", at()));
         }
-        if fingerprint(&a, doc) != fingerprint(&b, doc) {
+        let after = fingerprint(&a, doc);
+        if after != fingerprint(&b, doc) {
             let diff = first_difference(&a, &b, doc).unwrap_or_else(|| "(digests differ but no item does)".into());
             return Err(format!("{}\n  fingerprints differ: {diff}", at()));
         }
+        tally.entered_changed += usize::from(!structural && after.entered != before.entered);
+        tally.computed_changed += usize::from(after.computed != before.computed);
+        before = after;
     }
     Ok((a, b))
 }
@@ -126,15 +161,28 @@ fn two_engines_agree_on_random_sequences() {
     // A generator whose steps mostly fail would prove little; it also has to change structure.
     let error_share = tally.errors as f64 / tally.steps.max(1) as f64;
     let structural_share = tally.structural as f64 / tally.steps.max(1) as f64;
+    let non_structural = tally.steps - tally.structural;
+    let entered_share = tally.entered_changed as f64 / non_structural.max(1) as f64;
+    let computed_share = tally.computed_changed as f64 / tally.steps.max(1) as f64;
     eprintln!(
-        "coauthor replay: {} sequences, {} steps, {:.1} % errors, {:.1} % structural",
+        "coauthor replay: {} sequences, {} steps, {:.1} % errors, {:.1} % structural; entered changed by {} of {} non-structural steps ({:.1} %), computed changed by {} of {} steps ({:.1} %)",
         seeds.len(),
         tally.steps,
         error_share * 100.0,
-        structural_share * 100.0
+        structural_share * 100.0,
+        tally.entered_changed,
+        non_structural,
+        entered_share * 100.0,
+        tally.computed_changed,
+        tally.steps,
+        computed_share * 100.0
     );
     assert!(error_share < 0.10, "{:.1} % of steps failed", error_share * 100.0);
     assert!((0.08..0.25).contains(&structural_share), "{:.1} % structural steps", structural_share * 100.0);
+    // Steps that change nothing prove nothing: most edits must land on the workbook, and enough
+    // must change what formulas calculate.
+    assert!(entered_share >= 0.70, "only {:.1} % of non-structural steps changed the entered digest", entered_share * 100.0);
+    assert!(computed_share >= 0.30, "only {:.1} % of steps changed the computed digest", computed_share * 100.0);
 }
 
 // ---------------------------------------------------------------- hand-written sequences
@@ -466,4 +514,133 @@ fn volatile_functions_agree_with_fixed_now_and_seed() {
     let (d, _) = replay_two("volatile, a day later", &later, &mut Tally::default()).unwrap_or_else(|e| panic!("{e}"));
     assert_eq!(value(&d, 0, "A2"), Value::Number(DEFAULT_NOW + 1.25));
     assert_eq!(value(&d, 0, "A4"), value(&a, 0, "A4"), "the clock doesn't move the draws");
+}
+
+// ---------------------------------------------------------------- explicit targets
+
+/// Each candidate shared command, given explicit targets on a sheet that is not the active one,
+/// changes that sheet and leaves the active sheet, its selection and its content alone.
+#[test]
+fn explicit_targets_leave_the_active_sheet_alone() {
+    let base = || {
+        let seq = Sequence { seed: 5, now: DEFAULT_NOW, steps: vec![] };
+        let mut s = fresh_session(&seq);
+        for step in [
+            Step::new("home.insertSheet", json!({"name": "Other", "before": 1})),
+            set("Other", "A1", "1"),
+            set("Other", "A2", "2"),
+            set("Other", "B1", "x"),
+            set("Other", "B2", "=A1+A2"),
+            set("Other", "C3", "=SUM(A1:A2)"),
+            set("Sheet1", "B2", "5"),
+            set("Sheet1", "C3", "=Other!B2*2"),
+            // Middle-aligned, so Top and Bottom (the default) both change something.
+            Step::new("home.alignMiddle", json!({"sheet": "Other", "range": "A1:A2"})),
+        ] {
+            apply(&mut s, &step).unwrap();
+        }
+        s.execute("sheet.activate", json!({"sheet": "Sheet1"})).unwrap();
+        s.execute("selection.set", json!({"range": "B2:C3", "active": "C3"})).unwrap();
+        s
+    };
+    let on = |id: &str, extra: serde_json::Value| {
+        let mut p = json!({"sheet": "Other"});
+        for (k, v) in extra.as_object().unwrap() {
+            p[k] = v.clone();
+        }
+        Step::new(id, p)
+    };
+    let steps = vec![
+        on("cell.set", json!({"cell": "A1", "input": "7"})),
+        on("edit.clearContents", json!({"range": "A1:B2"})),
+        on("home.numberFormat", json!({"range": "A1:B2", "format": "Percentage"})),
+        on("home.bold", json!({"range": "A1:B2", "on": true})),
+        on("home.italic", json!({"range": "A1:B2", "on": true})),
+        on("home.fontName", json!({"range": "A1:B2", "name": "Arial"})),
+        on("home.fontSize", json!({"range": "A1:B2", "size": 14})),
+        on("home.fontColor", json!({"range": "A1:B2", "color": "#C00000"})),
+        on("home.fillColor", json!({"range": "A1:B2", "color": "#FFFF00"})),
+        on("home.borders", json!({"range": "A1:B2", "preset": "all"})),
+        on("home.alignLeft", json!({"range": "A1:B2", "on": true})),
+        on("home.alignCenter", json!({"range": "A1:B2", "on": true})),
+        on("home.alignRight", json!({"range": "A1:B2", "on": true})),
+        on("home.alignTop", json!({"range": "A1:B2"})),
+        on("home.alignMiddle", json!({"range": "A1:B2"})),
+        on("home.alignBottom", json!({"range": "A1:B2"})),
+        on("home.wrapText", json!({"range": "A1:B2", "on": true})),
+        on("home.insertRows", json!({"rows": "1:2"})),
+        on("home.deleteRows", json!({"rows": "1:1"})),
+        on("home.insertColumns", json!({"cols": "A:A"})),
+        on("home.deleteColumns", json!({"cols": "A:A"})),
+        Step::new("sheet.rename", json!({"sheet": "Other", "name": "Renamed"})),
+        Step::new("home.deleteSheet", json!({"sheet": "Other"})),
+        Step::new("home.insertSheet", json!({"name": "New", "before": 2})),
+    ];
+    let covered: Vec<&str> = steps.iter().map(|s| s.id.as_str()).collect();
+    for id in SHARED_COMMANDS {
+        assert!(covered.contains(id), "`{id}` is not checked here");
+    }
+    // What a person on Sheet1 sees of Sheet1: its cells' entered content and style.
+    let sheet1 = |s: &Session| -> Vec<String> {
+        let wb = &s.doc().unwrap().wb;
+        let i = wb.sheet_index("Sheet1").unwrap();
+        let sh = wb.sheet(i).unwrap();
+        sh.cells
+            .iter()
+            .map(|(c, x)| {
+                format!(
+                    "{} {:?} {:?} {}",
+                    c.a1(),
+                    x.value,
+                    x.formula.as_ref().map(|f| &f.text),
+                    serde_json::to_string(wb.styles.get(x.style)).unwrap()
+                )
+            })
+            .collect()
+    };
+    let mut failures = Vec::new();
+    for step in &steps {
+        let mut s = base();
+        let (fp, cells) = (fingerprint(&s, DocId(0)), sheet1(&s));
+        if let Err(e) = apply(&mut s, step) {
+            failures.push(format!("`{}` failed: {e}", step.id));
+            continue;
+        }
+        let d = s.doc().unwrap();
+        let active = d.wb.active().map(|sh| sh.name.clone()).unwrap_or_default();
+        // Inserting a sheet makes the new sheet active (Excel does the same); for a co-author
+        // receiving it, that is G3's to suppress. Every other command leaves the view alone.
+        let want = if step.id == "home.insertSheet" { "New" } else { "Sheet1" };
+        if active != want {
+            failures.push(format!("`{}` on Other made `{active}` active", step.id));
+        }
+        // Deleting any sheet resets the selection to A1 (G3: a remote delete must not move it).
+        let keeps_selection = want == "Sheet1" && step.id != "home.deleteSheet";
+        if keeps_selection && (d.selection.a1() != "B2:C3" || d.selection.active.a1() != "C3") {
+            failures.push(format!("`{}` on Other moved the selection to {} (active {})", step.id, d.selection.a1(), d.selection.active.a1()));
+        }
+        if fingerprint(&s, DocId(0)).entered == fp.entered {
+            failures.push(format!("`{}` changed nothing", step.id));
+        }
+        // Sheet1 changes only where its formula follows Other (a deleted sheet gives #REF!).
+        let after = sheet1(&s);
+        let follows = matches!(
+            step.id.as_str(),
+            "home.deleteSheet"
+                | "sheet.rename"
+                | "home.insertRows"
+                | "home.deleteRows"
+                | "home.insertColumns"
+                | "home.deleteColumns"
+                | "edit.clearContents"
+                | "cell.set"
+        );
+        if after != cells && !follows {
+            failures.push(format!("`{}` on Other changed Sheet1: {after:?}", step.id));
+        }
+        if after.first() != cells.first() {
+            failures.push(format!("`{}` on Other changed Sheet1!B2: {:?}", step.id, after.first()));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
 }

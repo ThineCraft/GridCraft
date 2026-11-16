@@ -31,66 +31,61 @@
       }
     },
     {
-      "id": "home.numberFormat",
+      "id": "cell.set",
       "params": {
-        "code": "0.00",
-        "range": "O16:Q23",
-        "sheet": "Q1 Plan"
-      }
-    },
-    {
-      "id": "home.numberFormat",
-      "params": {
-        "format": "Fraction",
-        "range": "U149:U151",
-        "sheet": "Data"
-      }
-    },
-    {
-      "id": "home.numberFormat",
-      "params": {
-        "code": "#,##0",
-        "range": "14:16",
+        "cell": "Y79",
+        "input": "=IFERROR(COUNT(F37:F37),-1)",
         "sheet": "Totals"
       }
     },
     {
-      "id": "cell.set",
+      "id": "home.wrapText",
       "params": {
-        "cell": "Y19",
-        "input": "258.22",
-        "sheet": "Data"
+        "on": false,
+        "range": "X81:Y86",
+        "sheet": "Totals"
       }
     },
     {
-      "id": "cell.set",
+      "id": "home.fontColor",
       "params": {
-        "cell": "A74",
-        "input": "-91",
+        "color": "auto",
+        "range": "104:105",
         "sheet": "2026"
-      }
-    },
-    {
-      "id": "home.alignLeft",
-      "params": {
-        "on": true,
-        "range": "Y146:Z150",
-        "sheet": "Data"
       }
     },
     {
       "id": "edit.clearContents",
       "params": {
-        "range": "M75:O81",
-        "sheet": "2026"
+        "range": "I4:J8",
+        "sheet": "Q1 Plan"
       }
     },
     {
-      "id": "cell.set",
+      "id": "home.bold",
       "params": {
-        "cell": "AB160",
-        "input": "=COUNT(X68:Z71,Z182)",
-        "sheet": "Totals"
+        "on": true,
+        "range": "E6:G9",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "home.numberFormat",
+      "params": {
+        "format": "Percentage",
+        "range": "G5:J5",
+        "sheet": "Data"
+      }
+    },
+    {
+      "id": "home.fillColor",
+      "params": {
+        "color": {
+          "theme": 5,
+          "tint": 0.4
+        },
+        "range": "F25:H32",
+        "sheet": "2026"
       }
     },
     {
@@ -105,373 +100,7 @@
       "id": "home.alignCenter",
       "params": {
         "on": true,
-        "range": "G132:H139",
-        "sheet": "Q1 Plan"
-      }
-    },
-    {
-      "id": "home.fontName",
-      "params": {
-        "name": "Calibri",
-        "range": "G179:I185",
-        "sheet": "Q1 Plan"
-      }
-    },
-    {
-      "id": "home.numberFormat",
-      "params": {
-        "format": "Scientific",
-        "range": "Y188:AA193",
-        "sheet": "2026"
-      }
-    },
-    {
-      "id": "cell.set",
-      "params": {
-        "cell": "V92",
-        "input": "=RIGHT('Sheet1'!M99,4)",
-        "sheet": "Totals"
-      }
-    },
-    {
-      "id": "cell.set",
-      "params": {
-        "cell": "B148",
-        "input": "#N/A",
-        "sheet": "Data"
-      }
-    },
-    {
-      "id": "cell.set",
-      "params": {
-        "cell": "E38",
-        "input": "=ABS(13)",
-        "sheet": "Q1 Plan"
-      }
-    },
-    {
-      "id": "home.fontColor",
-      "params": {
-        "color": {
-          "theme": 4,
-          "tint": -0.25
-        },
-        "range": "B151:C188",
-        "sheet": "Q1 Plan"
-      }
-    },
-    {
-      "id": "home.alignRight",
-      "params": {
-        "on": true,
-        "range": "K122:S161",
-        "sheet": "Data"
-      }
-    },
-    {
-      "id": "cell.set",
-      "params": {
-        "cell": "I117",
-        "input": "=AVERAGEIF(T56:T61,\"apple\")",
-        "sheet": "2026"
-      }
-    },
-    {
-      "id": "home.fillColor",
-      "params": {
-        "color": "none",
-        "range": "H67:H68",
-        "sheet": "Data"
-      }
-    },
-    {
-      "id": "home.numberFormat",
-      "params": {
-        "code": "[Red]0;0",
-        "range": "V62:V66",
-        "sheet": "Sheet1"
-      }
-    },
-    {
-      "id": "cell.set",
-      "params": {
-        "cell": "Q165",
-        "input": "672",
-        "sheet": "2026"
-      }
-    },
-    {
-      "id": "cell.set",
-      "params": {
-        "cell": "H185",
-        "input": "south",
-        "sheet": "2026"
-      }
-    },
-    {
-      "id": "home.deleteColumns",
-      "params": {
-        "cols": "U:V",
-        "sheet": "Totals"
-      }
-    },
-    {
-      "id": "cell.set",
-      "params": {
-        "cell": "AC37",
-        "input": "-632",
-        "sheet": "Totals"
-      }
-    },
-    {
-      "id": "home.numberFormat",
-      "params": {
-        "format": "Currency",
-        "range": "A192:C196",
-        "sheet": "2026"
-      }
-    },
-    {
-      "id": "home.insertRows",
-      "params": {
-        "rows": "71:73",
-        "sheet": "Sheet1"
-      }
-    },
-    {
-      "id": "cell.set",
-      "params": {
-        "cell": "A1",
-        "input": "12:30",
-        "sheet": "Data"
-      }
-    },
-    {
-      "id": "home.fontName",
-      "params": {
-        "name": "Georgia",
-        "range": "Q152:T152",
-        "sheet": "Sheet1"
-      }
-    },
-    {
-      "id": "home.italic",
-      "params": {
-        "on": true,
-        "range": "U173:V173",
-        "sheet": "2026"
-      }
-    },
-    {
-      "id": "edit.clearContents",
-      "params": {
-        "range": "W33:Z38",
-        "sheet": "Data"
-      }
-    },
-    {
-      "id": "home.fontName",
-      "params": {
-        "name": "Georgia",
-        "range": "AC49:AD49",
-        "sheet": "Q1 Plan"
-      }
-    },
-    {
-      "id": "home.fillColor",
-      "params": {
-        "color": "#FFFF00",
-        "range": "Y176:Y178",
-        "sheet": "Data"
-      }
-    },
-    {
-      "id": "home.numberFormat",
-      "params": {
-        "format": "Text",
-        "range": "A80:A81",
-        "sheet": "Q1 Plan"
-      }
-    },
-    {
-      "id": "home.fontName",
-      "params": {
-        "name": "Courier New",
-        "range": "H184:H188",
-        "sheet": "2026"
-      }
-    },
-    {
-      "id": "cell.set",
-      "params": {
-        "cell": "AC151",
-        "input": "=CONCAT(K76,\"-\",-6)",
-        "sheet": "Q1 Plan"
-      }
-    },
-    {
-      "id": "home.borders",
-      "params": {
-        "color": "auto",
-        "preset": "insideHorizontal",
-        "range": "AD148:AD154",
-        "sheet": "Sheet1",
-        "style": "double"
-      }
-    },
-    {
-      "id": "home.wrapText",
-      "params": {
-        "on": false,
-        "range": "H119:J123",
-        "sheet": "2026"
-      }
-    },
-    {
-      "id": "home.fontName",
-      "params": {
-        "name": "Georgia",
-        "range": "D26:E30",
-        "sheet": "2026"
-      }
-    },
-    {
-      "id": "home.alignCenter",
-      "params": {
-        "on": true,
-        "range": "Z6:Z9",
-        "sheet": "2026"
-      }
-    },
-    {
-      "id": "cell.set",
-      "params": {
-        "cell": "T66",
-        "input": "=INDEX(U27:V32,2,1)",
-        "sheet": "Q1 Plan"
-      }
-    },
-    {
-      "id": "home.alignTop",
-      "params": {
-        "range": "C99:F99",
-        "sheet": "2026"
-      }
-    },
-    {
-      "id": "home.deleteColumns",
-      "params": {
-        "cols": "N:O",
-        "sheet": "Data"
-      }
-    },
-    {
-      "id": "cell.set",
-      "params": {
-        "cell": "B191",
-        "input": "119%",
-        "sheet": "Totals"
-      }
-    },
-    {
-      "id": "edit.clearContents",
-      "params": {
-        "range": "A26:H53",
-        "sheet": "Totals"
-      }
-    },
-    {
-      "id": "cell.set",
-      "params": {
-        "cell": "T123",
-        "input": "2026-10-04",
-        "sheet": "Totals"
-      }
-    },
-    {
-      "id": "home.alignCenter",
-      "params": {
-        "on": true,
-        "range": "W96:Y99",
-        "sheet": "Totals"
-      }
-    },
-    {
-      "id": "cell.set",
-      "params": {
-        "cell": "I10",
-        "input": "(42)",
-        "sheet": "Data"
-      }
-    },
-    {
-      "id": "home.insertRows",
-      "params": {
-        "rows": "17:17",
-        "sheet": "2026"
-      }
-    },
-    {
-      "id": "cell.set",
-      "params": {
-        "cell": "AB139",
-        "input": "=RIGHT(X44,4)",
-        "sheet": "Data"
-      }
-    },
-    {
-      "id": "cell.set",
-      "params": {
-        "cell": "H189",
-        "input": "683",
-        "sheet": "Sheet1"
-      }
-    },
-    {
-      "id": "home.numberFormat",
-      "params": {
-        "format": "Time",
-        "range": "F:F",
-        "sheet": "Data"
-      }
-    },
-    {
-      "id": "home.numberFormat",
-      "params": {
-        "code": "[Red]0;0",
-        "range": "L7:N11",
-        "sheet": "2026"
-      }
-    },
-    {
-      "id": "cell.set",
-      "params": {
-        "cell": "A98",
-        "input": "-400.15",
-        "sheet": "Data"
-      }
-    },
-    {
-      "id": "cell.set",
-      "params": {
-        "cell": "K123",
-        "input": "464",
-        "sheet": "Q1 Plan"
-      }
-    },
-    {
-      "id": "home.numberFormat",
-      "params": {
-        "code": "0.00",
-        "range": "X92:X98",
-        "sheet": "2026"
-      }
-    },
-    {
-      "id": "home.numberFormat",
-      "params": {
-        "code": "[Red]0;0",
-        "range": "Y103:AB105",
+        "range": "A7:G40",
         "sheet": "Q1 Plan"
       }
     },
@@ -482,26 +111,391 @@
       }
     },
     {
-      "id": "home.numberFormat",
+      "id": "cell.set",
       "params": {
-        "code": "0.0%",
-        "range": "J77:O91",
-        "sheet": "Sheet1"
+        "cell": "A6",
+        "input": "=ROUND(A6/7,3)",
+        "sheet": "Data"
       }
     },
     {
-      "id": "home.deleteRows",
+      "id": "cell.set",
       "params": {
-        "rows": "6:8",
+        "cell": "A12",
+        "input": "=NOT(Data!$G$140=0)",
+        "sheet": "2026"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "I24",
+        "input": "-208.84",
         "sheet": "Totals"
       }
     },
     {
       "id": "cell.set",
       "params": {
-        "cell": "A163",
-        "input": "TRUE story",
+        "cell": "F37",
+        "input": "Banana",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "B10",
+        "input": "1st",
+        "sheet": "2026"
+      }
+    },
+    {
+      "id": "home.insertRows",
+      "params": {
+        "rows": "35:36",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "home.italic",
+      "params": {
+        "on": true,
+        "range": "J16:J21",
+        "sheet": "2026"
+      }
+    },
+    {
+      "id": "home.deleteRows",
+      "params": {
+        "rows": "6:7",
         "sheet": "Data"
+      }
+    },
+    {
+      "id": "home.deleteRows",
+      "params": {
+        "rows": "10:12",
+        "sheet": "2026"
+      }
+    },
+    {
+      "id": "edit.clearContents",
+      "params": {
+        "range": "AA5",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "A10",
+        "input": "south",
+        "sheet": "2026"
+      }
+    },
+    {
+      "id": "home.deleteColumns",
+      "params": {
+        "cols": "E:E",
+        "sheet": "2026"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "H31",
+        "input": "=UPPER(\"  Mixed Case \")",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "C31",
+        "input": "=RIGHT('2026'!C64,1)",
+        "sheet": "Data"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "A14",
+        "input": "=AVERAGE(A10:C11,B16)",
+        "sheet": "2026"
+      }
+    },
+    {
+      "id": "home.insertRows",
+      "params": {
+        "rows": "6:8",
+        "sheet": "Data"
+      }
+    },
+    {
+      "id": "home.fontSize",
+      "params": {
+        "range": "G27:I29",
+        "sheet": "Sheet1",
+        "size": 8
+      }
+    },
+    {
+      "id": "home.borders",
+      "params": {
+        "color": "auto",
+        "preset": "insideVertical",
+        "range": "E37:H38",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "D32",
+        "input": "apple",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "home.insertSheet",
+      "params": {
+        "before": 1,
+        "name": "Bob's"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "E36",
+        "input": "ÄÖÜ ß",
+        "sheet": "2026"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "C23",
+        "input": "=RIGHT(D25,0)",
+        "sheet": "Bob's"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "B15",
+        "input": "369",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "H32",
+        "input": "-444",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "F6",
+        "input": "FALSE",
+        "sheet": "Data"
+      }
+    },
+    {
+      "id": "home.fontSize",
+      "params": {
+        "range": "Z79:AA83",
+        "sheet": "Totals",
+        "size": 11
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "G176",
+        "input": "FALSE",
+        "sheet": "Bob's"
+      }
+    },
+    {
+      "id": "home.insertRows",
+      "params": {
+        "rows": "15:16",
+        "sheet": "2026"
+      }
+    },
+    {
+      "id": "home.insertRows",
+      "params": {
+        "rows": "191:192",
+        "sheet": "Totals"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "Z81",
+        "input": "=AVERAGE('Sheet1'!C24:G54)+2",
+        "sheet": "Totals"
+      }
+    },
+    {
+      "id": "home.insertRows",
+      "params": {
+        "rows": "33:35",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "Z79",
+        "input": "53.57",
+        "sheet": "Totals"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "AA80",
+        "input": "=IFERROR(1/10,0)",
+        "sheet": "Totals"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "F40",
+        "input": "=SUMPRODUCT(F16:I18,G16:J18)",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "F177",
+        "input": "=IFERROR(ROUND(RAND()*100,2),-1)",
+        "sheet": "Bob's"
+      }
+    },
+    {
+      "id": "home.deleteRows",
+      "params": {
+        "rows": "37:38",
+        "sheet": "2026"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "B4",
+        "input": "FALSE",
+        "sheet": "Data"
+      }
+    },
+    {
+      "id": "home.numberFormat",
+      "params": {
+        "format": "Accounting",
+        "range": "X104:Y118",
+        "sheet": "Totals"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "O59",
+        "input": "(42)",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "E22",
+        "input": "=SUMPRODUCT(F23:H25,G23:I25)",
+        "sheet": "2026"
+      }
+    },
+    {
+      "id": "edit.clearContents",
+      "params": {
+        "range": "AA80:AB86",
+        "sheet": "Totals"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "I24",
+        "input": "apple",
+        "sheet": "Totals"
+      }
+    },
+    {
+      "id": "home.italic",
+      "params": {
+        "on": true,
+        "range": "Y80:AA83",
+        "sheet": "Totals"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "Z80",
+        "input": "-345",
+        "sheet": "Totals"
+      }
+    },
+    {
+      "id": "sheet.rename",
+      "params": {
+        "name": "Q1 Plan",
+        "sheet": "Data"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "G23",
+        "input": "-259.62",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "B4",
+        "input": "=XLOOKUP(100,C1:C7,D1:D7,\"none\")",
+        "sheet": "Q1 Plan"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "E31",
+        "input": "FALSE",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "A4",
+        "input": "=DATE(2026,5,B4)",
+        "sheet": "Q1 Plan"
+      }
+    },
+    {
+      "id": "home.borders",
+      "params": {
+        "preset": "diagonalDown",
+        "range": "AA79:AA86",
+        "sheet": "Totals"
       }
     }
   ]

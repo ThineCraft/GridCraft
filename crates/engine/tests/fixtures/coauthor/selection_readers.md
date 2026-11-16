@@ -41,6 +41,12 @@ always gives that parameter.
 
 ## Other notes for G3
 
+- Two shared commands change the view of whoever applies them, even with explicit targets
+  (`explicit_targets_leave_the_active_sheet_alone` pins this): `home.insertSheet` makes the new
+  sheet active, and `home.deleteSheet` resets the selection to A1, even when another sheet is
+  deleted. Neither changes the workbook differently, but a remote change must not move a
+  co-author's view, so G3's apply loop has to keep the view when it applies others' commands.
+
 - Typed dates without a year (`3/4`, `4-Mar`) take the current year from the system clock
   (`gridcraft_core::parse::current_year`), not from the calculation's fixed clock. Two engines on
   either side of New Year would store different dates. The generator does not type such dates.
