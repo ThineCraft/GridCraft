@@ -175,6 +175,18 @@ impl Calc {
         Self::default()
     }
 
+    /// Starts RAND, RANDBETWEEN and RANDARRAY from `seed`, so two calculations given the same
+    /// seed and edits draw the same numbers (with [`Calc::fixed_now`], volatile results become
+    /// repeatable). The seed is mixed (SplitMix64) so that nearby seeds give unrelated draws, and
+    /// a zero state, which xorshift never leaves, is replaced.
+    pub fn set_rand_seed(&mut self, seed: u64) {
+        let mut z = seed.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        z ^= z >> 31;
+        self.rng = if z == 0 { 0x9E37_79B9_7F4A_7C15 } else { z };
+    }
+
     fn now(&self) -> f64 {
         if let Some(n) = self.fixed_now {
             return n;
@@ -1162,5 +1174,31 @@ pub(crate) mod tests {
             true
         })
         .then_some(seen)
+    }
+
+    /// RAND draws from the generator `set_rand_seed` starts: the same seed gives the same draws in
+    /// two calculations, another seed gives others, and seed 0 (which would stall xorshift) still
+    /// draws numbers in [0, 1).
+    #[test]
+    fn rand_seed_sets_the_draws() {
+        let draws = |seed: u64| {
+            let mut wb = Workbook::new();
+            if let Some(sh) = wb.sheet_mut(0) {
+                sh.cells.set(CellRef::new(0, 0), Cell::formula(Formula::new("=RAND()")));
+                sh.cells.set(CellRef::new(1, 0), Cell::formula(Formula::new("=RAND()")));
+            }
+            let mut calc = Calc::new();
+            calc.set_rand_seed(seed);
+            calc.recalc_all(&mut wb);
+            let v = |r: u32| wb.sheet(0).and_then(|s| s.value(CellRef::new(r, 0)).as_f64()).unwrap_or(f64::NAN);
+            (v(0), v(1))
+        };
+        assert_eq!(draws(7), draws(7));
+        assert_ne!(draws(7), draws(8));
+        for seed in [0, 1, 7, u64::MAX] {
+            let (a, b) = draws(seed);
+            assert!((0.0..1.0).contains(&a) && (0.0..1.0).contains(&b), "seed {seed}: {a} {b}");
+            assert_ne!(a, b, "seed {seed} stalls");
+        }
     }
 }
