@@ -1,0 +1,52 @@
+{
+  "now": 46302.5,
+  "seed": 9001,
+  "steps": [
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "A1",
+        "input": "1",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "A2",
+        "input": "2",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "A3",
+        "input": "=SUM(A1:A2)",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "home.insertRows",
+      "params": {
+        "rows": "2:2",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "A2",
+        "input": "10",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "home.deleteRows",
+      "params": {
+        "rows": "1:1",
+        "sheet": "Sheet1"
+      }
+    }
+  ]
+}

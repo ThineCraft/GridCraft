@@ -1,0 +1,50 @@
+{
+  "now": 46302.5,
+  "seed": 9003,
+  "steps": [
+    {
+      "id": "home.insertSheet",
+      "params": {
+        "before": 1,
+        "name": "Q1"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "A1",
+        "input": "4",
+        "sheet": "Q1"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "A1",
+        "input": "=Q1!A1+1",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "sheet.rename",
+      "params": {
+        "name": "Q 1 Plan",
+        "sheet": "Q1"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "A1",
+        "input": "40",
+        "sheet": "Q 1 Plan"
+      }
+    },
+    {
+      "id": "home.deleteSheet",
+      "params": {
+        "sheet": "Q 1 Plan"
+      }
+    }
+  ]
+}

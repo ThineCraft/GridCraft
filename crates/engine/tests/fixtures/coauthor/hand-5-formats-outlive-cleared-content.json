@@ -1,0 +1,61 @@
+{
+  "now": 46302.5,
+  "seed": 9004,
+  "steps": [
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "A1",
+        "input": "0.5",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "home.numberFormat",
+      "params": {
+        "format": "Percentage",
+        "range": "A1:B2",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "home.bold",
+      "params": {
+        "on": true,
+        "range": "A1",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "home.fillColor",
+      "params": {
+        "color": "#FFFF00",
+        "range": "A1",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "home.borders",
+      "params": {
+        "preset": "all",
+        "range": "A1:B2",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "home.alignCenter",
+      "params": {
+        "on": true,
+        "range": "A1:B2",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "edit.clearContents",
+      "params": {
+        "range": "A1:B2",
+        "sheet": "Sheet1"
+      }
+    }
+  ]
+}

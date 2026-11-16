@@ -1,0 +1,53 @@
+{
+  "now": 46302.5,
+  "seed": 9000,
+  "steps": [
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "A1",
+        "input": "2",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "A2",
+        "input": "3",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "A3",
+        "input": "=A1*A2",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "home.insertSheet",
+      "params": {
+        "before": 1,
+        "name": "Data"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "B1",
+        "input": "=Sheet1!A3+1",
+        "sheet": "Data"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "A1",
+        "input": "4",
+        "sheet": "Sheet1"
+      }
+    }
+  ]
+}

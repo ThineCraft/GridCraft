@@ -1,0 +1,608 @@
+//! Sequences of shared commands for the co-authoring proofs (plan G1), and their JSON form.
+//!
+//! A sequence is `{seed, now, steps: [{id, params}]}`: the commands two co-authors' engines both
+//! apply, in order, starting from a new workbook ("Sheet1"). Every step names its sheet and its
+//! cells or lines explicitly; none relies on the selection or the active sheet. `now` is the fixed
+//! clock (a date serial) and `seed` also seeds RAND, so volatile functions repeat.
+//!
+//! The generator emits only the candidate shared commands of the co-authoring design, in
+//! [`SHARED_COMMANDS`]. Commands that read the selection or the active sheet even when given
+//! explicit parameters are left out; `tests/fixtures/coauthor/selection_readers.md` lists them.
+//!
+//! This file is shared by the native replay (`tests/it/coauthor_replay.rs`) and is kept free of
+//! file and clock access, so the browser-engine runs can use it too.
+
+#![allow(dead_code)]
+
+use gridcraft_engine::model::Workbook;
+use gridcraft_engine::{DocState, Session, Trust};
+use serde_json::{Map, Value as Json, json};
+
+/// The commands a sequence may contain: cell content, the formats a co-author can apply, row and
+/// column inserts and deletes, and sheet add, rename and delete. Each with explicit targets.
+pub const SHARED_COMMANDS: &[&str] = &[
+    "cell.set",
+    "edit.clearContents",
+    "home.numberFormat",
+    "home.bold",
+    "home.italic",
+    "home.fontName",
+    "home.fontSize",
+    "home.fontColor",
+    "home.fillColor",
+    "home.borders",
+    "home.alignLeft",
+    "home.alignCenter",
+    "home.alignRight",
+    "home.alignTop",
+    "home.alignMiddle",
+    "home.alignBottom",
+    "home.wrapText",
+    "home.insertRows",
+    "home.deleteRows",
+    "home.insertColumns",
+    "home.deleteColumns",
+    "home.insertSheet",
+    "sheet.rename",
+    "home.deleteSheet",
+];
+
+/// Commands that change rows, columns or sheets (about 15 % of generated steps).
+pub const STRUCTURAL_COMMANDS: &[&str] =
+    &["home.insertRows", "home.deleteRows", "home.insertColumns", "home.deleteColumns", "home.insertSheet", "sheet.rename", "home.deleteSheet"];
+
+/// The 40 common functions formulas are drawn from.
+pub const FUNCTIONS: [&str; 40] = [
+    "SUM",
+    "AVERAGE",
+    "MIN",
+    "MAX",
+    "COUNT",
+    "COUNTA",
+    "PRODUCT",
+    "MEDIAN",
+    "SUMPRODUCT",
+    "COUNTIF",
+    "SUMIF",
+    "AVERAGEIF",
+    "IF",
+    "IFERROR",
+    "AND",
+    "OR",
+    "NOT",
+    "ROUND",
+    "ROUNDUP",
+    "ROUNDDOWN",
+    "ABS",
+    "INT",
+    "MOD",
+    "POWER",
+    "SQRT",
+    "LEN",
+    "LEFT",
+    "RIGHT",
+    "MID",
+    "UPPER",
+    "LOWER",
+    "TRIM",
+    "CONCAT",
+    "TEXT",
+    "VLOOKUP",
+    "HLOOKUP",
+    "INDEX",
+    "MATCH",
+    "XLOOKUP",
+    "DATE",
+];
+
+/// The volatile functions, used now and then in generated formulas.
+pub const VOLATILE: [&str; 4] = ["NOW()", "TODAY()", "RAND()", "RANDBETWEEN(1,6)"];
+
+/// Rows and columns content is generated in (200 rows by 30 columns, A1:AD200).
+pub const ROWS: u32 = 200;
+pub const COLS: u32 = 30;
+/// Most sheets a generated sequence keeps (and the fewest is one).
+pub const MAX_SHEETS: usize = 6;
+
+/// 2026-10-07 12:00 as a date serial: the clock of the hand-written sequences.
+pub const DEFAULT_NOW: f64 = 46_302.5;
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Step {
+    pub id: String,
+    pub params: Json,
+}
+
+impl Step {
+    pub fn new(id: &str, params: Json) -> Step {
+        Step { id: id.to_string(), params }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Sequence {
+    pub seed: u64,
+    /// The fixed clock, as a date serial.
+    pub now: f64,
+    pub steps: Vec<Step>,
+}
+
+impl Sequence {
+    pub fn to_json(&self) -> Json {
+        let steps: Vec<Json> = self.steps.iter().map(|s| json!({"id": s.id, "params": s.params})).collect();
+        json!({"seed": self.seed, "now": self.now, "steps": steps})
+    }
+
+    /// The fixture text: pretty JSON (keys sorted, as serde_json's map keeps them) and a final
+    /// line break.
+    pub fn to_text(&self) -> String {
+        let mut t = serde_json::to_string_pretty(&self.to_json()).unwrap_or_default();
+        t.push('\n');
+        t
+    }
+
+    pub fn from_json(v: &Json) -> Result<Sequence, String> {
+        let o = v.as_object().ok_or("a sequence is a JSON object")?;
+        if let Some(k) = o.keys().find(|k| !matches!(k.as_str(), "seed" | "now" | "steps")) {
+            return Err(format!("unknown key `{k}`"));
+        }
+        let seed = o.get("seed").and_then(Json::as_u64).ok_or("`seed` must be an unsigned integer")?;
+        let now = o.get("now").and_then(Json::as_f64).ok_or("`now` must be a number")?;
+        let list = o.get("steps").and_then(Json::as_array).ok_or("`steps` must be an array")?;
+        let mut steps = Vec::with_capacity(list.len());
+        for (i, s) in list.iter().enumerate() {
+            let so = s.as_object().ok_or(format!("step {i} is not an object"))?;
+            if so.len() != 2 {
+                return Err(format!("step {i} must have exactly `id` and `params`"));
+            }
+            let id = so.get("id").and_then(Json::as_str).ok_or(format!("step {i}: `id` must be a string"))?;
+            let params = so.get("params").filter(|p| p.is_object()).ok_or(format!("step {i}: `params` must be an object"))?;
+            steps.push(Step::new(id, params.clone()));
+        }
+        Ok(Sequence { seed, now, steps })
+    }
+
+    pub fn from_text(t: &str) -> Result<Sequence, String> {
+        let v: Json = serde_json::from_str(t).map_err(|e| e.to_string())?;
+        Sequence::from_json(&v)
+    }
+}
+
+/// A session holding a new workbook, with the sequence's fixed clock and RAND seed.
+pub fn fresh_session(seq: &Sequence) -> Session {
+    let mut d = DocState::new(Workbook::new(), None, "Book1".into(), Trust::Local);
+    d.calc.fixed_now = Some(seq.now);
+    d.calc.set_rand_seed(seq.seed);
+    let mut s = Session::new();
+    s.add_document(d);
+    s
+}
+
+/// Applies one step; the outcome is the command's result or its error message.
+pub fn apply(s: &mut Session, step: &Step) -> Result<Json, String> {
+    let r = s.execute(&step.id, step.params.clone()).map_err(|e| e.to_string());
+    s.take_ui_requests();
+    r
+}
+
+// ---------------------------------------------------------------- generator
+
+/// SplitMix64: small, deterministic, the same on every platform.
+pub struct Rng(u64);
+
+impl Rng {
+    pub fn new(seed: u64) -> Rng {
+        Rng(seed ^ 0xC0A7_7402_5EED_0001)
+    }
+    pub fn next(&mut self) -> u64 {
+        self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        let mut z = self.0;
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        z ^ (z >> 31)
+    }
+    pub fn below(&mut self, n: u64) -> u64 {
+        if n == 0 { 0 } else { self.next() % n }
+    }
+    /// Inclusive range.
+    pub fn int(&mut self, lo: i64, hi: i64) -> i64 {
+        lo + self.below((hi - lo + 1).max(1) as u64) as i64
+    }
+    pub fn chance(&mut self, percent: u64) -> bool {
+        self.below(100) < percent
+    }
+    pub fn pick<'a, T>(&mut self, xs: &'a [T]) -> &'a T {
+        &xs[self.below(xs.len() as u64) as usize]
+    }
+}
+
+/// Sheet names a sequence adds or renames to: spaces, an apostrophe, a digit-only name, a
+/// non-ASCII name and one that looks like a cell all need quoting in formulas.
+const NAMES: [&str; 12] = ["Data", "Q1 Plan", "Bob's", "Sales-2", "Summary", "Übersicht", "2026", "A B", "Notes", "Ref", "AB12", "Totals"];
+
+/// Column letters (A, …, Z, AA, …).
+pub fn letters(col: u32) -> String {
+    gridcraft_engine::core::col_to_letters(col)
+}
+
+/// A sheet name as a formula writes it: quoted unless it is plain letters.
+pub fn sheet_prefix(name: &str) -> String {
+    if name.len() > 1 && name.chars().all(|c| c.is_ascii_alphabetic()) { format!("{name}!") } else { format!("'{}'!", name.replace('\'', "''")) }
+}
+
+/// Generates `steps` random shared commands (after the steps that add the starting sheets).
+pub fn generate(seed: u64, steps: usize) -> Sequence {
+    let mut g = Gen { rng: Rng::new(seed), sheets: vec!["Sheet1".to_string()], renamed: 0 };
+    let now = g.rng.int(36_526, 54_789) as f64 + g.rng.int(0, 1439) as f64 / 1440.0;
+    let mut out = Vec::new();
+    // 1 to 6 sheets to start with.
+    let start = 1 + g.rng.below(MAX_SHEETS as u64) as usize;
+    while g.sheets.len() < start {
+        out.push(g.add_sheet());
+    }
+    for _ in 0..steps {
+        out.push(g.step());
+    }
+    Sequence { seed, now, steps: out }
+}
+
+struct Gen {
+    rng: Rng,
+    /// The sheets as the generator expects them after the steps so far.
+    sheets: Vec<String>,
+    /// Names handed out, for unique fallbacks once the list is used up.
+    renamed: u32,
+}
+
+impl Gen {
+    fn sheet(&mut self) -> String {
+        self.rng.pick(&self.sheets).clone()
+    }
+
+    fn fresh_name(&mut self) -> String {
+        let taken = |n: &str, sheets: &[String]| sheets.iter().any(|s| s.to_lowercase() == n.to_lowercase());
+        for _ in 0..4 {
+            let n = self.rng.pick(&NAMES).to_string();
+            if !taken(&n, &self.sheets) {
+                return n;
+            }
+        }
+        loop {
+            self.renamed += 1;
+            let n = format!("{} {}", self.rng.pick(&NAMES), self.renamed);
+            if !taken(&n, &self.sheets) {
+                return n;
+            }
+        }
+    }
+
+    fn add_sheet(&mut self) -> Step {
+        let name = self.fresh_name();
+        let before = self.rng.below(self.sheets.len() as u64 + 1) as usize;
+        self.sheets.insert(before, name.clone());
+        Step::new("home.insertSheet", json!({"name": name, "before": before}))
+    }
+
+    fn step(&mut self) -> Step {
+        let roll = self.rng.below(100);
+        match roll {
+            0..30 => self.cell_set(false),
+            30..48 => self.cell_set(true),
+            48..53 => self.with_range("edit.clearContents", Map::new(), false),
+            53..59 => self.number_format(),
+            59..68 => self.font(),
+            68..73 => {
+                let color = self.rng.pick(&[json!("#FFFF00"), json!("#C6EFCE"), json!("none"), json!({"theme": 5, "tint": 0.4})]).clone();
+                self.with_range("home.fillColor", obj(&[("color", color)]), true)
+            }
+            73..78 => self.borders(),
+            78..85 => self.alignment(),
+            _ => self.structural(),
+        }
+    }
+
+    /// A step on a range of a random sheet, `extra` merged into its params. `lines` allows whole
+    /// rows or columns now and then.
+    fn with_range(&mut self, id: &str, mut extra: Map<String, Json>, lines: bool) -> Step {
+        let sheet = self.sheet();
+        let range = if lines && self.rng.chance(8) { self.lines_range() } else { self.range() };
+        extra.insert("sheet".into(), json!(sheet));
+        extra.insert("range".into(), json!(range));
+        Step::new(id, Json::Object(extra))
+    }
+
+    fn cell(&mut self) -> String {
+        format!("{}{}", letters(self.rng.below(COLS as u64) as u32), 1 + self.rng.below(ROWS as u64))
+    }
+
+    /// A small block, mostly, inside A1:AD200.
+    fn range(&mut self) -> String {
+        let r0 = self.rng.below(ROWS as u64) as u32;
+        let c0 = self.rng.below(COLS as u64) as u32;
+        let (h, w) = if self.rng.chance(10) {
+            (self.rng.int(1, 40) as u32, self.rng.int(1, 10) as u32)
+        } else {
+            (self.rng.int(1, 8) as u32, self.rng.int(1, 4) as u32)
+        };
+        let r1 = (r0 + h - 1).min(ROWS - 1);
+        let c1 = (c0 + w - 1).min(COLS - 1);
+        if r0 == r1 && c0 == c1 { format!("{}{}", letters(c0), r0 + 1) } else { format!("{}{}:{}{}", letters(c0), r0 + 1, letters(c1), r1 + 1) }
+    }
+
+    /// Whole rows (`5:6`) or whole columns (`C:D`).
+    fn lines_range(&mut self) -> String {
+        if self.rng.chance(50) {
+            let a = 1 + self.rng.below(ROWS as u64);
+            format!("{a}:{}", a + self.rng.below(3))
+        } else {
+            let a = self.rng.below(COLS as u64) as u32;
+            format!("{}:{}", letters(a), letters((a + self.rng.below(2) as u32).min(COLS - 1)))
+        }
+    }
+
+    fn cell_set(&mut self, formula: bool) -> Step {
+        let sheet = self.sheet();
+        let cell = self.cell();
+        let input = if formula { self.formula(&sheet) } else { self.literal() };
+        Step::new("cell.set", json!({"sheet": sheet, "cell": cell, "input": input}))
+    }
+
+    fn literal(&mut self) -> Json {
+        match self.rng.below(100) {
+            0..30 => json!(self.rng.int(-1000, 1000).to_string()),
+            30..45 => json!(format!("{}.{:02}", self.rng.int(-500, 500), self.rng.below(100))),
+            45..50 => json!(*self.rng.pick(&["1E+300", "-2.5E-300", "123456789012345", "0.1", "-0", "1E-7", "9.99999999999999E+307"])),
+            50..72 => json!(*self.rng.pick(&["apple", "Banana", "  padded ", "x y z", "North", "south", "ÄÖÜ ß", "a\"quote", "1st", "TRUE story"])),
+            72..74 => json!(""),
+            74..80 => json!(*self.rng.pick(&["TRUE", "FALSE"])),
+            80..85 => json!(format!("{}%", self.rng.int(-50, 150))),
+            85..90 => json!(format!("2026-{:02}-{:02}", self.rng.int(1, 12), self.rng.int(1, 28))),
+            90..94 => json!(*self.rng.pick(&["$1,234.50", "(42)", "1,000", "12:30", "2026-03-04 08:15"])),
+            94..97 => json!(*self.rng.pick(&["'0012", "'=not a formula", "#N/A", "#DIV/0!"])),
+            // Numbers as JSON numbers (the command takes them as typed).
+            _ => json!(self.rng.int(-99, 99)),
+        }
+    }
+
+    /// A reference to a cell or block, on this sheet or (30 %) another.
+    fn prefix(&mut self, here: &str) -> String {
+        if self.sheets.len() > 1 && self.rng.chance(30) {
+            let other = self.sheet();
+            if other != here {
+                return sheet_prefix(&other);
+            }
+        }
+        String::new()
+    }
+
+    fn cell_ref(&mut self, here: &str) -> String {
+        let p = self.prefix(here);
+        let c = self.cell();
+        if self.rng.chance(15) {
+            let (letters_part, digits): (String, String) = c.chars().partition(|ch| ch.is_ascii_alphabetic());
+            format!("{p}${letters_part}${digits}")
+        } else {
+            format!("{p}{c}")
+        }
+    }
+
+    fn range_ref(&mut self, here: &str) -> String {
+        let p = self.prefix(here);
+        let r = self.range();
+        let r = if r.contains(':') { r } else { format!("{r}:{r}") };
+        format!("{p}{r}")
+    }
+
+    fn num(&mut self, here: &str) -> String {
+        if self.rng.chance(65) { self.cell_ref(here) } else { self.rng.int(-20, 100).to_string() }
+    }
+
+    fn crit(&mut self) -> String {
+        self.rng.pick(&["\">5\"", "\"<=0\"", "\"apple\"", "\"<>\"", "\"=North\"", "10"]).to_string()
+    }
+
+    fn formula(&mut self, here: &str) -> Json {
+        let body = if self.rng.chance(4) {
+            let v = *self.rng.pick(&VOLATILE);
+            match self.rng.below(3) {
+                0 => v.to_string(),
+                1 => format!("ROUND({v}*100,2)"),
+                _ => format!("{v}+{}", self.num(here)),
+            }
+        } else {
+            self.call(here)
+        };
+        let body = match self.rng.below(10) {
+            0 => format!("IFERROR({body},-1)"),
+            1 => format!("{body}+{}", self.num(here)),
+            _ => body,
+        };
+        json!(format!("={body}"))
+    }
+
+    fn call(&mut self, here: &str) -> String {
+        let f = *self.rng.pick(&FUNCTIONS);
+        let args = match f {
+            "SUM" | "AVERAGE" | "MIN" | "MAX" | "COUNT" | "COUNTA" | "PRODUCT" | "MEDIAN" => {
+                if self.rng.chance(30) {
+                    format!("{},{}", self.range_ref(here), self.num(here))
+                } else {
+                    self.range_ref(here)
+                }
+            }
+            "SUMPRODUCT" => {
+                let r = self.range();
+                let (a, b) = r.split_once(':').unwrap_or((&r, &r));
+                let shift = |c: &str| -> String {
+                    // The same shape one column to the right, so the arrays match.
+                    let (l, d): (String, String) = c.chars().partition(|ch| ch.is_ascii_alphabetic());
+                    let col = gridcraft_engine::core::CellRef::parse(&format!("{l}1")).map_or(0, |x| x.col);
+                    format!("{}{d}", letters((col + 1).min(COLS)))
+                };
+                format!("{a}:{b},{}:{}", shift(a), shift(b))
+            }
+            "COUNTIF" => format!("{},{}", self.range_ref(here), self.crit()),
+            "SUMIF" | "AVERAGEIF" => format!("{},{}", self.range_ref(here), self.crit()),
+            "IF" => format!("{}>{},{},{}", self.num(here), self.num(here), self.num(here), self.text_arg(here)),
+            "IFERROR" => format!("1/{},0", self.num(here)),
+            "AND" | "OR" => format!("{}>0,{}<50", self.num(here), self.num(here)),
+            "NOT" => format!("{}=0", self.num(here)),
+            "ROUND" | "ROUNDUP" | "ROUNDDOWN" => format!("{}/7,{}", self.num(here), self.rng.int(-1, 3)),
+            "ABS" | "INT" | "SQRT" => self.num(here),
+            "MOD" => format!("{},{}", self.num(here), self.rng.int(1, 9)),
+            "POWER" => format!("{},{}", self.num(here), self.rng.int(0, 3)),
+            "LEN" | "UPPER" | "LOWER" | "TRIM" => self.text_arg(here),
+            "LEFT" | "RIGHT" => format!("{},{}", self.text_arg(here), self.rng.int(0, 4)),
+            "MID" => format!("{},{},{}", self.text_arg(here), self.rng.int(1, 3), self.rng.int(0, 4)),
+            "CONCAT" => format!("{},\"-\",{}", self.text_arg(here), self.num(here)),
+            "TEXT" => format!("{},{}", self.num(here), self.rng.pick(&["\"0.00\"", "\"#,##0\"", "\"0%\"", "\"yyyy-mm-dd\""])),
+            "VLOOKUP" | "HLOOKUP" => format!("{},{},{},FALSE", self.num(here), self.range_ref(here), self.rng.int(1, 2)),
+            "INDEX" => format!("{},{},1", self.range_ref(here), self.rng.int(1, 3)),
+            "MATCH" => format!("{},{},0", self.num(here), self.range_ref(here)),
+            "XLOOKUP" => {
+                let col = letters(self.rng.below(COLS as u64 - 1) as u32);
+                let next = letters(gridcraft_engine::core::CellRef::parse(&format!("{col}1")).map_or(0, |x| x.col) + 1);
+                let (r0, r1) = (1 + self.rng.below(100), 101 + self.rng.below(100));
+                let p = self.prefix(here);
+                format!("{},{p}{col}{r0}:{col}{r1},{p}{next}{r0}:{next}{r1},\"none\"", self.num(here))
+            }
+            "DATE" => format!("2026,{},{}", self.rng.int(1, 12), self.num(here)),
+            _ => self.range_ref(here),
+        };
+        format!("{f}({args})")
+    }
+
+    fn text_arg(&mut self, here: &str) -> String {
+        if self.rng.chance(70) { self.cell_ref(here) } else { self.rng.pick(&["\"  Mixed Case \"", "\"abc\"", "\"\""]).to_string() }
+    }
+
+    fn number_format(&mut self) -> Step {
+        let mut extra = Map::new();
+        if self.rng.chance(60) {
+            let f = *self.rng.pick(&[
+                "General",
+                "Number",
+                "Currency",
+                "Accounting",
+                "Short Date",
+                "Long Date",
+                "Time",
+                "Percentage",
+                "Fraction",
+                "Scientific",
+                "Text",
+            ]);
+            extra.insert("format".into(), json!(f));
+        } else {
+            let c = *self.rng.pick(&["0.00", "#,##0", "0.0%", "yyyy-mm-dd", "[Red]0;0", "0.000E+00", "\"x\"@"]);
+            extra.insert("code".into(), json!(c));
+        }
+        self.with_range("home.numberFormat", extra, true)
+    }
+
+    fn font(&mut self) -> Step {
+        match self.rng.below(5) {
+            0 | 1 => {
+                let id = if self.rng.chance(50) { "home.bold" } else { "home.italic" };
+                let on = self.rng.chance(70);
+                self.with_range(id, obj(&[("on", json!(on))]), true)
+            }
+            2 => {
+                let n = *self.rng.pick(&["Calibri", "Arial", "Georgia", "Courier New"]);
+                self.with_range("home.fontName", obj(&[("name", json!(n))]), true)
+            }
+            3 => {
+                let size = *self.rng.pick(&[8, 10, 11, 12, 14, 18, 24]);
+                self.with_range("home.fontSize", obj(&[("size", json!(size))]), true)
+            }
+            _ => {
+                let c = self.rng.pick(&[json!("#C00000"), json!("#1F4E79"), json!("auto"), json!({"theme": 4, "tint": -0.25})]).clone();
+                self.with_range("home.fontColor", obj(&[("color", c)]), true)
+            }
+        }
+    }
+
+    fn borders(&mut self) -> Step {
+        let preset = *self.rng.pick(&[
+            "bottom",
+            "top",
+            "left",
+            "right",
+            "none",
+            "all",
+            "outside",
+            "thickOutside",
+            "thickBottom",
+            "doubleBottom",
+            "topBottom",
+            "inside",
+            "insideHorizontal",
+            "insideVertical",
+            "diagonalDown",
+        ]);
+        let mut extra = obj(&[("preset", json!(preset))]);
+        if self.rng.chance(40) {
+            extra.insert("style".into(), json!(*self.rng.pick(&["thin", "medium", "thick", "dashed", "double", "hair"])));
+        }
+        if self.rng.chance(30) {
+            extra.insert("color".into(), json!(*self.rng.pick(&["#FF0000", "#00B050", "auto"])));
+        }
+        self.with_range("home.borders", extra, false)
+    }
+
+    fn alignment(&mut self) -> Step {
+        match self.rng.below(7) {
+            // Horizontal alignment toggles back to General from the active cell unless `on` is given.
+            0..3 => {
+                let id = *self.rng.pick(&["home.alignLeft", "home.alignCenter", "home.alignRight"]);
+                self.with_range(id, obj(&[("on", json!(true))]), true)
+            }
+            3..5 => {
+                let id = *self.rng.pick(&["home.alignTop", "home.alignMiddle", "home.alignBottom"]);
+                self.with_range(id, Map::new(), true)
+            }
+            _ => {
+                let on = self.rng.chance(70);
+                self.with_range("home.wrapText", obj(&[("on", json!(on))]), true)
+            }
+        }
+    }
+
+    fn structural(&mut self) -> Step {
+        let roll = self.rng.below(15);
+        match roll {
+            0..7 => {
+                let id = if roll < 4 { "home.insertRows" } else { "home.deleteRows" };
+                let a = 1 + self.rng.below(ROWS as u64);
+                let b = a + self.rng.below(3);
+                let sheet = self.sheet();
+                Step::new(id, json!({"sheet": sheet, "rows": format!("{a}:{b}")}))
+            }
+            7..12 => {
+                let id = if roll < 10 { "home.insertColumns" } else { "home.deleteColumns" };
+                let a = self.rng.below(COLS as u64) as u32;
+                let b = a + self.rng.below(2) as u32;
+                let sheet = self.sheet();
+                Step::new(id, json!({"sheet": sheet, "cols": format!("{}:{}", letters(a), letters(b))}))
+            }
+            12 if self.sheets.len() < MAX_SHEETS => self.add_sheet(),
+            13 => {
+                let i = self.rng.below(self.sheets.len() as u64) as usize;
+                let old = self.sheets[i].clone();
+                let name = self.fresh_name();
+                self.sheets[i] = name.clone();
+                Step::new("sheet.rename", json!({"sheet": old, "name": name}))
+            }
+            _ if self.sheets.len() > 1 => {
+                let i = self.rng.below(self.sheets.len() as u64) as usize;
+                let name = self.sheets.remove(i);
+                Step::new("home.deleteSheet", json!({"sheet": name}))
+            }
+            _ => self.add_sheet(),
+        }
+    }
+}
+
+fn obj(pairs: &[(&str, Json)]) -> Map<String, Json> {
+    pairs.iter().map(|(k, v)| (k.to_string(), v.clone())).collect()
+}

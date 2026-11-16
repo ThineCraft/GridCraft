@@ -1,0 +1,510 @@
+{
+  "now": 54183.96111111111,
+  "seed": 17,
+  "steps": [
+    {
+      "id": "home.insertSheet",
+      "params": {
+        "before": 0,
+        "name": "Summary"
+      }
+    },
+    {
+      "id": "home.insertSheet",
+      "params": {
+        "before": 2,
+        "name": "Sales-2"
+      }
+    },
+    {
+      "id": "home.insertSheet",
+      "params": {
+        "before": 3,
+        "name": "Data"
+      }
+    },
+    {
+      "id": "home.insertSheet",
+      "params": {
+        "before": 4,
+        "name": "AB12"
+      }
+    },
+    {
+      "id": "home.insertSheet",
+      "params": {
+        "before": 3,
+        "name": "Notes"
+      }
+    },
+    {
+      "id": "edit.clearContents",
+      "params": {
+        "range": "B30:C32",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "H151",
+        "input": "=IF(B107>Data!S99,N106,\"  Mixed Case \")",
+        "sheet": "Notes"
+      }
+    },
+    {
+      "id": "home.numberFormat",
+      "params": {
+        "code": "0.0%",
+        "range": "A180:B185",
+        "sheet": "Notes"
+      }
+    },
+    {
+      "id": "home.numberFormat",
+      "params": {
+        "code": "[Red]0;0",
+        "range": "J190:L191",
+        "sheet": "AB12"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "M55",
+        "input": "",
+        "sheet": "Sales-2"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "A157",
+        "input": -77,
+        "sheet": "Data"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "AD63",
+        "input": "-9%",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "J159",
+        "input": "=MOD(81,5)",
+        "sheet": "Sales-2"
+      }
+    },
+    {
+      "id": "home.fillColor",
+      "params": {
+        "color": "none",
+        "range": "AC150:AD153",
+        "sheet": "Summary"
+      }
+    },
+    {
+      "id": "home.numberFormat",
+      "params": {
+        "format": "Short Date",
+        "range": "I81:K82",
+        "sheet": "Sales-2"
+      }
+    },
+    {
+      "id": "edit.clearContents",
+      "params": {
+        "range": "AA65:AB66",
+        "sheet": "Data"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "K121",
+        "input": "113%",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "home.insertRows",
+      "params": {
+        "rows": "102:102",
+        "sheet": "Data"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "U30",
+        "input": "-160",
+        "sheet": "AB12"
+      }
+    },
+    {
+      "id": "home.fillColor",
+      "params": {
+        "color": {
+          "theme": 5,
+          "tint": 0.4
+        },
+        "range": "N22:P25",
+        "sheet": "Sales-2"
+      }
+    },
+    {
+      "id": "home.fontName",
+      "params": {
+        "name": "Arial",
+        "range": "B16:D20",
+        "sheet": "AB12"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "I114",
+        "input": "1st",
+        "sheet": "Sales-2"
+      }
+    },
+    {
+      "id": "home.fillColor",
+      "params": {
+        "color": "#C6EFCE",
+        "range": "H:I",
+        "sheet": "AB12"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "D4",
+        "input": "TRUE",
+        "sheet": "AB12"
+      }
+    },
+    {
+      "id": "home.bold",
+      "params": {
+        "on": false,
+        "range": "G4:I6",
+        "sheet": "Data"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "B90",
+        "input": "=INT(Data!N32)",
+        "sheet": "Sales-2"
+      }
+    },
+    {
+      "id": "home.alignRight",
+      "params": {
+        "on": true,
+        "range": "C199:D200",
+        "sheet": "Sales-2"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "H58",
+        "input": "378",
+        "sheet": "Sales-2"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "R84",
+        "input": "-294.56",
+        "sheet": "Sales-2"
+      }
+    },
+    {
+      "id": "home.numberFormat",
+      "params": {
+        "format": "Number",
+        "range": "H198:J200",
+        "sheet": "Sales-2"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "M160",
+        "input": "-308",
+        "sheet": "AB12"
+      }
+    },
+    {
+      "id": "home.wrapText",
+      "params": {
+        "on": true,
+        "range": "AB:AB",
+        "sheet": "Sales-2"
+      }
+    },
+    {
+      "id": "home.borders",
+      "params": {
+        "preset": "inside",
+        "range": "R148:W162",
+        "sheet": "Sheet1",
+        "style": "dashed"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "A8",
+        "input": "132.28",
+        "sheet": "Sales-2"
+      }
+    },
+    {
+      "id": "home.fontSize",
+      "params": {
+        "range": "F199:I200",
+        "sheet": "Sales-2",
+        "size": 10
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "E87",
+        "input": "=TRIM($X$30)+60",
+        "sheet": "Notes"
+      }
+    },
+    {
+      "id": "home.deleteRows",
+      "params": {
+        "rows": "14:15",
+        "sheet": "Notes"
+      }
+    },
+    {
+      "id": "home.italic",
+      "params": {
+        "on": true,
+        "range": "A148:A153",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "F147",
+        "input": "861",
+        "sheet": "AB12"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "P110",
+        "input": "=HLOOKUP(79,J115:M118,2,FALSE)",
+        "sheet": "Summary"
+      }
+    },
+    {
+      "id": "home.insertColumns",
+      "params": {
+        "cols": "O:P",
+        "sheet": "Notes"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "T28",
+        "input": "=IFERROR(1/$X$67,0)",
+        "sheet": "Notes"
+      }
+    },
+    {
+      "id": "home.numberFormat",
+      "params": {
+        "format": "Short Date",
+        "range": "Q55:W57",
+        "sheet": "AB12"
+      }
+    },
+    {
+      "id": "home.insertColumns",
+      "params": {
+        "cols": "AC:AD",
+        "sheet": "AB12"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "I156",
+        "input": "=INT(P22)",
+        "sheet": "Sales-2"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "V119",
+        "input": "",
+        "sheet": "Sales-2"
+      }
+    },
+    {
+      "id": "home.fontSize",
+      "params": {
+        "range": "L138:O143",
+        "sheet": "Notes",
+        "size": 11
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "B52",
+        "input": "  padded ",
+        "sheet": "Summary"
+      }
+    },
+    {
+      "id": "edit.clearContents",
+      "params": {
+        "range": "C184",
+        "sheet": "Notes"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "W59",
+        "input": -64,
+        "sheet": "Summary"
+      }
+    },
+    {
+      "id": "home.alignTop",
+      "params": {
+        "range": "T15:W15",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "AB90",
+        "input": "=AND(-14>0,N145<50)",
+        "sheet": "Data"
+      }
+    },
+    {
+      "id": "home.numberFormat",
+      "params": {
+        "format": "Text",
+        "range": "Z49:AC53",
+        "sheet": "Data"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "P46",
+        "input": "71",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "N7",
+        "input": "129",
+        "sheet": "Sales-2"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "N56",
+        "input": "685",
+        "sheet": "Data"
+      }
+    },
+    {
+      "id": "home.fontName",
+      "params": {
+        "name": "Georgia",
+        "range": "N125:O125",
+        "sheet": "Summary"
+      }
+    },
+    {
+      "id": "home.fillColor",
+      "params": {
+        "color": "#FFFF00",
+        "range": "AA130",
+        "sheet": "Summary"
+      }
+    },
+    {
+      "id": "home.borders",
+      "params": {
+        "preset": "outside",
+        "range": "AA181:AB182",
+        "sheet": "Data"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "D138",
+        "input": "-7%",
+        "sheet": "Sales-2"
+      }
+    },
+    {
+      "id": "home.insertRows",
+      "params": {
+        "rows": "182:182",
+        "sheet": "AB12"
+      }
+    },
+    {
+      "id": "home.borders",
+      "params": {
+        "color": "auto",
+        "preset": "doubleBottom",
+        "range": "S183:U190",
+        "sheet": "Data",
+        "style": "thick"
+      }
+    },
+    {
+      "id": "home.fillColor",
+      "params": {
+        "color": "none",
+        "range": "V115:V116",
+        "sheet": "Sales-2"
+      }
+    },
+    {
+      "id": "home.numberFormat",
+      "params": {
+        "format": "General",
+        "range": "C21:C23",
+        "sheet": "Sales-2"
+      }
+    }
+  ]
+}
