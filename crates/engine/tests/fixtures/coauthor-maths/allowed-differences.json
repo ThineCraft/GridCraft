@@ -1,0 +1,1066 @@
+[
+  {
+    "cell": "Sheet1!AA1",
+    "formula": "ATANH($A1)",
+    "functions": [
+      "ATANH"
+    ],
+    "native": "num 3fb9af93cd234413 (0.1003353477310756)",
+    "wasm": "num 3fb9af93cd234412 (0.10033534773107558)",
+    "ulp": 1,
+    "root": true,
+    "arguments": [
+      "ATANH($A1) <- [num 3fb999999999999a (0.1)]"
+    ],
+    "precedents": [
+      "Sheet1!A1: num 3fb999999999999a (0.1)"
+    ]
+  },
+  {
+    "cell": "Sheet1!J2",
+    "formula": "POWER($A2,2.5)",
+    "functions": [
+      "POWER"
+    ],
+    "native": "num 3fc6a09e667f3bcd (0.1767766952966369)",
+    "wasm": "num 3fc6a09e667f3bcc (0.17677669529663687)",
+    "ulp": 1,
+    "root": true,
+    "arguments": [
+      "POWER($A2,2.5) <- [num 3fe0000000000000 (0.5), num 4004000000000000 (2.5)]"
+    ],
+    "precedents": [
+      "Sheet1!A2: num 3fe0000000000000 (0.5)"
+    ]
+  },
+  {
+    "cell": "Sheet1!AA2",
+    "formula": "ATANH($A2)",
+    "functions": [
+      "ATANH"
+    ],
+    "native": "num 3fe193ea7aad030b (0.5493061443340549)",
+    "wasm": "num 3fe193ea7aad030a (0.5493061443340548)",
+    "ulp": 1,
+    "root": true,
+    "arguments": [
+      "ATANH($A2) <- [num 3fe0000000000000 (0.5)]"
+    ],
+    "precedents": [
+      "Sheet1!A2: num 3fe0000000000000 (0.5)"
+    ]
+  },
+  {
+    "cell": "Sheet1!I3",
+    "formula": "POWER($A3,1/3)",
+    "functions": [
+      "POWER"
+    ],
+    "native": "num 3fe63003fbb4c375 (0.6933612743506347)",
+    "wasm": "num 3fe63003fbb4c376 (0.6933612743506348)",
+    "ulp": 1,
+    "root": true,
+    "arguments": [
+      "POWER($A3,1/3) <- [num 3fd5555555555555 (0.3333333333333333), num 3fd5555555555555 (0.3333333333333333)]"
+    ],
+    "precedents": [
+      "Sheet1!A3: num 3fd5555555555555 (0.3333333333333333)"
+    ]
+  },
+  {
+    "cell": "Sheet1!AA3",
+    "formula": "ATANH($A3)",
+    "functions": [
+      "ATANH"
+    ],
+    "native": "num 3fd62e42fefa39ee (0.3465735902799726)",
+    "wasm": "num 3fd62e42fefa39ef (0.34657359027997264)",
+    "ulp": 1,
+    "root": true,
+    "arguments": [
+      "ATANH($A3) <- [num 3fd5555555555555 (0.3333333333333333)]"
+    ],
+    "precedents": [
+      "Sheet1!A3: num 3fd5555555555555 (0.3333333333333333)"
+    ]
+  },
+  {
+    "cell": "Sheet1!I4",
+    "formula": "POWER($A4,1/3)",
+    "functions": [
+      "POWER"
+    ],
+    "native": "num 3fec69b5a72f1a99 (0.8879040017426006)",
+    "wasm": "num 3fec69b5a72f1a9a (0.8879040017426008)",
+    "ulp": 1,
+    "root": true,
+    "arguments": [
+      "POWER($A4,1/3) <- [num 3fe6666666666666 (0.7), num 3fd5555555555555 (0.3333333333333333)]"
+    ],
+    "precedents": [
+      "Sheet1!A4: num 3fe6666666666666 (0.7)"
+    ]
+  },
+  {
+    "cell": "Sheet1!J4",
+    "formula": "POWER($A4,2.5)",
+    "functions": [
+      "POWER"
+    ],
+    "native": "num 3fda3cd72ed9866d (0.409963413001697)",
+    "wasm": "num 3fda3cd72ed9866c (0.4099634130016969)",
+    "ulp": 1,
+    "root": true,
+    "arguments": [
+      "POWER($A4,2.5) <- [num 3fe6666666666666 (0.7), num 4004000000000000 (2.5)]"
+    ],
+    "precedents": [
+      "Sheet1!A4: num 3fe6666666666666 (0.7)"
+    ]
+  },
+  {
+    "cell": "Sheet1!X4",
+    "formula": "TANH($A4)",
+    "functions": [
+      "TANH"
+    ],
+    "native": "num 3fe356fb17af2e91 (0.6043677771171635)",
+    "wasm": "num 3fe356fb17af2e90 (0.6043677771171634)",
+    "ulp": 1,
+    "root": true,
+    "arguments": [
+      "TANH($A4) <- [num 3fe6666666666666 (0.7)]"
+    ],
+    "precedents": [
+      "Sheet1!A4: num 3fe6666666666666 (0.7)"
+    ]
+  },
+  {
+    "cell": "Sheet1!AA4",
+    "formula": "ATANH($A4)",
+    "functions": [
+      "ATANH"
+    ],
+    "native": "num 3febc0ed0947fbe9 (0.8673005276940532)",
+    "wasm": "num 3febc0ed0947fbe8 (0.8673005276940531)",
+    "ulp": 1,
+    "root": true,
+    "arguments": [
+      "ATANH($A4) <- [num 3fe6666666666666 (0.7)]"
+    ],
+    "precedents": [
+      "Sheet1!A4: num 3fe6666666666666 (0.7)"
+    ]
+  },
+  {
+    "cell": "Sheet1!Q5",
+    "formula": "ASIN($A5)",
+    "functions": [
+      "ASIN"
+    ],
+    "native": "num 3ff91c306b2c13ac (1.569382113114652)",
+    "wasm": "num 3ff91c306b2c13ad (1.5693821131146521)",
+    "ulp": 1,
+    "root": true,
+    "arguments": [
+      "ASIN($A5) <- [num 3feffffde7210be9 (0.999999)]"
+    ],
+    "precedents": [
+      "Sheet1!A5: num 3feffffde7210be9 (0.999999)"
+    ]
+  },
+  {
+    "cell": "Sheet1!V5",
+    "formula": "SINH($A5)",
+    "functions": [
+      "SINH"
+    ],
+    "native": "num 3ff2cd9e2617123c (1.175199650563754)",
+    "wasm": "num 3ff2cd9e2617123d (1.1751996505637543)",
+    "ulp": 1,
+    "root": true,
+    "arguments": [
+      "SINH($A5) <- [num 3feffffde7210be9 (0.999999)]"
+    ],
+    "precedents": [
+      "Sheet1!A5: num 3feffffde7210be9 (0.999999)"
+    ]
+  },
+  {
+    "cell": "Sheet1!J6",
+    "formula": "POWER($A6,2.5)",
+    "functions": [
+      "POWER"
+    ],
+    "native": "num 4016a09e667f3bcd (5.656854249492381)",
+    "wasm": "num 4016a09e667f3bcc (5.65685424949238)",
+    "ulp": 1,
+    "root": true,
+    "arguments": [
+      "POWER($A6,2.5) <- [num 4000000000000000 (2), num 4004000000000000 (2.5)]"
+    ],
+    "precedents": [
+      "Sheet1!A6: num 4000000000000000 (2)"
+    ]
+  },
+  {
+    "cell": "Sheet1!V6",
+    "formula": "SINH($A6)",
+    "functions": [
+      "SINH"
+    ],
+    "native": "num 400d03cf63b6e19f (3.6268604078470186)",
+    "wasm": "num 400d03cf63b6e1a0 (3.626860407847019)",
+    "ulp": 1,
+    "root": true,
+    "arguments": [
+      "SINH($A6) <- [num 4000000000000000 (2)]"
+    ],
+    "precedents": [
+      "Sheet1!A6: num 4000000000000000 (2)"
+    ]
+  },
+  {
+    "cell": "Sheet1!K7",
+    "formula": "POWER($A7,-1.7)",
+    "functions": [
+      "POWER"
+    ],
+    "native": "num 3fc7622c78a98a07 (0.18268352405273466)",
+    "wasm": "num 3fc7622c78a98a08 (0.1826835240527347)",
+    "ulp": 1,
+    "root": true,
+    "arguments": [
+      "POWER($A7,-1.7) <- [num 4005bf0a8b145769 (2.718281828459045), num bffb333333333333 (-1.7)]"
+    ],
+    "precedents": [
+      "Sheet1!A7: num 4005bf0a8b145769 (2.718281828459045)"
+    ]
+  },
+  {
+    "cell": "Sheet1!L7",
+    "formula": "$A7^0.37",
+    "functions": [],
+    "native": "num 3ff729ebc574421d (1.4477346146633245)",
+    "wasm": "num 3ff729ebc574421c (1.4477346146633243)",
+    "ulp": 1,
+    "root": true,
+    "arguments": [],
+    "precedents": [
+      "Sheet1!A7: num 4005bf0a8b145769 (2.718281828459045)"
+    ]
+  },
+  {
+    "cell": "Sheet1!W7",
+    "formula": "COSH($A7)",
+    "functions": [
+      "COSH"
+    ],
+    "native": "num 401e70c4a4f41684 (7.610125138662287)",
+    "wasm": "num 401e70c4a4f41685 (7.610125138662288)",
+    "ulp": 1,
+    "root": true,
+    "arguments": [
+      "COSH($A7) <- [num 4005bf0a8b145769 (2.718281828459045)]"
+    ],
+    "precedents": [
+      "Sheet1!A7: num 4005bf0a8b145769 (2.718281828459045)"
+    ]
+  },
+  {
+    "cell": "Sheet1!M8",
+    "formula": "POWER(2,$A8)",
+    "functions": [
+      "POWER"
+    ],
+    "native": "num 3ffb93bbf8582e13 (1.7235679341273495)",
+    "wasm": "num 3ffb93bbf8582e12 (1.7235679341273493)",
+    "ulp": 1,
+    "root": true,
+    "arguments": [
+      "POWER(2,$A8) <- [num 4000000000000000 (2), num 3fe921fb54442d18 (0.7853981633974483)]"
+    ],
+    "precedents": [
+      "Sheet1!A8: num 3fe921fb54442d18 (0.7853981633974483)"
+    ]
+  },
+  {
+    "cell": "Sheet1!N8",
+    "formula": "SIN($A8)",
+    "functions": [
+      "SIN"
+    ],
+    "native": "num 3fe6a09e667f3bcd (0.7071067811865476)",
+    "wasm": "num 3fe6a09e667f3bcc (0.7071067811865475)",
+    "ulp": 1,
+    "root": true,
+    "arguments": [
+      "SIN($A8) <- [num 3fe921fb54442d18 (0.7853981633974483)]"
+    ],
+    "precedents": [
+      "Sheet1!A8: num 3fe921fb54442d18 (0.7853981633974483)"
+    ]
+  },
+  {
+    "cell": "Sheet1!U8",
+    "formula": "ATAN2(1.5,$A8)",
+    "functions": [
+      "ATAN2"
+    ],
+    "native": "num 3fdedec9c192bfab (0.482347907101025)",
+    "wasm": "num 3fdedec9c192bfaa (0.48234790710102493)",
+    "ulp": 1,
+    "root": true,
+    "arguments": [
+      "ATAN2(1.5,$A8) <- [num 3ff8000000000000 (1.5), num 3fe921fb54442d18 (0.7853981633974483)]"
+    ],
+    "precedents": [
+      "Sheet1!A8: num 3fe921fb54442d18 (0.7853981633974483)"
+    ]
+  },
+  {
+    "cell": "Sheet1!W8",
+    "formula": "COSH($A8)",
+    "functions": [
+      "COSH"
+    ],
+    "native": "num 3ff531994ce525ba (1.324609089252006)",
+    "wasm": "num 3ff531994ce525b9 (1.3246090892520057)",
+    "ulp": 1,
+    "root": true,
+    "arguments": [
+      "COSH($A8) <- [num 3fe921fb54442d18 (0.7853981633974483)]"
+    ],
+    "precedents": [
+      "Sheet1!A8: num 3fe921fb54442d18 (0.7853981633974483)"
+    ]
+  },
+  {
+    "cell": "Sheet1!AA8",
+    "formula": "ATANH($A8)",
+    "functions": [
+      "ATANH"
+    ],
+    "native": "num 3ff0f2eb07023068 (1.059306170823243)",
+    "wasm": "num 3ff0f2eb07023069 (1.0593061708232432)",
+    "ulp": 1,
+    "root": true,
+    "arguments": [
+      "ATANH($A8) <- [num 3fe921fb54442d18 (0.7853981633974483)]"
+    ],
+    "precedents": [
+      "Sheet1!A8: num 3fe921fb54442d18 (0.7853981633974483)"
+    ]
+  },
+  {
+    "cell": "Sheet1!T9",
+    "formula": "ATAN2($A9,1.5)",
+    "functions": [
+      "ATAN2"
+    ],
+    "native": "num 3fd8a66bab68f64f (0.3851575063634742)",
+    "wasm": "num 3fd8a66bab68f64e (0.3851575063634741)",
+    "ulp": 1,
+    "root": true,
+    "arguments": [
+      "ATAN2($A9,1.5) <- [num 400d99999999999a (3.7), num 3ff8000000000000 (1.5)]"
+    ],
+    "precedents": [
+      "Sheet1!A9: num 400d99999999999a (3.7)"
+    ]
+  },
+  {
+    "cell": "Sheet1!Z9",
+    "formula": "ACOSH($A9)",
+    "functions": [
+      "ACOSH"
+    ],
+    "native": "num 3fffb9206e748ee9 (1.9826969446812035)",
+    "wasm": "num 3fffb9206e748ee8 (1.9826969446812033)",
+    "ulp": 1,
+    "root": true,
+    "arguments": [
+      "ACOSH($A9) <- [num 400d99999999999a (3.7)]"
+    ],
+    "precedents": [
+      "Sheet1!A9: num 400d99999999999a (3.7)"
+    ]
+  },
+  {
+    "cell": "Sheet1!J10",
+    "formula": "POWER($A10,2.5)",
+    "functions": [
+      "POWER"
+    ],
+    "native": "num 4073c3a4edfa9759 (316.22776601683796)",
+    "wasm": "num 4073c3a4edfa9758 (316.2277660168379)",
+    "ulp": 1,
+    "root": true,
+    "arguments": [
+      "POWER($A10,2.5) <- [num 4024000000000000 (10), num 4004000000000000 (2.5)]"
+    ],
+    "precedents": [
+      "Sheet1!A10: num 4024000000000000 (10)"
+    ]
+  },
+  {
+    "cell": "Sheet1!W10",
+    "formula": "COSH($A10)",
+    "functions": [
+      "COSH"
+    ],
+    "native": "num 40c5829dd053712d (11013.232920103323)",
+    "wasm": "num 40c5829dd053712e (11013.232920103324)",
+    "ulp": 1,
+    "root": true,
+    "arguments": [
+      "COSH($A10) <- [num 4024000000000000 (10)]"
+    ],
+    "precedents": [
+      "Sheet1!A10: num 4024000000000000 (10)"
+    ]
+  },
+  {
+    "cell": "Sheet1!I12",
+    "formula": "POWER($A12,1/3)",
+    "functions": [
+      "POWER"
+    ],
+    "native": "num 2b2bff2ee48e0595 (0.00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000010000000000000128)",
+    "wasm": "num 2b2bff2ee48e0594 (0.00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000010000000000000127)",
+    "ulp": 1,
+    "root": true,
+    "arguments": [
+      "POWER($A12,1/3) <- [num 01a56e1fc2f8f359 (0.000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001), num 3fd5555555555555 (0.3333333333333333)]"
+    ],
+    "precedents": [
+      "Sheet1!A12: num 01a56e1fc2f8f359 (0.000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001)"
+    ]
+  },
+  {
+    "cell": "Sheet1!M14",
+    "formula": "POWER(2,$A14)",
+    "functions": [
+      "POWER"
+    ],
+    "native": "num 3fe6a09e667f3bcd (0.7071067811865476)",
+    "wasm": "num 3fe6a09e667f3bcc (0.7071067811865475)",
+    "ulp": 1,
+    "root": true,
+    "arguments": [
+      "POWER(2,$A14) <- [num 4000000000000000 (2), num bfe0000000000000 (-0.5)]"
+    ],
+    "precedents": [
+      "Sheet1!A14: num bfe0000000000000 (-0.5)"
+    ]
+  },
+  {
+    "cell": "Sheet1!M15",
+    "formula": "POWER(2,$A15)",
+    "functions": [
+      "POWER"
+    ],
+    "native": "num 3fc6a09e667f3bcd (0.1767766952966369)",
+    "wasm": "num 3fc6a09e667f3bcc (0.17677669529663687)",
+    "ulp": 1,
+    "root": true,
+    "arguments": [
+      "POWER(2,$A15) <- [num 4000000000000000 (2), num c004000000000000 (-2.5)]"
+    ],
+    "precedents": [
+      "Sheet1!A15: num c004000000000000 (-2.5)"
+    ]
+  },
+  {
+    "cell": "Sheet1!P15",
+    "formula": "TAN($A15)",
+    "functions": [
+      "TAN"
+    ],
+    "native": "num 3fe7e79b4e00bb14 (0.7470222972386602)",
+    "wasm": "num 3fe7e79b4e00bb15 (0.7470222972386603)",
+    "ulp": 1,
+    "root": true,
+    "arguments": [
+      "TAN($A15) <- [num c004000000000000 (-2.5)]"
+    ],
+    "precedents": [
+      "Sheet1!A15: num c004000000000000 (-2.5)"
+    ]
+  },
+  {
+    "cell": "Sheet1!W15",
+    "formula": "COSH($A15)",
+    "functions": [
+      "COSH"
+    ],
+    "native": "num 40188776e4b30aa4 (6.132289479663687)",
+    "wasm": "num 40188776e4b30aa3 (6.132289479663686)",
+    "ulp": 1,
+    "root": true,
+    "arguments": [
+      "COSH($A15) <- [num c004000000000000 (-2.5)]"
+    ],
+    "precedents": [
+      "Sheet1!A15: num c004000000000000 (-2.5)"
+    ]
+  },
+  {
+    "cell": "Sheet1!I16",
+    "formula": "POWER($A16,1/3)",
+    "functions": [
+      "POWER"
+    ],
+    "native": "num 3fe56bfea66ef78d (0.6694329500821695)",
+    "wasm": "num 3fe56bfea66ef78e (0.6694329500821696)",
+    "ulp": 1,
+    "root": true,
+    "arguments": [
+      "POWER($A16,1/3) <- [num 3fd3333333333334 (0.30000000000000004), num 3fd5555555555555 (0.3333333333333333)]"
+    ],
+    "precedents": [
+      "Sheet1!A16: num 3fd3333333333334 (0.30000000000000004)"
+    ]
+  },
+  {
+    "cell": "Sheet1!U16",
+    "formula": "ATAN2(1.5,$A16)",
+    "functions": [
+      "ATAN2"
+    ],
+    "native": "num 3fc94441f8f7260c (0.19739555984988078)",
+    "wasm": "num 3fc94441f8f7260d (0.1973955598498808)",
+    "ulp": 1,
+    "root": true,
+    "arguments": [
+      "ATAN2(1.5,$A16) <- [num 3ff8000000000000 (1.5), num 3fd3333333333334 (0.30000000000000004)]"
+    ],
+    "precedents": [
+      "Sheet1!A16: num 3fd3333333333334 (0.30000000000000004)"
+    ]
+  },
+  {
+    "cell": "Sheet1!V16",
+    "formula": "SINH($A16)",
+    "functions": [
+      "SINH"
+    ],
+    "native": "num 3fd37d42af54b927 (0.30452029344714265)",
+    "wasm": "num 3fd37d42af54b928 (0.3045202934471427)",
+    "ulp": 1,
+    "root": true,
+    "arguments": [
+      "SINH($A16) <- [num 3fd3333333333334 (0.30000000000000004)]"
+    ],
+    "precedents": [
+      "Sheet1!A16: num 3fd3333333333334 (0.30000000000000004)"
+    ]
+  },
+  {
+    "cell": "Sheet1!Y16",
+    "formula": "ASINH($A16)",
+    "functions": [
+      "ASINH"
+    ],
+    "native": "num 3fd2ec4ea565fcc1 (0.29567304756342244)",
+    "wasm": "num 3fd2ec4ea565fcc2 (0.2956730475634225)",
+    "ulp": 1,
+    "root": true,
+    "arguments": [
+      "ASINH($A16) <- [num 3fd3333333333334 (0.30000000000000004)]"
+    ],
+    "precedents": [
+      "Sheet1!A16: num 3fd3333333333334 (0.30000000000000004)"
+    ]
+  },
+  {
+    "cell": "Sheet1!AA16",
+    "formula": "ATANH($A16)",
+    "functions": [
+      "ATANH"
+    ],
+    "native": "num 3fd3cf2b50617c97 (0.3095196042031118)",
+    "wasm": "num 3fd3cf2b50617c96 (0.30951960420311175)",
+    "ulp": 1,
+    "root": true,
+    "arguments": [
+      "ATANH($A16) <- [num 3fd3333333333334 (0.30000000000000004)]"
+    ],
+    "precedents": [
+      "Sheet1!A16: num 3fd3333333333334 (0.30000000000000004)"
+    ]
+  },
+  {
+    "cell": "Sheet1!J17",
+    "formula": "POWER($A17,2.5)",
+    "functions": [
+      "POWER"
+    ],
+    "native": "num 47b7ca5342cf484f (31622776601683740000000000000000000000)",
+    "wasm": "num 47b7ca5342cf4850 (31622776601683747000000000000000000000)",
+    "ulp": 1,
+    "root": true,
+    "arguments": [
+      "POWER($A17,2.5) <- [num 430c6bf52633fffb (999999999999999.4), num 4004000000000000 (2.5)]"
+    ],
+    "precedents": [
+      "Sheet1!A17: num 430c6bf52633fffb (999999999999999.4)"
+    ]
+  },
+  {
+    "cell": "Sheet1!I18",
+    "formula": "POWER($A18,1/3)",
+    "functions": [
+      "POWER"
+    ],
+    "native": "num 3f960fb8a566f629 (0.021544346900318843)",
+    "wasm": "num 3f960fb8a566f628 (0.02154434690031884)",
+    "ulp": 1,
+    "root": true,
+    "arguments": [
+      "POWER($A18,1/3) <- [num 3ee4f8b588e368f0 (0.000009999999999999999), num 3fd5555555555555 (0.3333333333333333)]"
+    ],
+    "precedents": [
+      "Sheet1!A18: num 3ee4f8b588e368f0 (0.000009999999999999999)"
+    ]
+  },
+  {
+    "cell": "Sheet1!U18",
+    "formula": "ATAN2(1.5,$A18)",
+    "functions": [
+      "ATAN2"
+    ],
+    "native": "num 3edbf647612d6f1c (0.000006666666666567901)",
+    "wasm": "num 3edbf647612d6f1b (0.0000066666666665679)",
+    "ulp": 1,
+    "root": true,
+    "arguments": [
+      "ATAN2(1.5,$A18) <- [num 3ff8000000000000 (1.5), num 3ee4f8b588e368f0 (0.000009999999999999999)]"
+    ],
+    "precedents": [
+      "Sheet1!A18: num 3ee4f8b588e368f0 (0.000009999999999999999)"
+    ]
+  },
+  {
+    "cell": "Sheet1!I22",
+    "formula": "POWER($A22,1/3)",
+    "functions": [
+      "POWER"
+    ],
+    "native": "num 3fb999999999999b (0.10000000000000002)",
+    "wasm": "num 3fb999999999999a (0.1)",
+    "ulp": 1,
+    "root": true,
+    "arguments": [
+      "POWER($A22,1/3) <- [num 3f50624dd2f1a9fc (0.001), num 3fd5555555555555 (0.3333333333333333)]"
+    ],
+    "precedents": [
+      "Sheet1!A22: num 3f50624dd2f1a9fc (0.001)"
+    ]
+  },
+  {
+    "cell": "Sheet1!U22",
+    "formula": "ATAN2(1.5,$A22)",
+    "functions": [
+      "ATAN2"
+    ],
+    "native": "num 3f45d8678da0e3e4 (0.000666666567901261)",
+    "wasm": "num 3f45d8678da0e3e3 (0.0006666665679012609)",
+    "ulp": 1,
+    "root": true,
+    "arguments": [
+      "ATAN2(1.5,$A22) <- [num 3ff8000000000000 (1.5), num 3f50624dd2f1a9fc (0.001)]"
+    ],
+    "precedents": [
+      "Sheet1!A22: num 3f50624dd2f1a9fc (0.001)"
+    ]
+  },
+  {
+    "cell": "Sheet1!L24",
+    "formula": "$A24^0.37",
+    "functions": [],
+    "native": "num 3fdb4d142e995c49 (0.42657951880159267)",
+    "wasm": "num 3fdb4d142e995c48 (0.4265795188015926)",
+    "ulp": 1,
+    "root": true,
+    "arguments": [],
+    "precedents": [
+      "Sheet1!A24: num 3fb9999999999999 (0.09999999999999999)"
+    ]
+  },
+  {
+    "cell": "Sheet1!U24",
+    "formula": "ATAN2(1.5,$A24)",
+    "functions": [
+      "ATAN2"
+    ],
+    "native": "num 3fb10a9c765f3723 (0.0665681637758238)",
+    "wasm": "num 3fb10a9c765f3724 (0.06656816377582381)",
+    "ulp": 1,
+    "root": true,
+    "arguments": [
+      "ATAN2(1.5,$A24) <- [num 3ff8000000000000 (1.5), num 3fb9999999999999 (0.09999999999999999)]"
+    ],
+    "precedents": [
+      "Sheet1!A24: num 3fb9999999999999 (0.09999999999999999)"
+    ]
+  },
+  {
+    "cell": "Sheet1!AA25",
+    "formula": "ATANH($A25)",
+    "functions": [
+      "ATANH"
+    ],
+    "native": "num 3fb9af93cd234413 (0.1003353477310756)",
+    "wasm": "num 3fb9af93cd234412 (0.10033534773107558)",
+    "ulp": 1,
+    "root": true,
+    "arguments": [
+      "ATANH($A25) <- [num 3fb999999999999a (0.1)]"
+    ],
+    "precedents": [
+      "Sheet1!A25: num 3fb999999999999a (0.1)"
+    ]
+  },
+  {
+    "cell": "Sheet1!L26",
+    "formula": "$A26^0.37",
+    "functions": [],
+    "native": "num 3fdb4d142e995c49 (0.42657951880159267)",
+    "wasm": "num 3fdb4d142e995c4a (0.4265795188015927)",
+    "ulp": 1,
+    "root": true,
+    "arguments": [],
+    "precedents": [
+      "Sheet1!A26: num 3fb999999999999b (0.10000000000000002)"
+    ]
+  },
+  {
+    "cell": "Sheet1!X26",
+    "formula": "TANH($A26)",
+    "functions": [
+      "TANH"
+    ],
+    "native": "num 3fb983d7795f413b (0.09966799462495583)",
+    "wasm": "num 3fb983d7795f413c (0.09966799462495585)",
+    "ulp": 1,
+    "root": true,
+    "arguments": [
+      "TANH($A26) <- [num 3fb999999999999b (0.10000000000000002)]"
+    ],
+    "precedents": [
+      "Sheet1!A26: num 3fb999999999999b (0.10000000000000002)"
+    ]
+  },
+  {
+    "cell": "Sheet1!W27",
+    "formula": "COSH($A27)",
+    "functions": [
+      "COSH"
+    ],
+    "native": "num 40c5829dd0537122 (11013.232920103303)",
+    "wasm": "num 40c5829dd0537123 (11013.232920103304)",
+    "ulp": 1,
+    "root": true,
+    "arguments": [
+      "COSH($A27) <- [num 4023ffffffffffff (9.999999999999998)]"
+    ],
+    "precedents": [
+      "Sheet1!A27: num 4023ffffffffffff (9.999999999999998)"
+    ]
+  },
+  {
+    "cell": "Sheet1!Y27",
+    "formula": "ASINH($A27)",
+    "functions": [
+      "ASINH"
+    ],
+    "native": "num 4007fc5c506d2bdb (2.99822295029797)",
+    "wasm": "num 4007fc5c506d2bda (2.9982229502979694)",
+    "ulp": 1,
+    "root": true,
+    "arguments": [
+      "ASINH($A27) <- [num 4023ffffffffffff (9.999999999999998)]"
+    ],
+    "precedents": [
+      "Sheet1!A27: num 4023ffffffffffff (9.999999999999998)"
+    ]
+  },
+  {
+    "cell": "Sheet1!J28",
+    "formula": "POWER($A28,2.5)",
+    "functions": [
+      "POWER"
+    ],
+    "native": "num 4073c3a4edfa9759 (316.22776601683796)",
+    "wasm": "num 4073c3a4edfa9758 (316.2277660168379)",
+    "ulp": 1,
+    "root": true,
+    "arguments": [
+      "POWER($A28,2.5) <- [num 4024000000000000 (10), num 4004000000000000 (2.5)]"
+    ],
+    "precedents": [
+      "Sheet1!A28: num 4024000000000000 (10)"
+    ]
+  },
+  {
+    "cell": "Sheet1!W28",
+    "formula": "COSH($A28)",
+    "functions": [
+      "COSH"
+    ],
+    "native": "num 40c5829dd053712d (11013.232920103323)",
+    "wasm": "num 40c5829dd053712e (11013.232920103324)",
+    "ulp": 1,
+    "root": true,
+    "arguments": [
+      "COSH($A28) <- [num 4024000000000000 (10)]"
+    ],
+    "precedents": [
+      "Sheet1!A28: num 4024000000000000 (10)"
+    ]
+  },
+  {
+    "cell": "Sheet1!L29",
+    "formula": "$A29^0.37",
+    "functions": [],
+    "native": "num 4002c0fb09811e7f (2.3442288153199224)",
+    "wasm": "num 4002c0fb09811e7e (2.344228815319922)",
+    "ulp": 1,
+    "root": true,
+    "arguments": [],
+    "precedents": [
+      "Sheet1!A29: num 4024000000000001 (10.000000000000002)"
+    ]
+  },
+  {
+    "cell": "Sheet1!V29",
+    "formula": "SINH($A29)",
+    "functions": [
+      "SINH"
+    ],
+    "native": "num 40c5829dced6999d (11013.232874703413)",
+    "wasm": "num 40c5829dced6999c (11013.232874703412)",
+    "ulp": 1,
+    "root": true,
+    "arguments": [
+      "SINH($A29) <- [num 4024000000000001 (10.000000000000002)]"
+    ],
+    "precedents": [
+      "Sheet1!A29: num 4024000000000001 (10.000000000000002)"
+    ]
+  },
+  {
+    "cell": "Sheet1!Y29",
+    "formula": "ASINH($A29)",
+    "functions": [
+      "ASINH"
+    ],
+    "native": "num 4007fc5c506d2bdc (2.9982229502979703)",
+    "wasm": "num 4007fc5c506d2bdb (2.99822295029797)",
+    "ulp": 1,
+    "root": true,
+    "arguments": [
+      "ASINH($A29) <- [num 4024000000000001 (10.000000000000002)]"
+    ],
+    "precedents": [
+      "Sheet1!A29: num 4024000000000001 (10.000000000000002)"
+    ]
+  },
+  {
+    "cell": "Sheet1!Z29",
+    "formula": "ACOSH($A29)",
+    "functions": [
+      "ACOSH"
+    ],
+    "native": "num 4007f21ed1ce05d4 (2.993222846126381)",
+    "wasm": "num 4007f21ed1ce05d5 (2.9932228461263812)",
+    "ulp": 1,
+    "root": true,
+    "arguments": [
+      "ACOSH($A29) <- [num 4024000000000001 (10.000000000000002)]"
+    ],
+    "precedents": [
+      "Sheet1!A29: num 4024000000000001 (10.000000000000002)"
+    ]
+  },
+  {
+    "cell": "Sheet1!K31",
+    "formula": "POWER($A31,-1.7)",
+    "functions": [
+      "POWER"
+    ],
+    "native": "num 3f3a1721471fe40d (0.00039810717055349735)",
+    "wasm": "num 3f3a1721471fe40c (0.0003981071705534973)",
+    "ulp": 1,
+    "root": true,
+    "arguments": [
+      "POWER($A31,-1.7) <- [num 4059000000000000 (100), num bffb333333333333 (-1.7)]"
+    ],
+    "precedents": [
+      "Sheet1!A31: num 4059000000000000 (100)"
+    ]
+  },
+  {
+    "cell": "Sheet1!L31",
+    "formula": "$A31^0.37",
+    "functions": [],
+    "native": "num 4015fb4c6da959b1 (5.495408738576246)",
+    "wasm": "num 4015fb4c6da959b0 (5.495408738576245)",
+    "ulp": 1,
+    "root": true,
+    "arguments": [],
+    "precedents": [
+      "Sheet1!A31: num 4059000000000000 (100)"
+    ]
+  },
+  {
+    "cell": "Sheet1!T31",
+    "formula": "ATAN2($A31,1.5)",
+    "functions": [
+      "ATAN2"
+    ],
+    "native": "num 3f8eb7baf2082978 (0.014998875151850596)",
+    "wasm": "num 3f8eb7baf2082977 (0.014998875151850595)",
+    "ulp": 1,
+    "root": true,
+    "arguments": [
+      "ATAN2($A31,1.5) <- [num 4059000000000000 (100), num 3ff8000000000000 (1.5)]"
+    ],
+    "precedents": [
+      "Sheet1!A31: num 4059000000000000 (100)"
+    ]
+  },
+  {
+    "cell": "Sheet1!Z31",
+    "formula": "ACOSH($A31)",
+    "functions": [
+      "ACOSH"
+    ],
+    "native": "num 401531738dcbc627 (5.298292365610485)",
+    "wasm": "num 401531738dcbc626 (5.298292365610484)",
+    "ulp": 1,
+    "root": true,
+    "arguments": [
+      "ACOSH($A31) <- [num 4059000000000000 (100)]"
+    ],
+    "precedents": [
+      "Sheet1!A31: num 4059000000000000 (100)"
+    ]
+  },
+  {
+    "cell": "Sheet1!O34",
+    "formula": "COS($A34)",
+    "functions": [
+      "COS"
+    ],
+    "native": "num 3fe1ff026793f1bb (0.5623790762907029)",
+    "wasm": "num 3fe1ff026793f1bc (0.562379076290703)",
+    "ulp": 1,
+    "root": true,
+    "arguments": [
+      "COS($A34) <- [num 408f400000000000 (1000)]"
+    ],
+    "precedents": [
+      "Sheet1!A34: num 408f400000000000 (1000)"
+    ]
+  },
+  {
+    "cell": "Sheet1!I35",
+    "formula": "POWER($A35,1/3)",
+    "functions": [
+      "POWER"
+    ],
+    "native": "num 4023ffffffffffff (9.999999999999998)",
+    "wasm": "num 4024000000000000 (10)",
+    "ulp": 1,
+    "root": true,
+    "arguments": [
+      "POWER($A35,1/3) <- [num 408f400000000001 (1000.0000000000001), num 3fd5555555555555 (0.3333333333333333)]"
+    ],
+    "precedents": [
+      "Sheet1!A35: num 408f400000000001 (1000.0000000000001)"
+    ]
+  },
+  {
+    "cell": "Sheet1!J36",
+    "formula": "POWER($A36,2.5)",
+    "functions": [
+      "POWER"
+    ],
+    "native": "num 428702337e304307 (3162277660168.3784)",
+    "wasm": "num 428702337e304306 (3162277660168.378)",
+    "ulp": 1,
+    "root": true,
+    "arguments": [
+      "POWER($A36,2.5) <- [num 40f869ffffffffff (99999.99999999999), num 4004000000000000 (2.5)]"
+    ],
+    "precedents": [
+      "Sheet1!A36: num 40f869ffffffffff (99999.99999999999)"
+    ]
+  },
+  {
+    "cell": "Sheet1!K37",
+    "formula": "POWER($A37,-1.7)",
+    "functions": [
+      "POWER"
+    ],
+    "native": "num 3e2b29ec0fbe4537 (0.0000000031622776601683808)",
+    "wasm": "num 3e2b29ec0fbe4538 (0.000000003162277660168381)",
+    "ulp": 1,
+    "root": true,
+    "arguments": [
+      "POWER($A37,-1.7) <- [num 40f86a0000000000 (100000), num bffb333333333333 (-1.7)]"
+    ],
+    "precedents": [
+      "Sheet1!A37: num 40f86a0000000000 (100000)"
+    ]
+  },
+  {
+    "cell": "Sheet1!T38",
+    "formula": "ATAN2($A38,1.5)",
+    "functions": [
+      "ATAN2"
+    ],
+    "native": "num 3eef75104d4afb55 (0.000014999999998874998)",
+    "wasm": "num 3eef75104d4afb54 (0.000014999999998874997)",
+    "ulp": 1,
+    "root": true,
+    "arguments": [
+      "ATAN2($A38,1.5) <- [num 40f86a0000000001 (100000.00000000001), num 3ff8000000000000 (1.5)]"
+    ],
+    "precedents": [
+      "Sheet1!A38: num 40f86a0000000001 (100000.00000000001)"
+    ]
+  },
+  {
+    "cell": "Sheet1!K39",
+    "formula": "POWER($A39,-1.7)",
+    "functions": [
+      "POWER"
+    ],
+    "native": "num 3c670ef54646d49f (0.000000000000000010000000000000013)",
+    "wasm": "num 3c670ef54646d4a0 (0.000000000000000010000000000000015)",
+    "ulp": 1,
+    "root": true,
+    "arguments": [
+      "POWER($A39,-1.7) <- [num 4202a05f1fffffff (9999999999.999998), num bffb333333333333 (-1.7)]"
+    ],
+    "precedents": [
+      "Sheet1!A39: num 4202a05f1fffffff (9999999999.999998)"
+    ]
+  },
+  {
+    "cell": "Sheet1!L43",
+    "formula": "$A43^0.37",
+    "functions": [],
+    "native": "num 4115a7f58e933f13 (354813.3892335754)",
+    "wasm": "num 4115a7f58e933f14 (354813.38923357544)",
+    "ulp": 1,
+    "root": true,
+    "arguments": [],
+    "precedents": [
+      "Sheet1!A43: num 430c6bf526340000 (1000000000000000)"
+    ]
+  }
+]

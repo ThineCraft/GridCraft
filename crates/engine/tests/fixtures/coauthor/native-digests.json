@@ -2,6 +2,7 @@
   "fixtures": [
     {
       "name": "hand-1-arithmetic-across-sheets.json",
+      "failed_steps": [],
       "entered": "8ac2b29daf28d1ea0abd0ea20a02041a1be29f0eeb5671e5ac6d2a382a144cfc",
       "computed": "9cd4de189a96de984e7d3634c4bed976f737ccc5d3868477889a18124200e826",
       "items": [
@@ -69,6 +70,7 @@
     },
     {
       "name": "hand-2-insert-rows-moves-references.json",
+      "failed_steps": [],
       "entered": "355eb330030c6bda65e9737268ab528145f11003d57f0aa68f31b31a89f7412c",
       "computed": "c1a02b3c6c107f62f13b47790aeeb120f3aaa43726f12a09ab43b431e4310ae1",
       "items": [
@@ -116,6 +118,7 @@
     },
     {
       "name": "hand-3-deleted-column-gives-ref-errors.json",
+      "failed_steps": [],
       "entered": "036cde636286c8d84c73a1bab5d12bc62bd8547fff69aa927657962536d3b15a",
       "computed": "b8824b3c449157f539bae40c6cc9dc0afd6eea14785e14bd3164afc398817df4",
       "items": [
@@ -153,6 +156,7 @@
     },
     {
       "name": "hand-4-renamed-then-deleted-sheet.json",
+      "failed_steps": [],
       "entered": "663309022068a3254285abadf3941adced36663bb7c0e179ee6517cb88f5bc36",
       "computed": "ac23f181b02dd51fdf1a612ff1f6a714b8864a4adac5a1fdeb2b3cb28432d3e6",
       "items": [
@@ -180,6 +184,7 @@
     },
     {
       "name": "hand-5-formats-outlive-cleared-content.json",
+      "failed_steps": [],
       "entered": "069d21190e9a0b94da237c87d0d0c9e8e39cfee435f5c3d3ffd0950fbd5450f3",
       "computed": "cca9825d25407651622104a86fd592016ed5650961a7a5fe706b4da82a628966",
       "items": [
@@ -217,6 +222,7 @@
     },
     {
       "name": "hand-6-text-lookup-and-logic.json",
+      "failed_steps": [],
       "entered": "e1859d42db88d6f66e347cc4c2ec8aa8af4aab9ff275d63e129b56a68dd0ee6b",
       "computed": "4cf3c6c11e30f0934319f6cc11544e903ea42b8e01cea2d19758161284b94a4c",
       "items": [
@@ -324,6 +330,7 @@
     },
     {
       "name": "random-001.json",
+      "failed_steps": [],
       "entered": "4f3f384fc3899c135c0077221124149fd911a9b4198d457445f3ba43636cd707",
       "computed": "3b07ba39310f7cfa35f561d0050153dcae8f6261da7a5e3ae106e54ea9e573b2",
       "items": [
@@ -5096,6 +5103,7 @@
     },
     {
       "name": "random-002.json",
+      "failed_steps": [],
       "entered": "05df751fadb5a3e3abede78f8c8f9cff51c9620eb87632d9342ca35b83c1adb9",
       "computed": "1eb173d45b5b068de6c50245cfc07fba48d4fcb625f57d53f78592cb30dbcb8e",
       "items": [
@@ -5478,6 +5486,7 @@
     },
     {
       "name": "random-003.json",
+      "failed_steps": [],
       "entered": "766f87eac7a5ae99411053accd9e25c26da767df32fb72c7bff4e0a4e834df4f",
       "computed": "7cf34c6c07129b4e530cfe938eb3d7c8418f586ce928cff6eeb33d5538bc063c",
       "items": [
@@ -6270,6 +6279,7 @@
     },
     {
       "name": "random-004.json",
+      "failed_steps": [],
       "entered": "cc2da12f658228a5c501670fc8bfee0e89fa660be988d8c0d7b1d73638aaecc1",
       "computed": "fca69eec231d21a49f1947e2c5a1c68f56d83ab2b76cf8588a88d7b40bf032e0",
       "items": [
@@ -7102,6 +7112,7 @@
     },
     {
       "name": "random-005.json",
+      "failed_steps": [],
       "entered": "330a31342704d735c17fe6454095fa9a54b4a6eb9c45844c4d86da72cdc0a06a",
       "computed": "5c55e5f1ba26025deb7cc7d018e8b6ec6af38b03396dea0efd2bd5b61f541214",
       "items": [
@@ -7849,6 +7860,7 @@
     },
     {
       "name": "random-006.json",
+      "failed_steps": [],
       "entered": "26d8410c0c0c73331a334dc5348884f934940cf4c0d6fc7cb1319205bf6c787b",
       "computed": "c6b5801ee4bd97ee2e98486ec7e09b7ff925151775b2e76035a790d0a0117bae",
       "items": [
@@ -8706,6 +8718,7 @@
     },
     {
       "name": "random-007.json",
+      "failed_steps": [],
       "entered": "5119cac4f080cb71dd470ac787bfd7f1116c0b4338b8f04d7ce64caa76bd3278",
       "computed": "ea2050cc0d9629cd18af555eb6eddc339bc656dbbc5efb91362329b6aaeaa137",
       "items": [
@@ -9358,6 +9371,7 @@
     },
     {
       "name": "random-008.json",
+      "failed_steps": [],
       "entered": "1c724779b86b63cc222c95529b3dc1e7de22af1705fa11179a82fc827f14d387",
       "computed": "4832951e0dc9a23d86d8a160c7e72cc37faaeb9320cc6781af37bd1a02df7216",
       "items": [
@@ -10060,6 +10074,7 @@
     },
     {
       "name": "random-009.json",
+      "failed_steps": [],
       "entered": "bf668f6d6bccd59dfcbb947a042c50a7daa8159bae137288c08740ce33f7c4b9",
       "computed": "5fd13214e31035a7ed61cc5c0bd6df8cbb4c97bea51d1152e70878cc7930fca9",
       "items": [
@@ -11807,6 +11822,7 @@
     },
     {
       "name": "random-010.json",
+      "failed_steps": [],
       "entered": "fe2441a87ae8632a08670a317e3bbb61398a4f85435cbed6071c99a6599fca00",
       "computed": "0031ef0102d1fbe807cbc58d3adb9ad368e6e270033ed9d08e3142d548a77a64",
       "items": [
@@ -12704,6 +12720,7 @@
     },
     {
       "name": "random-011.json",
+      "failed_steps": [],
       "entered": "f44e28008a818a27a619477eae3e334a7d16811577587682d42aa6381fef5f15",
       "computed": "91ef768a08bb7ba1b2d1968158ca91a8d16864cf3175926ca4376b070429d175",
       "items": [
@@ -13621,6 +13638,7 @@
     },
     {
       "name": "random-012.json",
+      "failed_steps": [],
       "entered": "62558836ecd7bcf718129ac06a7960e97e0f4b0bb7350d24e1b26ea09b59ec15",
       "computed": "beb248e166fbd1a9ca019f424c3813a8be9db5acc6fe29c42c400ffe63c84270",
       "items": [
@@ -16373,6 +16391,7 @@
     },
     {
       "name": "random-013.json",
+      "failed_steps": [],
       "entered": "764310e7a749143ef7ac7d68833fa1d7ea337471c675ef7b8d2f752f95dbd3d0",
       "computed": "0a83dac6a1c730f0c1ab4d723e232875057dfe58dcdf23f62d2d077b5ef7d78b",
       "items": [
@@ -17265,6 +17284,7 @@
     },
     {
       "name": "random-014.json",
+      "failed_steps": [],
       "entered": "b7995784f69940cdc11d9ca3bc328b21ec0c734f8cbded36a39feac885981b71",
       "computed": "df52d79c580d15110536185558fe6d792243d81cc1c5c7d59c303d2fc1fd5c36",
       "items": [
@@ -19762,6 +19782,7 @@
     },
     {
       "name": "random-015.json",
+      "failed_steps": [],
       "entered": "25164b9447a6d5efa36566c5b44fb529d117f9940db2e2b9f4b06e7f944460bd",
       "computed": "e4540768cd26977d3511038537d7be319f342027f07ed461d04bfad0da31bffe",
       "items": [
@@ -21834,6 +21855,7 @@
     },
     {
       "name": "random-016.json",
+      "failed_steps": [],
       "entered": "6b7d24c4945052567456055bc31dd8e11952925aa7d45184eb95662bc213efa8",
       "computed": "0ab2c7d9806b5683569c75d228fa56297dbd6734e0f4783f9ebb51a01e8b72ba",
       "items": [
@@ -22726,6 +22748,7 @@
     },
     {
       "name": "random-017.json",
+      "failed_steps": [],
       "entered": "53b687cdac4c955b3383ff1e8743d07f71229ccdc69ef64a1bd27dad4f6f14c8",
       "computed": "92bc0de05851fbfd9dc395354798009075e4592d36fb60461a1572f9c68fc859",
       "items": [
@@ -23468,6 +23491,7 @@
     },
     {
       "name": "random-018.json",
+      "failed_steps": [],
       "entered": "123d81662deb01540b86816d38739cf4f25524c5b72cbcb21c78d0c2e83babc9",
       "computed": "b7ab61095a6ba050443ed0a706aad4ecefba709642216cc80ca23e50e549bee9",
       "items": [
@@ -24995,6 +25019,7 @@
     },
     {
       "name": "random-019.json",
+      "failed_steps": [],
       "entered": "2cee168bd6ec4f93c721f15cd42420c0a05a2ce3d7e0fc6aad99de95e5f98557",
       "computed": "3b124ec26e25164185a4a59c8a6db39de5d421fee9ec30460945661eaeb24802",
       "items": [
@@ -26142,6 +26167,7 @@
     },
     {
       "name": "random-020.json",
+      "failed_steps": [],
       "entered": "095aed22344284a9bd9233faeba02f1a117c56aab66bd76e2d4f196a1e824eb0",
       "computed": "6853049cf8d4849714cbd0225e80e90da1d447cd4a703695da344baff3a8cd8d",
       "items": [
