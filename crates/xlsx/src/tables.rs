@@ -326,8 +326,20 @@ pub fn pt_to_px(pt: f64) -> f32 {
     if !pt.is_finite() || pt <= 0.0 { 0.0 } else { (pt.min(409.5) * 4.0 / 3.0) as f32 }
 }
 
+/// Model px → row height in points: in hundredths of a point, as Excel writes them, when that
+/// reads back ([`pt_to_px`]) as the same px; otherwise with as many decimals as reading back
+/// exactly needs, so an automatic height computed to a fraction of a pixel survives a save.
 pub fn px_to_pt(px: f32) -> f64 {
-    ((px.max(0.0) as f64) * 0.75 * 100.0).round() / 100.0
+    let pt = (px.max(0.0) as f64) * 0.75;
+    let mut scale = 100.0;
+    for _ in 0..8 {
+        let rounded = (pt * scale).round() / scale;
+        if pt_to_px(rounded) == px {
+            return rounded;
+        }
+        scale *= 10.0;
+    }
+    pt
 }
 
 /// EMU per px at 96 dpi.
@@ -346,6 +358,8 @@ mod tests {
         }
         assert_eq!(pt_to_px(15.0), 20.0);
         assert_eq!(px_to_pt(20.0), 15.0);
+        assert_eq!(px_to_pt(21.0), 15.75);
+        assert_eq!(px_to_pt(32.727272), 24.545454);
     }
 
     #[test]
