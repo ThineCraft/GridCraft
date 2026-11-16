@@ -206,6 +206,11 @@ pub struct TimingStats {
 
 /// A deterministic two-sheet workbook with exactly `cells` stored cells and one formula in five.
 /// The proof sizes divide evenly across two 100-column sheets.
+///
+/// Its formulas are a lower bound on formula cost: all but two are single cross-sheet references
+/// (at 100,000 cells, 19,998 of 20,000), the other two are whole-column SUMs, and a content edit
+/// has one or two dependents. Timings on it hold for this shape only; an edit that feeds a long
+/// chain or a large range costs more.
 pub fn timing_workbook(cells: usize) -> Result<Workbook, String> {
     const SHEETS: usize = 2;
     const COLS: usize = 100;

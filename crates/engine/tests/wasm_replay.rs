@@ -884,8 +884,11 @@ fn wasm_clock() -> impl Fn() -> f64 {
     move || origin.elapsed().as_secs_f64() * 1_000.0
 }
 
-/// The browser counterpart of `it/coauthor_timing.rs`: the same workloads, sizes, checks and
+/// The WebAssembly counterpart of `it/coauthor_timing.rs`: the same workloads, sizes, checks and
 /// tables. The threshold is judged on clone + apply; clone + apply + recalc_all is reported only.
+/// `wasm-bindgen-test` runs it under Node by default, not in a browser engine, so a pass here is
+/// Node-hosted and provisional until the same proof runs in browsers. The workbook is a lower
+/// bound on formula cost (`timing_workbook`).
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen_test::wasm_bindgen_test]
 #[ignore = "release-only browser rollback and re-run timing proof"]

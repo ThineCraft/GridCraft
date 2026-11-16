@@ -3,6 +3,15 @@
 //! The headline figure is clone + apply: each command recalculates as it is committed, which is
 //! what the co-authoring apply loop does. Clone + apply + one forced `recalc_all` is reported
 //! beside it as an upper bound, and an untimed check proves that the forced pass changes nothing.
+//!
+//! What the results support, and what they do not:
+//! - The workbook (`timing_workbook`) is a lower bound on formula cost, so the content-edit
+//!   timings hold for its shape only.
+//! - Structural commands are at or above the 50 ms budget alone, not uniformly above it: one row
+//!   or column insert or delete costs 43-60 ms p50 at 100,000 cells, and any batch of 10 that
+//!   contains one misses 50 ms, at p50 as well as p95 (53-59 ms p50).
+//! - The WebAssembly counterpart (`tests/wasm_replay.rs`) runs under Node, not in a browser
+//!   engine; its 150 ms pass is Node-hosted and provisional until a browser run.
 
 use std::time::Instant;
 
