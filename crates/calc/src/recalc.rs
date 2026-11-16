@@ -796,6 +796,49 @@ pub(crate) mod tests {
         }
     }
 
+    /// Two arrays laid out in one pass that overlap: a read of the shared cells sees the anchor
+    /// that comes first in row-major order, the one write-back keeps (the other is `#SPILL!`),
+    /// whatever order the pass met them in. Hash order (which differs between platforms and
+    /// between a replay and a rollback) never decides it.
+    #[test]
+    fn overlapping_spills_in_a_pass_read_the_first_anchor() {
+        let mut wb = Workbook::new();
+        let mut python = HashMap::default();
+        let pairs = 24u32;
+        let array = |rows: usize, cols: usize, v: f64| {
+            Value::Array(std::sync::Arc::new(gridcraft_core::Array::new(rows, cols, vec![Value::Number(v); rows * cols]).unwrap()))
+        };
+        for i in 0..pairs {
+            let sh = wb.sheet_mut(0).unwrap();
+            // First (row-major): B(10i+1) spilling down three rows; second: A(10i+2) spilling 2 x 2,
+            // over B(10i+2):B(10i+3) too.
+            let (first, second) = (CellRef::new(10 * i, 1), CellRef::new(10 * i + 1, 0));
+            for (at, v) in [(first, 100.0 + f64::from(i)), (second, 200.0 + f64::from(i))] {
+                let py = gridcraft_model::PyCode::new("x");
+                sh.set_cell(at, Cell { value: Value::Number(0.0), py: Some(std::sync::Arc::new(py)), ..Cell::default() });
+                python.insert((0, at), if at == first { array(3, 1, v) } else { array(2, 2, v) });
+            }
+        }
+        let exprs = HashMap::default();
+        let mut rng = 1u64;
+        let mut host = PassHost::new(&wb, &exprs, &mut rng, 0.0).with_python(python);
+        for i in 0..pairs {
+            // Met in either order.
+            let (first, second) = (CellRef::new(10 * i, 1), CellRef::new(10 * i + 1, 0));
+            let order = if i % 2 == 0 { [first, second] } else { [second, first] };
+            for at in order {
+                host.cell_value(0, at);
+            }
+        }
+        for i in 0..pairs {
+            let want = Value::Number(100.0 + f64::from(i));
+            let shared = CellRef::new(10 * i + 2, 1);
+            assert_eq!(host.cell_value(0, shared), want, "pair {i}: one cell");
+            let area = RangeRef::new(CellRef::new(10 * i + 1, 1), shared);
+            assert_eq!(host.range_values(0, area), vec![want.clone(), want], "pair {i}: a range");
+        }
+    }
+
     #[test]
     fn intervals_match_a_linear_scan() {
         let mut iv: Intervals<u32> = Intervals::default();
