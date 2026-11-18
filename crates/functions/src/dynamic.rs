@@ -159,7 +159,7 @@ fn int_list(arg: &Arg) -> R<Vec<i64>> {
     a.data
         .iter()
         .map(|x| {
-            let n = crate::util::number(x, arg.coercion_year)?;
+            let n = crate::util::number(x, arg.coercion_year.as_ref())?;
             if !n.is_finite() || n.abs() > 1e15 { Err(CellError::Value) } else { Ok(n.trunc() as i64) }
         })
         .collect()

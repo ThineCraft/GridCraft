@@ -12,7 +12,9 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 
+use std::cell::Cell;
 use std::collections::HashMap;
+use std::rc::Rc;
 use std::sync::OnceLock;
 
 use gridcraft_core::{Array, CellError, DateSystem, Value};
@@ -79,7 +81,7 @@ pub(crate) mod text;
 pub(crate) mod util;
 
 pub use ets::Timeline;
-pub use stat::{aggregate_values, aggregate_values_k, aggregate_values_k_in_year};
+pub use stat::{aggregate_values, aggregate_values_k, aggregate_values_k_in_year, aggregate_values_k_with_year};
 
 /// An evaluated argument. Ranges arrive as `Value::Array` (blank cells = `Value::Empty`) with
 /// `from_ref = true`.
@@ -87,7 +89,35 @@ pub use stat::{aggregate_values, aggregate_values_k, aggregate_values_k_in_year}
 pub struct Arg {
     pub value: Value,
     pub from_ref: bool,
-    pub coercion_year: Option<i64>,
+    pub coercion_year: Option<CoercionYear>,
+}
+
+/// The calendar year used only when numeric coercion reaches date text that omits one.
+#[derive(Clone)]
+pub struct CoercionYear {
+    year: i64,
+    read: Rc<Cell<bool>>,
+}
+
+impl CoercionYear {
+    pub fn new(year: i64) -> Self {
+        Self { year, read: Rc::new(Cell::new(false)) }
+    }
+
+    pub fn tracked(year: i64, read: Rc<Cell<bool>>) -> Self {
+        Self { year, read }
+    }
+
+    pub fn get(&self) -> i64 {
+        self.read.set(true);
+        self.year
+    }
+}
+
+impl std::fmt::Debug for CoercionYear {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.debug_struct("CoercionYear").field("year", &self.year).finish_non_exhaustive()
+    }
 }
 
 impl Arg {
@@ -111,6 +141,8 @@ pub trait Ctx {
     fn date_year(&self) -> i64 {
         gridcraft_core::date::datetime_from_serial(DateSystem::D1900, self.now_serial()).map_or(2026, |date| i64::from(date.year))
     }
+    /// A year token whose use records a clock read. Creating it must not read the clock.
+    fn coercion_year(&self) -> CoercionYear;
     /// Uniform in [0, 1).
     fn random(&mut self) -> f64;
     /// For the database functions: whether the formula in the criteria cell at (`row`, `col`) holds
@@ -263,29 +295,65 @@ pub fn call(spec: &FnSpec, args: &[Arg], ctx: &mut dyn Ctx) -> Value {
     if !spec.accepts(args.len()) {
         return Value::Error(CellError::Value);
     }
-    let year = args.iter().any(|arg| value_contains_text(&arg.value)).then(|| ctx.date_year());
-    if let Some(year) = year {
-        let mut stamped = args.to_vec();
-        for arg in &mut stamped {
-            arg.coercion_year = Some(year);
-        }
-        lift::call_lifted(spec, &stamped, ctx)
-    } else {
-        lift::call_lifted(spec, args, ctx)
+    let year = ctx.coercion_year();
+    let mut stamped = args.to_vec();
+    for arg in &mut stamped {
+        arg.coercion_year = Some(year.clone());
     }
-}
-
-fn value_contains_text(value: &Value) -> bool {
-    match value {
-        Value::Text(_) => true,
-        Value::Array(array) => array.iter().any(value_contains_text),
-        _ => false,
-    }
+    lift::call_lifted(spec, &stamped, ctx)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct ClockReads(std::cell::Cell<usize>);
+
+    impl Ctx for ClockReads {
+        fn date_system(&self) -> DateSystem {
+            DateSystem::D1900
+        }
+
+        fn now_serial(&self) -> f64 {
+            self.0.set(self.0.get().saturating_add(1));
+            46_302.5
+        }
+
+        fn random(&mut self) -> f64 {
+            0.5
+        }
+
+        fn coercion_year(&self) -> CoercionYear {
+            CoercionYear::new(2026)
+        }
+    }
+
+    fn ignore_arguments(_: &[Arg], _: &mut dyn Ctx) -> Value {
+        Value::Number(1.0)
+    }
+
+    #[test]
+    fn call_does_not_prescan_a_large_text_array_for_the_coercion_year() {
+        let mut values = vec![Value::Empty; 100_000];
+        values.push(Value::text("last"));
+        let array = Array::new(values.len(), 1, values).expect("the test array is rectangular");
+        let spec = FnSpec {
+            name: "TEST.LAZY.YEAR",
+            min_args: 1,
+            max_args: 1,
+            category: Category::Text,
+            volatile: false,
+            scalar_args: &[],
+            value_args: &[],
+            signature: "TEST.LAZY.YEAR(array)",
+            description: "Test-only function that deliberately ignores its argument.",
+            imp: ignore_arguments,
+        };
+        let mut ctx = ClockReads(std::cell::Cell::new(0));
+
+        assert_eq!(call(&spec, &[Arg::reference(array)], &mut ctx), Value::Number(1.0));
+        assert_eq!(ctx.0.get(), 0, "an ignored array must not be walked or read the clock");
+    }
 
     #[test]
     fn registry_is_consistent() {

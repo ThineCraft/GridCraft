@@ -43,7 +43,7 @@ fn parity(a: &[Arg]) -> R<f64> {
     match first(a) {
         Value::Bool(_) => Err(CellError::Value),
         v => {
-            let n = crate::util::number(&v, a.first().and_then(|arg| arg.coercion_year))?;
+            let n = crate::util::number(&v, a.first().and_then(|arg| arg.coercion_year.as_ref()))?;
             if n.abs() > 9.007_199_254_740_992e15 {
                 return Err(CellError::Num);
             }
@@ -287,7 +287,7 @@ fn switch(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
 }
 
 fn choose(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let year = a.first().and_then(|arg| arg.coercion_year);
+    let year = a.first().and_then(|arg| arg.coercion_year.as_ref());
     drive(a, &|i| i == 0, &|v| {
         let idx = crate::util::number(&v.first().cloned().unwrap_or(Value::Empty), year)?.trunc();
         if idx < 1.0 || idx >= v.len() as f64 {

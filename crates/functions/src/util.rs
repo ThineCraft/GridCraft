@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use gridcraft_core::{Array, CellError, DateSystem, Value};
 
-use crate::Arg;
+use crate::{Arg, CoercionYear};
 
 pub(crate) type R<T> = Result<T, CellError>;
 
@@ -57,14 +57,14 @@ pub(crate) fn has(args: &[Arg], i: usize) -> bool {
 /// Number coercion for a scalar parameter: empty = 0, TRUE = 1, numeric text parses.
 pub(crate) fn num(args: &[Arg], i: usize) -> R<f64> {
     let a = arg(args, i)?;
-    number(&scalar(a), a.coercion_year)
+    number(&scalar(a), a.coercion_year.as_ref())
 }
 
 /// Optional number: `default` when missing, otherwise coerced (an explicit empty is 0).
 pub(crate) fn opt_num(args: &[Arg], i: usize, default: f64) -> R<f64> {
     match args.get(i) {
         None => Ok(default),
-        Some(a) => number(&scalar(a), a.coercion_year),
+        Some(a) => number(&scalar(a), a.coercion_year.as_ref()),
     }
 }
 
@@ -166,7 +166,7 @@ pub(crate) fn numbers(args: &[Arg]) -> R<Vec<f64>> {
             Value::Number(n) => out.push(*n),
             _ if a.from_ref => {}
             Value::Empty => {}
-            v => out.push(number(v, a.coercion_year)?),
+            v => out.push(number(v, a.coercion_year.as_ref())?),
         }
     }
     Ok(out)
@@ -193,19 +193,19 @@ pub(crate) fn numbers_a(args: &[Arg]) -> R<Vec<f64>> {
             Value::Error(e) => return Err(*e),
             Value::Empty => {}
             Value::Text(_) if a.from_ref => out.push(0.0),
-            v => out.push(number(v, a.coercion_year)?),
+            v => out.push(number(v, a.coercion_year.as_ref())?),
         }
     }
     Ok(out)
 }
 
-pub(crate) fn number(value: &Value, year: Option<i64>) -> R<f64> {
+pub(crate) fn number(value: &Value, year: Option<&CoercionYear>) -> R<f64> {
     number_in(value, DateSystem::D1900, year)
 }
 
-pub(crate) fn number_in(value: &Value, system: DateSystem, year: Option<i64>) -> R<f64> {
+pub(crate) fn number_in(value: &Value, system: DateSystem, year: Option<&CoercionYear>) -> R<f64> {
     match year {
-        Some(year) => value.to_number_in_year(system, year),
+        Some(year) => value.to_number_in_with_year(system, &mut || year.get()),
         None => value.to_number_in(system),
     }
 }
@@ -227,7 +227,7 @@ pub(crate) fn array_numbers(arg: &Arg) -> R<Vec<f64>> {
         Value::Number(n) => out.push(*n),
         Value::Error(e) => return Err(*e),
         Value::Empty => {}
-        other => out.push(number(other, arg.coercion_year)?),
+        other => out.push(number(other, arg.coercion_year.as_ref())?),
     }
     Ok(out)
 }
@@ -322,6 +322,9 @@ pub(crate) mod testutil {
             self.state ^= self.state >> 7;
             self.state ^= self.state << 17;
             (self.state >> 11) as f64 / (1u64 << 53) as f64
+        }
+        fn coercion_year(&self) -> crate::CoercionYear {
+            crate::CoercionYear::new(2026)
         }
     }
 

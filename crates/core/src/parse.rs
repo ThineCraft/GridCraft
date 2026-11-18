@@ -24,6 +24,11 @@ pub fn parse_input(s: &str, sys: DateSystem) -> Parsed {
 /// carried by the entry; ordinary input continues to use the local current year through
 /// [`parse_input`].
 pub fn parse_input_in_year(s: &str, sys: DateSystem, year: i64) -> Parsed {
+    parse_input_in_with_year(s, sys, || year)
+}
+
+/// Interprets typed cell input, asking for the current year only if a date omits it.
+pub fn parse_input_in_with_year(s: &str, sys: DateSystem, mut year: impl FnMut() -> i64) -> Parsed {
     if s.is_empty() {
         return Parsed { value: Value::Empty, format: None };
     }
@@ -40,7 +45,7 @@ pub fn parse_input_in_year(s: &str, sys: DateSystem, year: i64) -> Parsed {
     if let Some(e) = CellError::parse(t) {
         return Parsed { value: Value::Error(e), format: None };
     }
-    if let Some((n, f)) = parse_numeric(t, sys, year) {
+    if let Some((n, f)) = parse_numeric(t, sys, &mut year) {
         return Parsed { value: Value::number(n), format: f };
     }
     Parsed { value: Value::text(s), format: None }
@@ -58,7 +63,12 @@ pub fn parse_number_text_in(s: &str, sys: DateSystem) -> Option<f64> {
 
 /// Like [`parse_number_text_in`], using `year` for dates that omit one.
 pub fn parse_number_text_in_year(s: &str, sys: DateSystem, year: i64) -> Option<f64> {
-    parse_numeric(s.trim(), sys, year).map(|(n, _)| n)
+    parse_number_text_in_with_year(s, sys, || year)
+}
+
+/// Like [`parse_number_text_in`], asking for the current year only if a date omits it.
+pub fn parse_number_text_in_with_year(s: &str, sys: DateSystem, mut year: impl FnMut() -> i64) -> Option<f64> {
+    parse_numeric(s.trim(), sys, &mut year).map(|(n, _)| n)
 }
 
 /// Text that Excel's "Number Stored as Text" check flags: it would be a number if typed (signs,
@@ -74,7 +84,7 @@ pub fn number_stored_as_text(s: &str) -> Option<f64> {
     }
 }
 
-fn parse_numeric(t: &str, sys: DateSystem, year: i64) -> Option<(f64, Option<&'static str>)> {
+fn parse_numeric(t: &str, sys: DateSystem, year: &mut dyn FnMut() -> i64) -> Option<(f64, Option<&'static str>)> {
     // Parenthesised negatives: (100) = -100, and the accounting forms `$(100)` and `(5)%`.
     if let Some(inner) = parenthesized(t) {
         // Excel reads no sign and no nested parentheses inside: `(-5)`, `($-5)`, `((5))`.
@@ -87,7 +97,7 @@ fn parse_numeric(t: &str, sys: DateSystem, year: i64) -> Option<(f64, Option<&'s
     parse_unparenthesised(t, sys, year)
 }
 
-fn parse_unparenthesised(t: &str, sys: DateSystem, year: i64) -> Option<(f64, Option<&'static str>)> {
+fn parse_unparenthesised(t: &str, sys: DateSystem, year: &mut dyn FnMut() -> i64) -> Option<(f64, Option<&'static str>)> {
     if t.is_empty() {
         return None;
     }
@@ -278,7 +288,7 @@ fn parse_time(t: &str) -> Option<(f64, bool, bool)> {
     Some((time_fraction(h, m, s), parts.len() == 3, ampm.is_some()))
 }
 
-fn parse_date(t: &str, sys: DateSystem, year: i64) -> Option<(f64, &'static str)> {
+fn parse_date(t: &str, sys: DateSystem, year: &mut dyn FnMut() -> i64) -> Option<(f64, &'static str)> {
     let t = t.trim().trim_end_matches(',');
     let num = |s: &str| {
         let s = s.trim();
@@ -312,17 +322,16 @@ fn parse_date(t: &str, sys: DateSystem, year: i64) -> Option<(f64, &'static str)
         // m/d is ambiguous without a year. We accept d-mmm / mmm-d only with month names, and
         // use the caller's year for m/d and d-mmm.
         if let (Some(m), Some(d)) = (num(a), num(b)) {
-            let y = year;
-            if (1..=12).contains(&m) && (1..=31).contains(&d) {
-                return valid_ymd(sys, y, m, d).map(|s| (s, "d-mmm"));
-            }
             // m/yyyy
             if (1..=12).contains(&m) && b.len() == 4 {
                 return valid_ymd(sys, d, m, 1).map(|s| (s, "mmm-yy"));
             }
+            if (1..=12).contains(&m) && (1..=31).contains(&d) {
+                return valid_ymd(sys, year(), m, d).map(|s| (s, "d-mmm"));
+            }
         }
         if let (Some(d), Some(m)) = (num(a), month_from_name(b)) {
-            return valid_ymd(sys, year, m as i64, d).map(|s| (s, "d-mmm"));
+            return valid_ymd(sys, year(), m as i64, d).map(|s| (s, "d-mmm"));
         }
         if let (Some(m), Some(y)) = (month_from_name(a), num(b)) {
             let y = if b.len() <= 2 { if y < 30 { 2000 + y } else { 1900 + y } } else { y };
@@ -368,7 +377,7 @@ pub fn current_year() -> i64 {
     2026
 }
 
-fn parse_datetime(t: &str, sys: DateSystem, year: i64) -> Option<(f64, Option<&'static str>)> {
+fn parse_datetime(t: &str, sys: DateSystem, year: &mut dyn FnMut() -> i64) -> Option<(f64, Option<&'static str>)> {
     if let Some((tf, secs, ampm)) = parse_time(t) {
         let f = match (secs, ampm) {
             // 24 hours or more: elapsed hours, so 25:00 shows as 25:00:00, not 1:00.

@@ -327,9 +327,10 @@ pub(super) fn count_impl(a: &[Arg]) -> f64 {
             Value::Bool(_) => c += 1,
             Value::Text(t)
                 if x.coercion_year
+                    .as_ref()
                     .map_or_else(
                         || gridcraft_core::parse::parse_number_text(t),
-                        |year| gridcraft_core::parse::parse_number_text_in_year(t, gridcraft_core::DateSystem::D1900, year),
+                        |year| gridcraft_core::parse::parse_number_text_in_with_year(t, gridcraft_core::DateSystem::D1900, || year.get()),
                     )
                     .is_some() =>
             {
@@ -576,10 +577,15 @@ pub fn aggregate_values_k(function_num: u32, values: &[Value], k: &Value) -> Val
 
 /// [`aggregate_values_k`] with an explicit year for yearless date text coercion.
 pub fn aggregate_values_k_in_year(function_num: u32, values: &[Value], k: &Value, year: i64) -> Value {
-    crate::util::finish(aggregate_impl(function_num, values, Some(k), Some(year)))
+    aggregate_values_k_with_year(function_num, values, k, &crate::CoercionYear::new(year))
 }
 
-fn aggregate_impl(function_num: u32, values: &[Value], k: Option<&Value>, year: Option<i64>) -> R<Value> {
+/// [`aggregate_values_k`] with a lazy year provider for yearless date text coercion.
+pub fn aggregate_values_k_with_year(function_num: u32, values: &[Value], k: &Value, year: &crate::CoercionYear) -> Value {
+    crate::util::finish(aggregate_impl(function_num, values, Some(k), Some(year.clone())))
+}
+
+fn aggregate_impl(function_num: u32, values: &[Value], k: Option<&Value>, coercion_year: Option<crate::CoercionYear>) -> R<Value> {
     let code = if (101..=111).contains(&function_num) { function_num - 100 } else { function_num };
     let mut xs = Vec::new();
     let mut nonempty = 0usize;
@@ -601,7 +607,7 @@ fn aggregate_impl(function_num: u32, values: &[Value], k: Option<&Value>, year: 
         }
     }
     let k = match (code, k) {
-        (14..=19, Some(k)) => crate::util::number(&k.scalar(), year)?,
+        (14..=19, Some(k)) => crate::util::number(&k.scalar(), coercion_year.as_ref())?,
         (14..=19, None) => return Err(CellError::Value),
         _ => 0.0,
     };

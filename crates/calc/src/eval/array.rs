@@ -53,20 +53,18 @@ impl Acc {
 
 // ---------------------------------------------------------------- operators
 
-pub(super) fn contains_text(v: &Value) -> bool {
-    match v {
-        Value::Text(_) => true,
-        Value::Array(array) => array.data.iter().any(contains_text),
-        _ => false,
-    }
-}
-
-pub(super) fn map_unary(v: &Value, f: &dyn Fn(f64) -> Value, plus: bool, sys: gridcraft_core::DateSystem, year: i64) -> Value {
+pub(super) fn map_unary(
+    v: &Value,
+    f: &dyn Fn(f64) -> Value,
+    plus: bool,
+    sys: gridcraft_core::DateSystem,
+    year: &gridcraft_functions::CoercionYear,
+) -> Value {
     match v {
         Value::Array(a) => Value::from(Array { rows: a.rows, cols: a.cols, data: a.data.iter().map(|x| map_unary(x, f, plus, sys, year)).collect() }),
         Value::Error(e) => Value::Error(*e),
         Value::Text(_) if plus => v.clone(),
-        other => match other.to_number_in_year(sys, year) {
+        other => match other.to_number_in_with_year(sys, &mut || year.get()) {
             Ok(n) => f(n),
             Err(e) => Value::Error(e),
         },
@@ -178,6 +176,16 @@ pub fn binary_values(op: BinOp, x: &Value, y: &Value, sys: gridcraft_core::DateS
 }
 
 pub fn binary_values_in_year(op: BinOp, x: &Value, y: &Value, sys: gridcraft_core::DateSystem, year: i64) -> Value {
+    binary_values_with_year(op, x, y, sys, &gridcraft_functions::CoercionYear::new(year))
+}
+
+pub(super) fn binary_values_with_year(
+    op: BinOp,
+    x: &Value,
+    y: &Value,
+    sys: gridcraft_core::DateSystem,
+    year: &gridcraft_functions::CoercionYear,
+) -> Value {
     if op == BinOp::Concat && (matches!(x, Value::Array(_)) || matches!(y, Value::Array(_))) {
         return concat_arrays(x, y, sys, MAX_CONCAT_ARRAY_BYTES);
     }
@@ -188,8 +196,9 @@ pub fn binary_values_in_year(op: BinOp, x: &Value, y: &Value, sys: gridcraft_cor
 /// bytes.
 fn concat_arrays(x: &Value, y: &Value, sys: gridcraft_core::DateSystem, budget: usize) -> Value {
     let mut used = 0usize;
+    let year = gridcraft_functions::CoercionYear::new(2026);
     try_zip2(x, y, |a, b| {
-        let v = binary_scalar(BinOp::Concat, a, b, sys, 2026);
+        let v = binary_scalar(BinOp::Concat, a, b, sys, &year);
         if let Value::Text(t) = &v {
             used = used.saturating_add(t.len());
             if used > budget {
@@ -201,14 +210,15 @@ fn concat_arrays(x: &Value, y: &Value, sys: gridcraft_core::DateSystem, budget: 
     .unwrap_or(Value::Error(CellError::Num))
 }
 
-fn binary_scalar(op: BinOp, a: &Value, b: &Value, sys: gridcraft_core::DateSystem, year: i64) -> Value {
+fn binary_scalar(op: BinOp, a: &Value, b: &Value, sys: gridcraft_core::DateSystem, year: &gridcraft_functions::CoercionYear) -> Value {
     if let Value::Error(e) = a {
         return Value::Error(*e);
     }
     if let Value::Error(e) = b {
         return Value::Error(*e);
     }
-    let num = |f: fn(f64, f64) -> Value| match (a.to_number_in_year(sys, year), b.to_number_in_year(sys, year)) {
+    let num = |f: fn(f64, f64) -> Value| match (a.to_number_in_with_year(sys, &mut || year.get()), b.to_number_in_with_year(sys, &mut || year.get()))
+    {
         (Ok(x), Ok(y)) => f(x, y),
         (Err(e), _) | (_, Err(e)) => Value::Error(e),
     };

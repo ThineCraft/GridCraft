@@ -1,7 +1,7 @@
 //! Date and time functions.
 
 use gridcraft_core::date::{DateTime, datetime_from_serial, days_in_month, is_leap, serial_from_ymd, serial_in_system};
-use gridcraft_core::parse::parse_input_in_year;
+use gridcraft_core::parse::parse_input_in_with_year;
 use gridcraft_core::{CellError, DateSystem, Value};
 
 use crate::util::{R, S, arg, as_array, has, num, num_val, number, number_in, opt_bool, opt_num, scalar, text, to_int};
@@ -15,7 +15,7 @@ const NDI: &[bool] = &[true, true, true, false];
 /// A date serial argument (truncated to whole days when `whole`). Out of range → `#NUM!`.
 fn serial_arg(a: &[Arg], i: usize, sys: DateSystem) -> R<f64> {
     let arg = arg(a, i)?;
-    let n = number_in(&scalar(arg), sys, arg.coercion_year)?;
+    let n = number_in(&scalar(arg), sys, arg.coercion_year.as_ref())?;
     if !(0.0..MAX_SERIAL + 1.0).contains(&n) {
         return Err(CellError::Num);
     }
@@ -232,14 +232,15 @@ fn datedif(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
 }
 
 fn parsed_text(a: &[Arg], c: &mut dyn Ctx) -> R<(f64, &'static str)> {
-    let v = scalar(arg(a, 0)?);
+    let argument = arg(a, 0)?;
+    let v = scalar(argument);
     let Value::Text(t) = v else {
         return Err(match v {
             Value::Error(e) => e,
             _ => CellError::Value,
         });
     };
-    let p = parse_input_in_year(&t, c.date_system(), c.date_year());
+    let p = parse_input_in_with_year(&t, c.date_system(), || argument.coercion_year.as_ref().map_or_else(|| c.date_year(), crate::CoercionYear::get));
     match (p.value, p.format) {
         (Value::Number(n), Some(f)) if f.contains(['d', 'y', 'h']) => Ok((n, f)),
         _ => Err(CellError::Value),
@@ -314,7 +315,7 @@ fn weekend_mask(v: Option<&Arg>) -> R<[bool; 7]> {
         }
         Value::Error(e) => Err(e),
         other => {
-            let k = to_int(number(&other, arg.coercion_year)?)?;
+            let k = to_int(number(&other, arg.coercion_year.as_ref())?)?;
             let mut m = [false; 7];
             match k {
                 1..=7 => {
@@ -337,7 +338,7 @@ fn holidays(v: Option<&Arg>, sys: DateSystem) -> R<Vec<i64>> {
                 Value::Empty => {}
                 Value::Error(e) => return Err(*e),
                 other => {
-                    let n = number_in(other, sys, a.coercion_year)?;
+                    let n = number_in(other, sys, a.coercion_year.as_ref())?;
                     if !(0.0..MAX_SERIAL + 1.0).contains(&n) {
                         return Err(CellError::Num);
                     }

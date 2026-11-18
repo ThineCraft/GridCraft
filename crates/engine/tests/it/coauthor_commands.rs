@@ -212,6 +212,99 @@ fn formula_yearless_dates_read_the_stamped_clock() {
 }
 
 #[test]
+fn ordinary_text_formulas_do_not_read_the_stamp() {
+    let mut editor = GridLiveEditor::new(session_with_sheets(&["Sheet1"])).expect("editor builds");
+
+    for (action, row, input, expected) in [
+        (40, 0, "=LEN(\"x\")", Value::Number(1.0)),
+        (41, 1, "=LEFT(\"text\",2)", Value::text("te")),
+        (42, 2, "=CONCAT(\"a\",\"b\")", Value::text("ab")),
+        (45, 3, "=\"plain\"+0", Value::Error(gridcraft_core::CellError::Value)),
+        (46, 4, "=INDEX({1;2},\"plain\")", Value::Error(gridcraft_core::CellError::Value)),
+        (47, 5, "=YEAR(\"3/2025\")", Value::Number(2025.0)),
+    ] {
+        let payload = live_cell_set(action, row, input, 2026, true);
+        let outcome = editor.apply(&live_entry(&payload, None)).expect("formula applies");
+        assert!(!outcome.read_stamp, "{input} must not report a stamp read");
+        assert_eq!(cell_value(&editor, row), expected);
+    }
+}
+
+#[test]
+fn large_text_range_does_not_read_the_stamp_before_coercion() {
+    let mut session = session_with_sheets(&["Sheet1"]);
+    {
+        let document = session.doc_mut().expect("document exists");
+        let workbook = Arc::make_mut(&mut document.wb);
+        let sheet = workbook.sheet_mut(0).expect("sheet exists");
+        for row in 0..100_000 {
+            sheet.set_value(CellRef::new(row, 0), Value::text("x"));
+        }
+    }
+    let mut editor = GridLiveEditor::new(session).expect("editor builds");
+    let mut next = 0;
+    let change = editor
+        .prepare(43, "cell.set", &json!({"sheet":"Sheet1","cell":"B1","input":"=SUM(A1:A100000)"}), 2026, &mut |count| {
+            let first = collab_live::ids::LiveId(7, next);
+            next = next.checked_add(count).ok_or(collab_live::ids::IdError::NoPlace)?;
+            Ok(first)
+        })
+        .expect("large-range formula prepares");
+
+    let outcome = editor.apply(&live_entry(&change.payload, None)).expect("large-range formula applies");
+
+    assert!(!outcome.read_stamp, "ordinary text in a large range must not read the stamp");
+    let value = editor.session().doc().expect("document exists").wb.sheet(0).expect("sheet exists").value(CellRef::new(0, 1));
+    assert_eq!(value, Value::Number(0.0));
+}
+
+#[test]
+fn first_local_insert_follows_the_new_sheet_but_remote_view_does_not() {
+    let mut sender = GridLiveEditor::new(session_with_sheets(&["Data", "View"])).expect("sender builds");
+    move_view(sender.session_mut(), "C3");
+    let mut remote = GridLiveEditor::new(session_with_sheets(&["Data", "View"])).expect("remote builds");
+    move_view(remote.session_mut(), "D4");
+    let (mut sender_client, sender_id) = start_live_client(&mut sender);
+    let (mut remote_client, _) = start_live_client(&mut remote);
+    let mut next = 0;
+    let change = sender
+        .prepare(44, "home.insertSheet", &json!({"name":"Local"}), 2026, &mut |count| {
+            let first = collab_live::ids::LiveId(7, next);
+            next = next.checked_add(count).ok_or(collab_live::ids::IdError::NoPlace)?;
+            Ok(first)
+        })
+        .expect("insert prepares");
+
+    sender_client.local(&mut sender, change.payload.clone(), change.mode, 4).expect("local insert is accepted");
+    assert_eq!(sender.session().doc().expect("sender document exists").wb.active().expect("active sheet exists").name, "Local");
+
+    remote_client
+        .receive(
+            &mut remote,
+            &live_server_frame(json!({
+                "type":"entry",
+                "entry":{
+                    "seq":1,
+                    "at_ms":1_795_219_200_000i64,
+                    "seed":41,
+                    "kind":"change",
+                    "participant":1,
+                    "client":sender_id,
+                    "local":0,
+                    "seen":0,
+                    "payload":change.payload,
+                    "cancelled":false
+                }
+            })),
+            5,
+        )
+        .expect("remote insert is accepted");
+    let remote_document = remote.session().doc().expect("remote document exists");
+    assert_eq!(remote_document.wb.active().expect("remote active sheet exists").name, "View");
+    assert_eq!(remote_document.selection.active, CellRef::new(3, 3));
+}
+
+#[test]
 fn live_client_reruns_yearless_date_with_the_server_stamp() {
     let mut session = session_with_sheets(&["Sheet1"]);
     session.doc_mut().expect("document exists").calc.fixed_now = Some(gridcraft_core::date::serial_from_unix_ms(2_285_193_600_000.0));

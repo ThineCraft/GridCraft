@@ -4,6 +4,7 @@ use crate::spill_index::{Cover, SpillIndex};
 use gridcraft_core::{Array, CellError, CellRef, RangeRef, Value};
 use gridcraft_formula::Expr;
 use std::cell::Cell;
+use std::rc::Rc;
 
 /// Formulas a formula may calculate on demand one inside the other (each needing one another's
 /// value before it is done). Each level takes stack, so a chain deeper than this is suspended and
@@ -33,7 +34,7 @@ pub(super) struct PassHost<'a> {
     used: HashMap<usize, Option<RangeRef>>,
     rng: &'a mut u64,
     now: f64,
-    pub(super) stamp_read: Cell<bool>,
+    pub(super) stamp_read: Rc<Cell<bool>>,
     cycle: bool,
     pub(super) cycles: Vec<Key>,
     depth: usize,
@@ -102,7 +103,7 @@ impl<'a> PassHost<'a> {
             used: HashMap::default(),
             rng,
             now,
-            stamp_read: Cell::new(false),
+            stamp_read: Rc::new(Cell::new(false)),
             cycle: false,
             cycles: vec![],
             depth: 0,
@@ -765,6 +766,10 @@ impl Host for PassHost<'_> {
     fn now_serial(&self) -> f64 {
         self.stamp_read.set(true);
         self.now
+    }
+    fn coercion_year(&self) -> gridcraft_functions::CoercionYear {
+        let year = gridcraft_core::date::datetime_from_serial(gridcraft_core::DateSystem::D1900, self.now).map_or(2026, |date| i64::from(date.year));
+        gridcraft_functions::CoercionYear::tracked(year, Rc::clone(&self.stamp_read))
     }
     fn random(&mut self) -> f64 {
         self.stamp_read.set(true);

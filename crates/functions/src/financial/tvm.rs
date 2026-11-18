@@ -261,7 +261,7 @@ fn dated_flows(values: &Arg, dates: &Arg) -> R<(Vec<f64>, Vec<f64>)> {
         match y {
             Value::Number(n) => d.push(n.trunc()),
             Value::Error(e) => return Err(*e),
-            Value::Text(_) => d.push(crate::util::number(y, dates.coercion_year)?.trunc()),
+            Value::Text(_) => d.push(crate::util::number(y, dates.coercion_year.as_ref())?.trunc()),
             _ => return Err(CellError::Value),
         }
     }

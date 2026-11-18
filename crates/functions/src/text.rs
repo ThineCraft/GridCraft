@@ -320,13 +320,16 @@ fn unicode(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
 /// VALUE: a blank cell reads as 0, but empty or blank text is not a number (observed:
 /// `VALUE("")` is `#VALUE!`).
 fn value(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
-    match scalar(arg(a, 0)?) {
+    let argument = arg(a, 0)?;
+    match scalar(argument) {
         Value::Number(n) => num_val(n),
         Value::Empty => num_val(0.0),
         Value::Error(e) => Err(e),
-        Value::Text(t) => {
-            gridcraft_core::parse::parse_number_text_in_year(&t, c.date_system(), c.date_year()).ok_or(CellError::Value).and_then(num_val)
-        }
+        Value::Text(t) => gridcraft_core::parse::parse_number_text_in_with_year(&t, c.date_system(), || {
+            argument.coercion_year.as_ref().map_or_else(|| c.date_year(), crate::CoercionYear::get)
+        })
+        .ok_or(CellError::Value)
+        .and_then(num_val),
         _ => Err(CellError::Value),
     }
 }
@@ -366,7 +369,8 @@ fn numbervalue(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
             out.push(c);
         }
     }
-    let mut n = gridcraft_core::parse::parse_number_text_in_year(&out, c.date_system(), c.date_year()).ok_or(CellError::Value)?;
+    let year = c.coercion_year();
+    let mut n = gridcraft_core::parse::parse_number_text_in_with_year(&out, c.date_system(), || year.get()).ok_or(CellError::Value)?;
     for _ in 0..pct {
         n /= 100.0;
     }

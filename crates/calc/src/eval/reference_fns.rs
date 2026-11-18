@@ -100,14 +100,11 @@ impl<'h> Evaluator<'h> {
             Err(e) => return err(e),
         };
         let two = args.len() == 2;
-        let index_year = if rows.as_ref().is_some_and(super::array::contains_text) || cols.as_ref().is_some_and(super::array::contains_text) {
-            gridcraft_core::date::datetime_from_serial(gridcraft_core::DateSystem::D1900, self.host.now_serial())
-                .map_or(2026, |date| i64::from(date.year))
-        } else {
-            2026
-        };
+        let index_year = self.host.coercion_year();
         let num = |v: &Option<Value>| {
-            v.as_ref().map_or(Ok(0.0), |v| v.to_number_in_year(gridcraft_core::DateSystem::D1900, index_year)).map(|n| n.trunc() as i64)
+            v.as_ref()
+                .map_or(Ok(0.0), |v| v.to_number_in_with_year(gridcraft_core::DateSystem::D1900, &mut || index_year.get()))
+                .map(|n| n.trunc() as i64)
         };
         // Arrays of positions pick a value for each: INDEX(A1:C10,{1;2},{1,3}) is 2×2.
         if let (Some(Value::Array(_)), _) | (_, Some(Value::Array(_))) = (&rows, &cols) {
@@ -413,13 +410,8 @@ impl<'h> Evaluator<'h> {
             }
         }
         if let Some(k) = k {
-            let year = if super::array::contains_text(&k) {
-                gridcraft_core::date::datetime_from_serial(gridcraft_core::DateSystem::D1900, self.host.now_serial())
-                    .map_or(2026, |date| i64::from(date.year))
-            } else {
-                2026
-            };
-            return Ev::V(gridcraft_functions::aggregate_values_k_in_year(func, &values, &k, year));
+            let year = self.host.coercion_year();
+            return Ev::V(gridcraft_functions::aggregate_values_k_with_year(func, &values, &k, &year));
         }
         Ev::V(gridcraft_functions::aggregate_values(func, &values))
     }

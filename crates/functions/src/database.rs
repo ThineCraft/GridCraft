@@ -49,7 +49,7 @@ fn field_index(db: &Array, a: &[Arg]) -> R<Option<usize>> {
 }
 
 /// One criteria cell as a matcher. Plain text becomes a "begins with" pattern.
-fn cell_criterion(v: &Value, year: Option<i64>) -> Option<Criterion> {
+fn cell_criterion(v: &Value, year: Option<&crate::CoercionYear>) -> Option<Criterion> {
     match v {
         Value::Empty => None,
         Value::Text(t) => {
@@ -59,7 +59,7 @@ fn cell_criterion(v: &Value, year: Option<i64>) -> Option<Criterion> {
                 && year
                     .map_or_else(
                         || gridcraft_core::parse::parse_number_text(s),
-                        |year| gridcraft_core::parse::parse_number_text_in_year(s, gridcraft_core::DateSystem::D1900, year),
+                        |year| gridcraft_core::parse::parse_number_text_in_with_year(s, gridcraft_core::DateSystem::D1900, || year.get()),
                     )
                     .is_none()
                 && !s.eq_ignore_ascii_case("TRUE")
@@ -80,7 +80,7 @@ fn cell_criterion(v: &Value, year: Option<i64>) -> Option<Criterion> {
 type CriteriaRow = (usize, Vec<(usize, Option<usize>, Criterion)>);
 
 /// Rows (1-based within the database, excluding the header) of matching records.
-fn matching_records(db: &Array, crit: &Array, year: Option<i64>, ctx: &mut dyn Ctx) -> Vec<usize> {
+fn matching_records(db: &Array, crit: &Array, year: Option<&crate::CoercionYear>, ctx: &mut dyn Ctx) -> Vec<usize> {
     // Per criteria row: its index and a list of (criteria column, database column or None when
     // the label is unknown, criterion).
     let mut rows: Vec<CriteriaRow> = Vec::new();
@@ -132,7 +132,7 @@ fn select<'a>(a: &'a [Arg], ctx: &mut dyn Ctx) -> R<Selection<'a>> {
     let db = as_array(dbv);
     let crit = as_array(critv);
     let field = field_index(&db, a)?;
-    let records = matching_records(&db, &crit, a.get(2).and_then(|arg| arg.coercion_year), ctx);
+    let records = matching_records(&db, &crit, a.get(2).and_then(|arg| arg.coercion_year.as_ref()), ctx);
     Ok(Selection { db, field, records })
 }
 

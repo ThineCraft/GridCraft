@@ -244,6 +244,9 @@ impl gridcraft_functions::Ctx for FnHost {
     fn random(&mut self) -> f64 {
         0.5
     }
+    fn coercion_year(&self) -> gridcraft_functions::CoercionYear {
+        gridcraft_functions::CoercionYear::new(2026)
+    }
 }
 
 /// Calls a worksheet function on numeric arguments (and `cumulative` flags as booleans).

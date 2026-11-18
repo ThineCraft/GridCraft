@@ -255,13 +255,18 @@ impl Value {
     }
     /// [`Value::to_number_in`] with `year` used for date text that omits one.
     pub fn to_number_in_year(&self, sys: crate::DateSystem, year: i64) -> Result<f64, CellError> {
+        self.to_number_in_with_year(sys, &mut || year)
+    }
+    /// [`Value::to_number_in`] with a year provider that is called only for date text that omits
+    /// its year.
+    pub fn to_number_in_with_year(&self, sys: crate::DateSystem, year: &mut dyn FnMut() -> i64) -> Result<f64, CellError> {
         match self {
             Value::Empty => Ok(0.0),
             Value::Number(n) => Ok(*n),
             Value::Bool(b) => Ok(if *b { 1.0 } else { 0.0 }),
-            Value::Text(t) => crate::parse::parse_number_text_in_year(t, sys, year).ok_or(CellError::Value),
+            Value::Text(t) => crate::parse::parse_number_text_in_with_year(t, sys, year).ok_or(CellError::Value),
             Value::Error(e) => Err(*e),
-            Value::Array(a) => a.data.first().map(|v| v.to_number_in_year(sys, year)).unwrap_or(Ok(0.0)),
+            Value::Array(a) => a.data.first().map(|v| v.to_number_in_with_year(sys, year)).unwrap_or(Ok(0.0)),
         }
     }
     /// Coercion to text as `&` does it.

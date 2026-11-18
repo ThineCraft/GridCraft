@@ -210,13 +210,8 @@ impl<'h> Evaluator<'h> {
             let mut context = FnCtx { ev: self, criteria: None, lambda: None };
             return gridcraft_functions::call(spec, &evaluated, &mut context).pipe(Ev::V);
         }
-        let year = if super::array::contains_text(&index) {
-            gridcraft_core::date::datetime_from_serial(gridcraft_core::DateSystem::D1900, self.host.now_serial())
-                .map_or(2026, |date| i64::from(date.year))
-        } else {
-            2026
-        };
-        let index = match index.to_number_in_year(gridcraft_core::DateSystem::D1900, year) {
+        let year = self.host.coercion_year();
+        let index = match index.to_number_in_with_year(gridcraft_core::DateSystem::D1900, &mut || year.get()) {
             Ok(number) => number.trunc() as i64,
             Err(error) => return err(error),
         };

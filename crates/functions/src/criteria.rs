@@ -2,16 +2,17 @@
 
 use std::cmp::Ordering;
 
-use gridcraft_core::parse::{parse_number_text, parse_number_text_in_year};
+use crate::CoercionYear;
+use gridcraft_core::parse::parse_number_text;
 use gridcraft_core::{CellError, Value, compare_numbers, compare_text};
 
 /// Longest text criterion COUNTIF and its relatives accept, in UTF-16 code units as Excel
 /// counts them (😀 is two units); a longer one is `#VALUE!`.
 const MAX_CRITERION_UTF16_UNITS: usize = 255;
 
-fn parse_number(text: &str, year: Option<i64>) -> Option<f64> {
+fn parse_number(text: &str, year: Option<&CoercionYear>) -> Option<f64> {
     match year {
-        Some(year) => parse_number_text_in_year(text, gridcraft_core::DateSystem::D1900, year),
+        Some(year) => gridcraft_core::parse::parse_number_text_in_with_year(text, gridcraft_core::DateSystem::D1900, || year.get()),
         None => parse_number_text(text),
     }
 }
@@ -53,7 +54,7 @@ pub(crate) struct Criterion {
     operand: Operand,
     /// The criterion was a bare `""` (or empty cell text): matches blanks and empty strings.
     bare_empty: bool,
-    coercion_year: Option<i64>,
+    coercion_year: Option<CoercionYear>,
 }
 
 impl Criterion {
@@ -63,12 +64,12 @@ impl Criterion {
         Criterion::parse_in_year(v, None)
     }
 
-    pub(crate) fn parse_in_year(v: &Value, year: Option<i64>) -> Criterion {
+    pub(crate) fn parse_in_year(v: &Value, year: Option<&CoercionYear>) -> Criterion {
         match v {
-            Value::Number(n) => Criterion { op: Op::Eq, operand: Operand::Number(*n), bare_empty: false, coercion_year: year },
-            Value::Bool(b) => Criterion { op: Op::Eq, operand: Operand::Bool(*b), bare_empty: false, coercion_year: year },
-            Value::Error(e) => Criterion { op: Op::Eq, operand: Operand::Error(*e), bare_empty: false, coercion_year: year },
-            Value::Empty => Criterion { op: Op::Eq, operand: Operand::Number(0.0), bare_empty: false, coercion_year: year },
+            Value::Number(n) => Criterion { op: Op::Eq, operand: Operand::Number(*n), bare_empty: false, coercion_year: year.cloned() },
+            Value::Bool(b) => Criterion { op: Op::Eq, operand: Operand::Bool(*b), bare_empty: false, coercion_year: year.cloned() },
+            Value::Error(e) => Criterion { op: Op::Eq, operand: Operand::Error(*e), bare_empty: false, coercion_year: year.cloned() },
+            Value::Empty => Criterion { op: Op::Eq, operand: Operand::Number(0.0), bare_empty: false, coercion_year: year.cloned() },
             Value::Array(a) => Criterion::parse_in_year(a.data.first().unwrap_or(&Value::Empty), year),
             Value::Text(t) => Criterion::parse_text(t, year),
         }
@@ -78,7 +79,7 @@ impl Criterion {
     /// functions: like `parse`, but text longer than 255 UTF-16 code units is `#VALUE!`, as in
     /// Excel (checked on Excel 2016 and Microsoft 365: `"a"×254 & "😀"` is 255 characters but
     /// 256 units, and is `#VALUE!`).
-    pub(crate) fn parse_arg_in_year(v: &Value, year: Option<i64>) -> Result<Criterion, CellError> {
+    pub(crate) fn parse_arg_in_year(v: &Value, year: Option<&CoercionYear>) -> Result<Criterion, CellError> {
         match v {
             Value::Array(a) => Criterion::parse_arg_in_year(a.data.first().unwrap_or(&Value::Empty), year),
             // A UTF-8 string has at least as many bytes as UTF-16 units, so short text skips the count.
@@ -93,7 +94,7 @@ impl Criterion {
     /// doesn't reject a longer text criterion there: it matches its first 255 UTF-16 code units
     /// (checked on Excel 2016 and Microsoft 365 with COUNTIFS, SUMIFS, AVERAGEIFS, MAXIFS and
     /// MINIFS). A cut through a surrogate pair matches nothing; see `Operand::CutText`.
-    pub(crate) fn parse_arg_truncated_in_year(v: &Value, year: Option<i64>) -> Criterion {
+    pub(crate) fn parse_arg_truncated_in_year(v: &Value, year: Option<&CoercionYear>) -> Criterion {
         match v {
             Value::Array(a) => Criterion::parse_arg_truncated_in_year(a.data.first().unwrap_or(&Value::Empty), year),
             Value::Text(t) if t.len() > MAX_CRITERION_UTF16_UNITS => {
@@ -105,7 +106,7 @@ impl Criterion {
                         }
                         // The cut falls between the two halves of `c`.
                         let (op, rest) = split_op(&t[..i]);
-                        return Criterion { op, operand: Operand::CutText(rest.to_string()), bare_empty: false, coercion_year: year };
+                        return Criterion { op, operand: Operand::CutText(rest.to_string()), bare_empty: false, coercion_year: year.cloned() };
                     }
                     units += c.len_utf16();
                 }
@@ -115,9 +116,9 @@ impl Criterion {
         }
     }
 
-    fn parse_text(t: &str, year: Option<i64>) -> Criterion {
+    fn parse_text(t: &str, year: Option<&CoercionYear>) -> Criterion {
         if t.is_empty() {
-            return Criterion { op: Op::Eq, operand: Operand::Blank, bare_empty: true, coercion_year: year };
+            return Criterion { op: Op::Eq, operand: Operand::Blank, bare_empty: true, coercion_year: year.cloned() };
         }
         let (op, rest) = split_op(t);
         let operand = if rest.is_empty() {
@@ -133,7 +134,7 @@ impl Criterion {
         } else {
             Operand::Text(rest.to_string())
         };
-        Criterion { op, operand, bare_empty: false, coercion_year: year }
+        Criterion { op, operand, bare_empty: false, coercion_year: year.cloned() }
     }
 
     fn matches_blank(&self, v: &Value) -> bool {
@@ -154,7 +155,7 @@ impl Criterion {
         let cell = match v {
             Value::Number(x) => Some(*x),
             // Numeric text matches only for equality (COUNTIF("1") counts text "1").
-            Value::Text(t) if matches!(self.op, Op::Eq | Op::Ne) => parse_number(t, self.coercion_year),
+            Value::Text(t) if matches!(self.op, Op::Eq | Op::Ne) => parse_number(t, self.coercion_year.as_ref()),
             _ => None,
         };
         match cell {

@@ -21,9 +21,9 @@ fn criteria_mask(a: &[Arg], first_pair: usize, rows: usize, cols: usize) -> R<Ve
         }
         let scalar = crit.value.scalar();
         let c = if single_pair {
-            Criterion::parse_arg_in_year(&scalar, crit.coercion_year)?
+            Criterion::parse_arg_in_year(&scalar, crit.coercion_year.as_ref())?
         } else {
-            Criterion::parse_arg_truncated_in_year(&scalar, crit.coercion_year)
+            Criterion::parse_arg_truncated_in_year(&scalar, crit.coercion_year.as_ref())
         };
         for (m, v) in mask.iter_mut().zip(r.iter()) {
             if *m && !c.matches(v) {
@@ -88,7 +88,7 @@ pub(super) fn minifs(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
 pub(super) fn countif(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     let range = as_array(&crate::util::arg(a, 0)?.value);
     let criterion = crate::util::arg(a, 1)?;
-    let c = Criterion::parse_arg_in_year(&criterion.value.scalar(), criterion.coercion_year)?;
+    let c = Criterion::parse_arg_in_year(&criterion.value.scalar(), criterion.coercion_year.as_ref())?;
     num_val(range.iter().filter(|v| c.matches(v)).count() as f64)
 }
 
@@ -98,7 +98,7 @@ pub(super) fn countif(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
 fn if_numbers(a: &[Arg]) -> R<Vec<f64>> {
     let range = as_array(&crate::util::arg(a, 0)?.value);
     let criterion = crate::util::arg(a, 1)?;
-    let c = Criterion::parse_arg_in_year(&criterion.value.scalar(), criterion.coercion_year)?;
+    let c = Criterion::parse_arg_in_year(&criterion.value.scalar(), criterion.coercion_year.as_ref())?;
     let sum_range = if has(a, 2) { Some(as_array(&crate::util::arg(a, 2)?.value)) } else { None };
     let mut out = Vec::new();
     for r in 0..range.rows {
