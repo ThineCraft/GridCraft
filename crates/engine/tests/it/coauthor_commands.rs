@@ -171,6 +171,30 @@ fn entry_stamp_controls_now_and_rand() {
 }
 
 #[test]
+fn stamped_nonvolatile_edit_keeps_rng_cursor() {
+    let mut stamped = GridLiveEditor::new(session_with_sheets(&["Sheet1"])).expect("stamped editor builds");
+    {
+        let document = stamped.session_mut().doc_mut().expect("stamped document exists");
+        document.calc.fixed_now = Some(46_000.0);
+        document.calc.set_rand_seed(77);
+    }
+    let known_state = stamped.snapshot();
+    let mut control = GridLiveEditor::new(session_with_sheets(&["Sheet1"])).expect("control editor builds");
+    control.restore(&known_state);
+
+    let plain = live_cell_set(10, 0, "plain", 2026, false);
+    let outcome =
+        stamped.apply(&live_entry(&plain, Some(Stamp { at_ms: 1_791_633_600_000, seed: 0x1234_5678 }))).expect("stamped nonvolatile edit applies");
+    assert!(!outcome.read_stamp, "the plain edit does not consume its stamp");
+
+    let rand = live_cell_set(11, 1, "=RAND()", 2026, true);
+    stamped.apply(&live_entry(&rand, None)).expect("unstamped RAND applies after the unread stamp");
+    control.apply(&live_entry(&rand, None)).expect("the same unstamped RAND applies on the control branch");
+
+    assert_eq!(cell_value(&stamped, 1), cell_value(&control, 1), "an unread stamp leaves the RNG cursor unchanged");
+}
+
+#[test]
 fn formula_yearless_dates_read_the_stamped_clock() {
     let mut session = session_with_sheets(&["Sheet1"]);
     session.doc_mut().expect("document exists").calc.fixed_now = Some(gridcraft_core::date::serial_from_unix_ms(2_285_193_600_000.0));

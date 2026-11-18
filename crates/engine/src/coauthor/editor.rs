@@ -91,6 +91,10 @@ impl GridLiveEditor {
         self.applying_seq
     }
 
+    pub(super) fn local_action_high_water(&self) -> u64 {
+        self.local_action_high_water
+    }
+
     fn apply_stamp(&mut self, stamp: Stamp) {
         if let Ok(document) = self.session.doc_mut() {
             document.calc.fixed_now = Some(gridcraft_core::date::serial_from_unix_ms(stamp.at_ms as f64));

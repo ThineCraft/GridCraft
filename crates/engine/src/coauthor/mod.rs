@@ -123,8 +123,13 @@ impl GridCoauthor {
 
     pub fn receive(&mut self, frame: &str, now_ms: u64) -> Result<Step, GridLiveError> {
         let view = self.editor.capture_view();
+        let local_action_high_water = self.editor.local_action_high_water();
         let result = self.client.receive(&mut self.editor, frame, now_ms);
-        if let Some(view) = view.as_ref() {
+        // A first WaitForServer application may intentionally change the view at acknowledgement;
+        // every replay and remote application must keep the view captured around the whole receive.
+        if self.editor.local_action_high_water() == local_action_high_water
+            && let Some(view) = view.as_ref()
+        {
             self.editor.restore_view(view);
         }
         Ok(result?)

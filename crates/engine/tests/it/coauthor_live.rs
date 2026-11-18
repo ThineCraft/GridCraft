@@ -243,6 +243,36 @@ fn large_structural_commands_wait_for_server() {
 }
 
 #[test]
+fn wait_for_server_acknowledgement_activates_first_local_sheet() {
+    let mut server = DeterministicServer::new();
+    let mut local = GridCoauthor::new(live_config(), GridLiveEditor::new(session_with_stored_cells(&[100_000])).expect("local editor builds"));
+    let mut remote = GridCoauthor::new(live_config(), GridLiveEditor::new(session_with_stored_cells(&[100_000])).expect("remote editor builds"));
+    let local_place = server.join(&mut local, 10);
+    server.join(&mut remote, 20);
+    select(remote.editor_mut().session_mut(), "Sheet1", "D4");
+
+    let proposal = submit(&mut local, &server, &local_place, "home.insertSheet", json!({"name":"Waited"}), 30);
+    let local_document = local.editor().session().doc().expect("local document exists");
+    assert_eq!(local_document.wb.sheets.len(), 1, "the WaitForServer insert stays hidden before acknowledgement");
+    assert_eq!(local_document.wb.active().expect("active sheet exists").name, "Sheet1");
+
+    let ordered = server.order(&proposal, 1_795_219_200_000, 61);
+    server.deliver(&mut local, &ordered, 40);
+    assert_eq!(
+        local.editor().session().doc().expect("local document exists").wb.active().expect("active sheet exists").name,
+        "Waited",
+        "the acknowledgement performs the first local application and follows its new sheet"
+    );
+
+    server.deliver(&mut remote, &ordered, 41);
+    assert_eq!(
+        active_view(remote.editor()),
+        ("Sheet1".into(), CellRef::new(3, 3)),
+        "the same entry is remote here and keeps this editor's current view"
+    );
+}
+
+#[test]
 fn pending_rerun_preserves_existing_and_new_sheet_views() {
     let mut server = DeterministicServer::new();
     let mut local = GridCoauthor::new(live_config(), GridLiveEditor::new(session_with_sheets(&["Data", "View"])).expect("local editor builds"));
