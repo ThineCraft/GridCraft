@@ -3,6 +3,7 @@ use gridcraft_engine::coauthor::{
     CoauthorError, GRIDCRAFT_LIVE_FORMAT, IdentityPosition, IdentityStructural, SharedCommand, TargetGone, WorkbookIds, decode_entry, encode_command,
     is_shared_command, resolve_command,
 };
+use gridcraft_engine::fingerprint::{DocId, fingerprint};
 use gridcraft_engine::{DocState, Session, Trust};
 use gridcraft_formula::{parse, print};
 use gridcraft_model::{Sheet, Workbook};
@@ -29,6 +30,136 @@ fn session_with_sheets(names: &[&str]) -> Session {
     let mut session = Session::new();
     session.add_document(DocState::new(workbook, None, "Book1".into(), Trust::Local));
     session
+}
+
+fn explicit_command_session() -> Session {
+    let mut session = session_with_sheets(&["Data", "View"]);
+    session
+        .execute("range.setValues", json!({"sheet":"Data","range":"A1:C4","values":[["Name","Group","Value"],["A","x",1],["B","y",2],["C","x",3]]}))
+        .expect("filter data is entered");
+    session.execute("home.fontColor", json!({"sheet":"View","range":"A1","color":{"theme":4,"tint":0.0}})).expect("theme active style is set");
+    session.execute("home.fontColor", json!({"sheet":"View","range":"B1","color":"#123456"})).expect("RGB active style is set");
+    session.execute("home.fontSize", json!({"sheet":"View","range":"A1","size":8})).expect("small active style is set");
+    session.execute("home.fontSize", json!({"sheet":"View","range":"B1","size":24})).expect("large active style is set");
+    session.execute("home.underline", json!({"sheet":"View","range":"A1","on":true,"style":"single"})).expect("underlined active style is set");
+    session.execute("home.fontColor", json!({"sheet":"Data","range":"A1","color":"#654321"})).expect("RGB target style is set");
+    session.execute("home.fontColor", json!({"sheet":"Data","range":"A2","color":{"theme":6,"tint":0.0}})).expect("theme target style is set");
+    session
+}
+
+fn move_view(session: &mut Session, cell: &str) {
+    session.execute("sheet.activate", json!({"sheet":"View"})).expect("view sheet activates");
+    session.execute("selection.set", json!({"range":cell})).expect("view selection moves");
+}
+
+fn assert_entered_equal(a: &Session, b: &Session) {
+    assert_eq!(fingerprint(a, DocId(0)).entered, fingerprint(b, DocId(0)).entered);
+}
+
+#[test]
+fn filter_commands_ignore_the_receivers_view() {
+    let mut a = explicit_command_session();
+    let mut b = explicit_command_session();
+    a.execute("sheet.activate", json!({"sheet":"Data"})).expect("target sheet activates");
+    a.execute("selection.set", json!({"range":"C4"})).expect("target selection moves");
+    move_view(&mut b, "B1");
+
+    let commands = [
+        ("data.filterSet", json!({"sheet":"Data","range":"A1:C4"})),
+        ("data.filterBy", json!({"sheet":"Data","range":"A1:C4","column":"B","values":["x"]})),
+        ("data.reapply", json!({"sheet":"Data","range":"A1:C4"})),
+        ("data.clearFilter", json!({"sheet":"Data","range":"A1:C4"})),
+    ];
+    for (id, params) in commands {
+        let left = a.execute(id, params.clone()).unwrap_or_else(|error| panic!("{id} failed in the target view: {error}"));
+        let right = b.execute(id, params).unwrap_or_else(|error| panic!("{id} failed in the unrelated view: {error}"));
+        assert_eq!(left, right, "{id} returned a view-dependent result");
+        assert_entered_equal(&a, &b);
+    }
+
+    for session in [&a, &b] {
+        let document = session.doc().expect("document exists");
+        let data = document.wb.sheet(document.wb.sheet_index("Data").expect("Data exists")).expect("Data exists");
+        let view = document.wb.sheet(document.wb.sheet_index("View").expect("View exists")).expect("View exists");
+        assert_eq!(data.autofilter.as_ref().map(|filter| filter.range.a1()), Some("A1:C4".into()));
+        assert!(view.autofilter.is_none());
+    }
+
+    let params = json!({"sheet":"Data","range":"A1:C4"});
+    assert_eq!(
+        a.execute("data.filterRemove", params.clone()).expect("target filter is removed"),
+        b.execute("data.filterRemove", params).expect("same filter is removed")
+    );
+    assert_entered_equal(&a, &b);
+}
+
+#[test]
+fn filter_set_and_remove_are_idempotent() {
+    let mut session = explicit_command_session();
+    let target = json!({"sheet":"Data","range":"A1:C4"});
+
+    session.execute("data.filterSet", target.clone()).expect("filter is set");
+    let set = fingerprint(&session, DocId(0)).entered;
+    session.execute("data.filterSet", target.clone()).expect("setting the same filter is harmless");
+    assert_eq!(fingerprint(&session, DocId(0)).entered, set);
+
+    let before_mismatch = fingerprint(&session, DocId(0)).entered;
+    assert!(session.execute("data.filterSet", json!({"sheet":"Data","range":"A1:B4"})).is_err());
+    assert_eq!(fingerprint(&session, DocId(0)).entered, before_mismatch, "a mismatched range must not replace the filter");
+
+    session.execute("data.filterRemove", target.clone()).expect("filter is removed");
+    let removed = fingerprint(&session, DocId(0)).entered;
+    session.execute("data.filterRemove", target).expect("removing an absent filter is harmless");
+    assert_eq!(fingerprint(&session, DocId(0)).entered, removed);
+}
+
+#[test]
+fn underline_with_on_ignores_active_cell() {
+    let mut a = explicit_command_session();
+    let mut b = explicit_command_session();
+    move_view(&mut a, "A1");
+    move_view(&mut b, "B1");
+    let params = json!({"sheet":"Data","range":"C2:C3","on":true,"style":"single"});
+
+    assert_eq!(
+        a.execute("home.underline", params.clone()).expect("explicit underline applies"),
+        b.execute("home.underline", params).expect("explicit underline applies")
+    );
+    assert_entered_equal(&a, &b);
+}
+
+#[test]
+fn font_step_uses_the_sent_size() {
+    let mut a = explicit_command_session();
+    let mut b = explicit_command_session();
+    move_view(&mut a, "A1");
+    move_view(&mut b, "B1");
+    let params = json!({"sheet":"Data","range":"C2:C3","size":14});
+
+    assert_eq!(
+        a.execute("home.increaseFontSize", params.clone()).expect("explicit size applies"),
+        b.execute("home.increaseFontSize", params).expect("explicit size applies")
+    );
+    assert_entered_equal(&a, &b);
+    for session in [&mut a, &mut b] {
+        assert_eq!(session.execute("cell.get", json!({"sheet":"Data","cell":"C2"})).expect("target reads")["style"]["font"]["size"], 14.0);
+    }
+}
+
+#[test]
+fn format_cells_validation_uses_each_target_not_active_cell() {
+    let mut a = explicit_command_session();
+    let mut b = explicit_command_session();
+    move_view(&mut a, "A1");
+    move_view(&mut b, "B1");
+    let params = json!({"sheet":"Data","range":"A1:A2","style":{"font":{"color":{"Theme":[5,0]}}}});
+    let before_a = fingerprint(&a, DocId(0)).entered;
+    let before_b = fingerprint(&b, DocId(0)).entered;
+
+    assert!(a.execute("home.formatCells", params.clone()).is_err(), "every target style must validate before editing");
+    assert!(b.execute("home.formatCells", params).is_err(), "validation must not depend on the active style");
+    assert_eq!(fingerprint(&a, DocId(0)).entered, before_a);
+    assert_eq!(fingerprint(&b, DocId(0)).entered, before_b);
 }
 
 #[test]

@@ -43,6 +43,70 @@ pub(super) fn toggle_filter(s: &mut Session, p: &Json) -> Result<Json> {
     install_filter(s, p)
 }
 
+pub(super) fn set_filter(s: &mut Session, p: &Json) -> Result<Json> {
+    let (sheet, range) = required_filter_target(s, p, "data.filterSet")?;
+    crate::cmd::refuse_unless_allowed(s, sheet, "Filtering", |protection| protection.autofilter)?;
+    if let Some(existing) = s.doc()?.wb.sheet(sheet).and_then(|target| target.autofilter.as_ref()) {
+        if existing.range == range {
+            return Ok(json!({"filter": true, "range": range.a1()}));
+        }
+        return Err(bad("data.filterSet", "the sheet already has a filter on a different range"));
+    }
+    edit(s, |cx| {
+        cx.sheet_mut(sheet)?.autofilter = Some(AutoFilter { range, criteria: vec![] });
+        cx.structural = true;
+        Ok(json!({"filter": true, "range": range.a1()}))
+    })
+}
+
+pub(super) fn remove_filter(s: &mut Session, p: &Json) -> Result<Json> {
+    let (sheet, range) = required_filter_target(s, p, "data.filterRemove")?;
+    crate::cmd::refuse_unless_allowed(s, sheet, "Filtering", |protection| protection.autofilter)?;
+    let Some(existing) = s.doc()?.wb.sheet(sheet).and_then(|target| target.autofilter.as_ref()) else {
+        return Ok(json!({"filter": false}));
+    };
+    if existing.range != range {
+        return Err(bad("data.filterRemove", "the sheet filter is on a different range"));
+    }
+    edit(s, |cx| {
+        let target = cx.sheet_mut(sheet)?;
+        let filtered: Vec<u32> = target.rows.keys().copied().filter(|row| target.is_row_filtered(*row)).collect();
+        target.autofilter = None;
+        for row in filtered {
+            if let Some(info) = target.rows.get_mut(&row) {
+                info.hidden = false;
+            }
+        }
+        cx.structural = true;
+        Ok(json!({"filter": false}))
+    })
+}
+
+fn required_filter_target(s: &Session, p: &Json, command: &str) -> Result<(usize, RangeRef)> {
+    if p.get("sheet").is_none() {
+        return Err(bad(command, "missing `sheet`"));
+    }
+    if p.get("range").is_none() {
+        return Err(bad(command, "missing `range`"));
+    }
+    data_target(s, p, command)
+}
+
+fn existing_filter_target(s: &Session, p: &Json, command: &str) -> Result<(usize, Option<AutoFilter>)> {
+    let explicit = p.get("range").is_some();
+    let (sheet, requested) = data_target(s, p, command)?;
+    let filter = s.doc()?.wb.sheet(sheet).and_then(|target| target.autofilter.clone());
+    if explicit {
+        let Some(filter) = filter else { return Err(bad(command, "the named filter does not exist")) };
+        if filter.range != requested {
+            return Err(bad(command, "the sheet filter is on a different range"));
+        }
+        Ok((sheet, Some(filter)))
+    } else {
+        Ok((sheet, filter))
+    }
+}
+
 /// Turn a sheet AutoFilter on over `p.range`, or over the data range of the selection.
 fn install_filter(s: &mut Session, p: &Json) -> Result<Json> {
     let (sheet, mut r) = data_target(s, p, "data.filter")?;
@@ -62,11 +126,10 @@ fn install_filter(s: &mut Session, p: &Json) -> Result<Json> {
 }
 
 pub(super) fn filter_by(s: &mut Session, p: &Json) -> Result<Json> {
-    let sheet = s.doc()?.wb.active_sheet();
+    let (sheet, filter) = existing_filter_target(s, p, "data.filterBy")?;
     crate::cmd::refuse_unless_allowed(s, sheet, "Filtering", |p| p.autofilter)?;
-    let Some(sh) = s.doc()?.wb.sheet(sheet) else { return Err(EngineError::NoDocument) };
-    let af = match &sh.autofilter {
-        Some(a) => a.clone(),
+    let af = match filter {
+        Some(filter) => filter,
         None => {
             install_filter(s, &json!({}))?;
             s.doc()?.wb.sheet(sheet).and_then(|sh| sh.autofilter.clone()).ok_or_else(|| EngineError::Other("no filter".into()))?
@@ -268,8 +331,8 @@ pub(crate) fn apply_filter(wb: &mut Workbook, sheet: usize) {
     }
 }
 
-pub(super) fn clear_filter(s: &mut Session, _: &Json) -> Result<Json> {
-    let sheet = s.doc()?.wb.active_sheet();
+pub(super) fn clear_filter(s: &mut Session, p: &Json) -> Result<Json> {
+    let (sheet, _) = existing_filter_target(s, p, "data.clearFilter")?;
     crate::cmd::refuse_unless_allowed(s, sheet, "Filtering", |p| p.autofilter)?;
     edit(s, |cx| {
         let sh = cx.sheet_mut(sheet)?;
@@ -282,8 +345,8 @@ pub(super) fn clear_filter(s: &mut Session, _: &Json) -> Result<Json> {
     })
 }
 
-pub(super) fn reapply(s: &mut Session, _: &Json) -> Result<Json> {
-    let sheet = s.doc()?.wb.active_sheet();
+pub(super) fn reapply(s: &mut Session, p: &Json) -> Result<Json> {
+    let (sheet, _) = existing_filter_target(s, p, "data.reapply")?;
     crate::cmd::refuse_unless_allowed(s, sheet, "Filtering", |p| p.autofilter)?;
     edit(s, |cx| {
         apply_filter(&mut cx.wb, sheet);

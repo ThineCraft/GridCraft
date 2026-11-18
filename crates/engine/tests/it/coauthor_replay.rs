@@ -642,6 +642,16 @@ fn explicit_targets_leave_the_active_sheet_alone() {
         on("home.alignMiddle", json!({"range": "A1:B2"})),
         on("home.alignBottom", json!({"range": "A1:B2"})),
         on("home.wrapText", json!({"range": "A1:B2", "on": true})),
+        on("home.underline", json!({"range": "A1:B2", "on": true, "style": "single"})),
+        on("home.doubleUnderline", json!({"range": "A1:B2", "on": true, "style": "double"})),
+        on("home.increaseFontSize", json!({"range": "A1:B2", "size": 14})),
+        on("home.decreaseFontSize", json!({"range": "A1:B2", "size": 10})),
+        on("home.formatCells", json!({"range": "A1:B2", "style": {"font": {"strike": true}}})),
+        on("data.filterSet", json!({"range": "A1:B2"})),
+        on("data.filterBy", json!({"range": "A1:B2", "column": "A", "values": ["1"]})),
+        on("data.clearFilter", json!({"range": "A1:B2"})),
+        on("data.reapply", json!({"range": "A1:B2"})),
+        on("data.filterRemove", json!({"range": "A1:B2"})),
         on("home.insertRows", json!({"rows": "1:2"})),
         on("home.deleteRows", json!({"rows": "1:1"})),
         on("home.insertColumns", json!({"cols": "A:A"})),
@@ -675,6 +685,21 @@ fn explicit_targets_leave_the_active_sheet_alone() {
     let mut failures = Vec::new();
     for step in &steps {
         let mut s = base();
+        match step.id.as_str() {
+            "data.filterBy" | "data.filterRemove" => {
+                apply(&mut s, &on("data.filterSet", json!({"range": "A1:B2"}))).unwrap();
+            }
+            "data.clearFilter" => {
+                apply(&mut s, &on("data.filterSet", json!({"range": "A1:B2"}))).unwrap();
+                apply(&mut s, &on("data.filterBy", json!({"range": "A1:B2", "column": "A", "values": ["1"]}))).unwrap();
+            }
+            "data.reapply" => {
+                apply(&mut s, &on("data.filterSet", json!({"range": "A1:B2"}))).unwrap();
+                apply(&mut s, &on("data.filterBy", json!({"range": "A1:B2", "column": "A", "values": ["1"]}))).unwrap();
+                apply(&mut s, &on("cell.set", json!({"cell": "A2", "input": "1"}))).unwrap();
+            }
+            _ => {}
+        }
         let (fp, cells) = (fingerprint(&s, DocId(0)), sheet1(&s));
         if let Err(e) = apply(&mut s, step) {
             failures.push(format!("`{}` failed: {e}", step.id));

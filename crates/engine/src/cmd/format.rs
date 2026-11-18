@@ -333,8 +333,10 @@ fn underline(s: &mut Session, p: &Json) -> Result<Json> {
         "none" => Underline::None,
         _ => Underline::Single,
     };
-    let cur = active_style(s)?.font.underline;
-    let on = bool_param(p, "on").unwrap_or(cur != style);
+    let on = match bool_param(p, "on") {
+        Some(on) => on,
+        None => active_style(s)?.font.underline != style,
+    };
     let u = if on { style } else { Underline::None };
     apply_style(s, p, |st| st.font.underline = u)?;
     Ok(json!({"on": on}))
@@ -361,9 +363,15 @@ fn font_size(s: &mut Session, p: &Json) -> Result<Json> {
 const SIZES: [f32; 16] = [8.0, 9.0, 10.0, 11.0, 12.0, 14.0, 16.0, 18.0, 20.0, 24.0, 28.0, 36.0, 48.0, 72.0, 96.0, 409.0];
 
 fn step_font(s: &mut Session, p: &Json, up: bool) -> Result<Json> {
-    let cur = active_style(s)?.font.size;
-    let next =
-        if up { SIZES.iter().copied().find(|x| *x > cur).unwrap_or(409.0) } else { SIZES.iter().rev().copied().find(|x| *x < cur).unwrap_or(1.0) };
+    let next = if let Some(size) = f64_param(p, "size") {
+        if !(1.0..=409.0).contains(&size) {
+            return Err(EngineError::Other("The number must be between 1 and 409.".into()));
+        }
+        ((size * 2.0).round() / 2.0) as f32
+    } else {
+        let cur = active_style(s)?.font.size;
+        if up { SIZES.iter().copied().find(|x| *x > cur).unwrap_or(409.0) } else { SIZES.iter().rev().copied().find(|x| *x < cur).unwrap_or(1.0) }
+    };
     apply_style(s, p, |st| st.font.size = next)?;
     Ok(json!({"size": next}))
 }
@@ -549,10 +557,7 @@ fn format_cells(s: &mut Session, p: &Json) -> Result<Json> {
         s.ui_requests.push(crate::UiRequest::Dialog("formatCells".into(), json!({})));
         return ok();
     };
-    // Validate by merging into the active style once.
-    let base = serde_json::to_value(active_style(s)?).map_err(|e| EngineError::Other(e.to_string()))?;
-    let merged = merge_json(base, &patch);
-    let _: Style = serde_json::from_value(merged).map_err(|e| bad("home.formatCells", e.to_string()))?;
+    validate_style_patch_for_targets(s, p, &patch)?;
     apply_style(s, p, |st| {
         if let Ok(cur) = serde_json::to_value(&*st)
             && let Ok(new) = serde_json::from_value::<Style>(merge_json(cur, &patch))
@@ -560,6 +565,41 @@ fn format_cells(s: &mut Session, p: &Json) -> Result<Json> {
             *st = new;
         }
     })
+}
+
+fn validate_style_patch_for_targets(s: &Session, p: &Json, patch: &Json) -> Result<()> {
+    let sheet = target_sheet(s, p)?;
+    let ranges = target_ranges(s, p)?;
+    let document = s.doc()?;
+    let target = document.wb.sheet(sheet).ok_or(EngineError::NoDocument)?;
+    let mut styles = std::collections::HashSet::new();
+    for range in ranges {
+        let full_rows = range.is_full_rows();
+        let full_cols = range.is_full_cols();
+        if full_rows || full_cols {
+            if full_rows && !full_cols {
+                for row in range.start.row..=range.end.row {
+                    styles.insert(target.rows.get(&row).and_then(|info| info.style).unwrap_or_default());
+                }
+            } else {
+                for col in range.start.col..=range.end.col {
+                    styles.insert(target.cols.get(&col).and_then(|info| info.style).unwrap_or_default());
+                }
+            }
+            styles.extend(target.cells.iter_range(range).map(|(_, cell)| cell.style));
+            continue;
+        }
+        if range.count() > 4_000_000 {
+            return Err(bad("format", "selection too large to format cell by cell"));
+        }
+        styles.extend(range.iter().map(|cell| target.style_id(cell)));
+    }
+    for style in styles {
+        let base = serde_json::to_value(document.wb.styles.get(style)).map_err(|error| EngineError::Other(error.to_string()))?;
+        let merged = merge_json(base, patch);
+        let _: Style = serde_json::from_value(merged).map_err(|error| bad("home.formatCells", error.to_string()))?;
+    }
+    Ok(())
 }
 
 /// The style patch with camelCase keys (`numFmt`, `diagDown`, as documented) renamed to the

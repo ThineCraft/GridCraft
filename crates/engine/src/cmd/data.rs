@@ -25,7 +25,7 @@ mod validation;
 
 pub use filter::filter_values;
 pub(crate) use filter::{apply_filter, grow_autofilter};
-use filter::{clear_filter, filter_by, reapply, toggle_filter};
+use filter::{clear_filter, filter_by, reapply, remove_filter, set_filter, toggle_filter};
 use grouping::{detail, group, outline_settings, show_levels, subtotal};
 use sort::{quick_sort, sort};
 #[cfg(test)]
@@ -68,8 +68,10 @@ pub fn specs() -> Vec<CommandSpec> {
             has_doc,
             filter_by
         ),
-        cmd!("data.clearFilter", "Clear", ["Data", "Sort & Filter"], None, "{}", has_doc, clear_filter),
-        cmd!("data.reapply", "Reapply", ["Data", "Sort & Filter"], None, "{}", has_doc, reapply),
+        cmd!("data.filterSet", "Set Filter", [], None, "{sheet, range}", has_doc, set_filter),
+        cmd!("data.filterRemove", "Remove Filter", [], None, "{sheet, range}", has_doc, remove_filter),
+        cmd!("data.clearFilter", "Clear", ["Data", "Sort & Filter"], None, "{sheet?, range?}", has_doc, clear_filter),
+        cmd!("data.reapply", "Reapply", ["Data", "Sort & Filter"], None, "{sheet?, range?}", has_doc, reapply),
         cmd!(
             "data.removeDuplicates",
             "Remove Duplicates",

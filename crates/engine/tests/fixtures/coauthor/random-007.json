@@ -38,57 +38,64 @@
       }
     },
     {
-      "id": "cell.set",
+      "id": "home.numberFormat",
       "params": {
-        "cell": "G14",
-        "input": "=RANDBETWEEN(1,6)",
-        "sheet": "Totals"
+        "format": "Text",
+        "range": "G36:G41",
+        "sheet": "Ref"
       }
     },
     {
-      "id": "cell.set",
+      "id": "home.insertColumns",
       "params": {
-        "cell": "U18",
-        "input": "=ABS(T16)",
+        "cols": "C:D",
         "sheet": "2026"
       }
     },
     {
       "id": "edit.clearContents",
       "params": {
-        "range": "Z152:AB159",
-        "sheet": "Sales-2"
+        "range": "I11:J17",
+        "sheet": "Ref"
       }
     },
     {
-      "id": "cell.set",
+      "id": "home.deleteRows",
       "params": {
-        "cell": "F13",
-        "input": "-122.40",
+        "rows": "24:25",
         "sheet": "Totals"
       }
     },
     {
       "id": "cell.set",
       "params": {
-        "cell": "P111",
-        "input": "-2.5E-300",
-        "sheet": "Sales-2"
+        "cell": "D27",
+        "input": "=MATCH('Sales-2'!P111,D25:F29,0)",
+        "sheet": "2026"
       }
     },
     {
       "id": "cell.set",
       "params": {
-        "cell": "B30",
-        "input": "=PRODUCT('2026'!V18:V24,A31)",
-        "sheet": "Totals"
+        "cell": "E27",
+        "input": "667",
+        "sheet": "2026"
       }
     },
     {
-      "id": "home.insertRows",
+      "id": "cell.set",
       "params": {
-        "rows": "28:29",
-        "sheet": "Sheet1"
+        "cell": "B22",
+        "input": "-637",
+        "sheet": "AB12"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "M29",
+        "input": "324.17",
+        "sheet": "Totals"
       }
     },
     {
@@ -98,16 +105,30 @@
           "theme": 5,
           "tint": 0.4
         },
-        "range": "T19:W22",
-        "sheet": "2026"
+        "range": "H2:K3",
+        "sheet": "Sales-2"
       }
     },
     {
       "id": "cell.set",
       "params": {
-        "cell": "AB21",
-        "input": 22,
-        "sheet": "Ref"
+        "cell": "M31",
+        "input": "229",
+        "sheet": "Totals"
+      }
+    },
+    {
+      "id": "home.deleteSheet",
+      "params": {
+        "sheet": "AB12"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "M28",
+        "input": "Banana",
+        "sheet": "Totals"
       }
     },
     {
@@ -120,345 +141,250 @@
     {
       "id": "cell.set",
       "params": {
-        "cell": "I31",
-        "input": "-697",
-        "sheet": "Sheet1"
+        "cell": "B25",
+        "input": "FALSE",
+        "sheet": "Ref"
       }
     },
     {
-      "id": "home.borders",
+      "id": "cell.set",
       "params": {
-        "color": "auto",
-        "preset": "insideHorizontal",
-        "range": "H30:I35",
-        "sheet": "Sheet1"
+        "cell": "D29",
+        "input": "=MOD(45,9)",
+        "sheet": "Summary"
       }
     },
     {
       "id": "home.deleteRows",
       "params": {
-        "rows": "110:112",
-        "sheet": "Sales-2"
+        "rows": "37:39",
+        "sheet": "Totals"
       }
     },
     {
       "id": "cell.set",
       "params": {
-        "cell": "A16",
-        "input": "=MOD(C37,8)",
+        "cell": "E29",
+        "input": "=MOD(93,7)",
         "sheet": "Summary"
-      }
-    },
-    {
-      "id": "home.bold",
-      "params": {
-        "on": true,
-        "range": "A14:B16",
-        "sheet": "Summary"
-      }
-    },
-    {
-      "id": "cell.set",
-      "params": {
-        "cell": "H10",
-        "input": "=IFERROR(UPPER(\"\"),-1)",
-        "sheet": "Ref"
-      }
-    },
-    {
-      "id": "cell.set",
-      "params": {
-        "cell": "U25",
-        "input": "2026-08-15",
-        "sheet": "AB12"
-      }
-    },
-    {
-      "id": "home.insertColumns",
-      "params": {
-        "cols": "Q:Q",
-        "sheet": "Sales-2"
-      }
-    },
-    {
-      "id": "cell.set",
-      "params": {
-        "cell": "A15",
-        "input": "=IFERROR(SUMIF(B15:D19,\"<>\"),-1)",
-        "sheet": "Summary"
-      }
-    },
-    {
-      "id": "sheet.rename",
-      "params": {
-        "name": "Bob's",
-        "sheet": "Ref"
       }
     },
     {
       "id": "home.insertRows",
       "params": {
-        "rows": "15:16",
-        "sheet": "Totals"
-      }
-    },
-    {
-      "id": "cell.set",
-      "params": {
-        "cell": "H32",
-        "input": "=SQRT(M44)",
-        "sheet": "Sheet1"
-      }
-    },
-    {
-      "id": "cell.set",
-      "params": {
-        "cell": "I8",
-        "input": "2026-06-27",
-        "sheet": "Bob's"
-      }
-    },
-    {
-      "id": "cell.set",
-      "params": {
-        "cell": "I31",
-        "input": "-252",
-        "sheet": "Sheet1"
-      }
-    },
-    {
-      "id": "cell.set",
-      "params": {
-        "cell": "A13",
-        "input": "84",
-        "sheet": "Summary"
-      }
-    },
-    {
-      "id": "cell.set",
-      "params": {
-        "cell": "B30",
-        "input": "-546",
+        "rows": "51:52",
         "sheet": "Sales-2"
       }
     },
     {
       "id": "cell.set",
       "params": {
-        "cell": "I37",
-        "input": "TRUE",
-        "sheet": "Sheet1"
-      }
-    },
-    {
-      "id": "cell.set",
-      "params": {
-        "cell": "H33",
-        "input": "=TODAY()",
-        "sheet": "Sheet1"
-      }
-    },
-    {
-      "id": "cell.set",
-      "params": {
-        "cell": "V27",
-        "input": "  padded ",
-        "sheet": "AB12"
-      }
-    },
-    {
-      "id": "cell.set",
-      "params": {
-        "cell": "V19",
-        "input": "=LEN('Sheet1'!H31)",
-        "sheet": "Summary"
-      }
-    },
-    {
-      "id": "cell.set",
-      "params": {
-        "cell": "H12",
-        "input": "=SUMPRODUCT(F12:I14,G12:J14)",
-        "sheet": "Totals"
-      }
-    },
-    {
-      "id": "cell.set",
-      "params": {
-        "cell": "AB22",
-        "input": "=IFERROR(VLOOKUP(4,H6:I9,2,FALSE),-1)",
-        "sheet": "Bob's"
-      }
-    },
-    {
-      "id": "cell.set",
-      "params": {
-        "cell": "J35",
-        "input": "-278",
-        "sheet": "Sheet1"
-      }
-    },
-    {
-      "id": "cell.set",
-      "params": {
-        "cell": "W18",
-        "input": "672",
-        "sheet": "Summary"
-      }
-    },
-    {
-      "id": "home.borders",
-      "params": {
-        "preset": "insideHorizontal",
-        "range": "V28:V33",
-        "sheet": "AB12"
-      }
-    },
-    {
-      "id": "cell.set",
-      "params": {
-        "cell": "V26",
-        "input": "=MATCH(V29,V27:Y28,0)",
-        "sheet": "AB12"
-      }
-    },
-    {
-      "id": "cell.set",
-      "params": {
-        "cell": "T23",
-        "input": "-245.81",
-        "sheet": "AB12"
-      }
-    },
-    {
-      "id": "sheet.rename",
-      "params": {
-        "name": "Ref",
+        "cell": "B28",
+        "input": "185.67",
         "sheet": "Sales-2"
-      }
-    },
-    {
-      "id": "cell.set",
-      "params": {
-        "cell": "AC20",
-        "input": "=AND(A16>0,I12<50)",
-        "sheet": "Bob's"
-      }
-    },
-    {
-      "id": "cell.set",
-      "params": {
-        "cell": "V27",
-        "input": "12:30",
-        "sheet": "AB12"
       }
     },
     {
       "id": "home.borders",
       "params": {
         "preset": "doubleBottom",
-        "range": "B9:E9",
-        "sheet": "Summary"
-      }
-    },
-    {
-      "id": "edit.clearContents",
-      "params": {
-        "range": "W29:Y36",
-        "sheet": "AB12"
-      }
-    },
-    {
-      "id": "cell.set",
-      "params": {
-        "cell": "H29",
-        "input": "=COUNTA(F146:J152,53)",
+        "range": "D21:D27",
         "sheet": "Sheet1"
-      }
-    },
-    {
-      "id": "cell.set",
-      "params": {
-        "cell": "G27",
-        "input": "=RIGHT(Totals!I10,3)",
-        "sheet": "Sheet1"
-      }
-    },
-    {
-      "id": "home.insertColumns",
-      "params": {
-        "cols": "S:T",
-        "sheet": "AB12"
-      }
-    },
-    {
-      "id": "cell.set",
-      "params": {
-        "cell": "H38",
-        "input": "=INDEX(H36:K40,1,1)",
-        "sheet": "Ref"
-      }
-    },
-    {
-      "id": "home.deleteRows",
-      "params": {
-        "rows": "21:21",
-        "sheet": "Bob's"
-      }
-    },
-    {
-      "id": "cell.set",
-      "params": {
-        "cell": "I36",
-        "input": "=MOD('AB12'!$U$25,1)",
-        "sheet": "Sheet1"
-      }
-    },
-    {
-      "id": "home.borders",
-      "params": {
-        "preset": "inside",
-        "range": "I11:I13",
-        "sheet": "Totals"
-      }
-    },
-    {
-      "id": "home.alignRight",
-      "params": {
-        "on": true,
-        "range": "A13:A15",
-        "sheet": "Summary"
-      }
-    },
-    {
-      "id": "cell.set",
-      "params": {
-        "cell": "V26",
-        "input": 23,
-        "sheet": "AB12"
-      }
-    },
-    {
-      "id": "cell.set",
-      "params": {
-        "cell": "D40",
-        "input": "-277.51",
-        "sheet": "AB12"
-      }
-    },
-    {
-      "id": "cell.set",
-      "params": {
-        "cell": "AC21",
-        "input": "=POWER(I9,0)",
-        "sheet": "Bob's"
       }
     },
     {
       "id": "home.italic",
       "params": {
+        "on": false,
+        "range": "C23:D29",
+        "sheet": "Ref"
+      }
+    },
+    {
+      "id": "edit.clearContents",
+      "params": {
+        "range": "D11:G13",
+        "sheet": "Totals"
+      }
+    },
+    {
+      "id": "home.insertRows",
+      "params": {
+        "rows": "25:26",
+        "sheet": "Summary"
+      }
+    },
+    {
+      "id": "home.deleteColumns",
+      "params": {
+        "cols": "Q:Q",
+        "sheet": "Ref"
+      }
+    },
+    {
+      "id": "home.alignLeft",
+      "params": {
         "on": true,
-        "range": "A9:C10",
+        "range": "L30:L31",
+        "sheet": "Totals"
+      }
+    },
+    {
+      "id": "home.deleteRows",
+      "params": {
+        "rows": "29:31",
+        "sheet": "Sales-2"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "F6",
+        "input": "1st",
+        "sheet": "Totals"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "F8",
+        "input": "  padded ",
+        "sheet": "Totals"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "A31",
+        "input": "=ROUND(RAND()*100,2)",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "home.insertRows",
+      "params": {
+        "rows": "25:25",
+        "sheet": "Ref"
+      }
+    },
+    {
+      "id": "home.insertRows",
+      "params": {
+        "rows": "71:71",
+        "sheet": "Totals"
+      }
+    },
+    {
+      "id": "home.fillColor",
+      "params": {
+        "color": "none",
+        "range": "C23",
+        "sheet": "Ref"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "A25",
+        "input": "=MOD(25,9)",
+        "sheet": "Ref"
+      }
+    },
+    {
+      "id": "home.fillColor",
+      "params": {
+        "color": "#FFFF00",
+        "range": "L28:O28",
+        "sheet": "Totals"
+      }
+    },
+    {
+      "id": "edit.clearContents",
+      "params": {
+        "range": "E29:F33",
+        "sheet": "Summary"
+      }
+    },
+    {
+      "id": "home.borders",
+      "params": {
+        "color": "#00B050",
+        "preset": "insideVertical",
+        "range": "B31:D31",
+        "sheet": "Sheet1",
+        "style": "thick"
+      }
+    },
+    {
+      "id": "home.doubleUnderline",
+      "params": {
+        "on": true,
+        "range": "A28:B29",
+        "sheet": "Sales-2",
+        "style": "double"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "E7",
+        "input": "-803",
+        "sheet": "Totals"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "B27",
+        "input": "TRUE story",
+        "sheet": "Ref"
+      }
+    },
+    {
+      "id": "home.increaseFontSize",
+      "params": {
+        "range": "F11",
+        "sheet": "Ref",
+        "size": 9
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "D31",
+        "input": -11,
+        "sheet": "Summary"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "D30",
+        "input": "2026-11-18",
+        "sheet": "Summary"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "B24",
+        "input": "=TRIM(\"\")",
+        "sheet": "Ref"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "A32",
+        "input": "-49%",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "G6",
+        "input": "'=not a formula",
         "sheet": "Totals"
       }
     },
@@ -466,46 +392,115 @@
       "id": "cell.set",
       "params": {
         "cell": "A29",
-        "input": "=IFERROR(ROUND(98/7,0),-1)",
-        "sheet": "Totals"
-      }
-    },
-    {
-      "id": "home.insertColumns",
-      "params": {
-        "cols": "AC:AC",
-        "sheet": "Bob's"
-      }
-    },
-    {
-      "id": "home.insertColumns",
-      "params": {
-        "cols": "I:J",
+        "input": "9.99999999999999E+307",
         "sheet": "Sheet1"
       }
     },
     {
       "id": "cell.set",
       "params": {
-        "cell": "G33",
-        "input": "-444",
-        "sheet": "Sheet1"
-      }
-    },
-    {
-      "id": "cell.set",
-      "params": {
-        "cell": "G40",
-        "input": "=IFERROR(MAX('Sheet1'!C13:E13),-1)",
+        "cell": "B24",
+        "input": "=ROUNDUP($C$25/7,0)+54",
         "sheet": "Ref"
       }
     },
     {
       "id": "cell.set",
       "params": {
-        "cell": "W27",
-        "input": "=IFERROR(DATE(2026,5,C42),-1)",
-        "sheet": "AB12"
+        "cell": "A28",
+        "input": "=AVERAGEIF(A29:B29,\"apple\")",
+        "sheet": "Sales-2"
+      }
+    },
+    {
+      "id": "home.fontName",
+      "params": {
+        "name": "Courier New",
+        "range": "I38:L42",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "home.deleteRows",
+      "params": {
+        "rows": "7:8",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "C25",
+        "input": "=TEXT(-7,\"0%\")",
+        "sheet": "Ref"
+      }
+    },
+    {
+      "id": "home.insertRows",
+      "params": {
+        "rows": "35:36",
+        "sheet": "Sales-2"
+      }
+    },
+    {
+      "id": "home.insertColumns",
+      "params": {
+        "cols": "A:B",
+        "sheet": "Sales-2"
+      }
+    },
+    {
+      "id": "home.numberFormat",
+      "params": {
+        "code": "0.0%",
+        "range": "E157:H157",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "F9",
+        "input": "'=not a formula",
+        "sheet": "Totals"
+      }
+    },
+    {
+      "id": "home.alignTop",
+      "params": {
+        "range": "C28:E34",
+        "sheet": "Sales-2"
+      }
+    },
+    {
+      "id": "home.alignBottom",
+      "params": {
+        "range": "M31:P67",
+        "sheet": "Totals"
+      }
+    },
+    {
+      "id": "home.doubleUnderline",
+      "params": {
+        "on": false,
+        "range": "D29:F31",
+        "sheet": "Summary",
+        "style": "double"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "E31",
+        "input": "610",
+        "sheet": "Summary"
+      }
+    },
+    {
+      "id": "home.insertRows",
+      "params": {
+        "rows": "14:15",
+        "sheet": "Totals"
       }
     }
   ]

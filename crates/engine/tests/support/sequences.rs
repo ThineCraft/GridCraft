@@ -14,6 +14,7 @@
 
 #![allow(dead_code)]
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use gridcraft_engine::core::{CellRef, Value};
@@ -42,6 +43,16 @@ pub const SHARED_COMMANDS: &[&str] = &[
     "home.alignMiddle",
     "home.alignBottom",
     "home.wrapText",
+    "home.underline",
+    "home.doubleUnderline",
+    "home.increaseFontSize",
+    "home.decreaseFontSize",
+    "home.formatCells",
+    "data.filterSet",
+    "data.filterRemove",
+    "data.filterBy",
+    "data.clearFilter",
+    "data.reapply",
     "home.insertRows",
     "home.deleteRows",
     "home.insertColumns",
@@ -545,7 +556,7 @@ pub fn sheet_prefix(name: &str) -> String {
 
 /// Generates `steps` random shared commands (after the steps that add the starting sheets).
 pub fn generate(seed: u64, steps: usize) -> Sequence {
-    let mut g = Gen { rng: Rng::new(seed), sheets: vec!["Sheet1".to_string()], renamed: 0, written: Vec::new() };
+    let mut g = Gen { rng: Rng::new(seed), sheets: vec!["Sheet1".to_string()], renamed: 0, written: Vec::new(), filters: BTreeMap::new() };
     let now = g.rng.int(36_526, 54_789) as f64 + g.rng.int(0, 1439) as f64 / 1440.0;
     let mut out = Vec::new();
     // 1 to 6 sheets to start with.
@@ -568,6 +579,17 @@ struct Gen {
     /// Cells the sequence has written (sheet, row, column), as entered. Row and column inserts
     /// and deletes are not followed: the list only steers later steps towards filled areas.
     written: Vec<(String, u32, u32)>,
+    /// Explicit filter ranges by sheet. Structural commands avoid these sheets so the stored
+    /// target remains exact; the filter ranges end at row 200, beyond generated cell writes,
+    /// so ordinary edits cannot grow them implicitly.
+    filters: BTreeMap<String, GeneratedFilter>,
+}
+
+#[derive(Clone)]
+struct GeneratedFilter {
+    range: String,
+    start_col: u32,
+    end_col: u32,
 }
 
 impl Gen {
@@ -602,17 +624,19 @@ impl Gen {
     fn step(&mut self) -> Step {
         let roll = self.rng.below(100);
         match roll {
-            0..35 => self.cell_set(false),
-            35..57 => self.cell_set(true),
-            57..62 => self.with_range("edit.clearContents", Map::new(), false),
-            62..67 => self.number_format(),
-            67..73 => self.font(),
-            73..77 => {
+            0..30 => self.cell_set(false),
+            30..49 => self.cell_set(true),
+            49..54 => self.with_range("edit.clearContents", Map::new(), false),
+            54..59 => self.number_format(),
+            59..65 => self.font(),
+            65..69 => {
                 let color = self.rng.pick(&[json!("#FFFF00"), json!("#C6EFCE"), json!("none"), json!({"theme": 5, "tint": 0.4})]).clone();
                 self.with_range("home.fillColor", obj(&[("color", color)]), true)
             }
-            77..81 => self.borders(),
-            81..85 => self.alignment(),
+            69..73 => self.borders(),
+            73..77 => self.alignment(),
+            77..82 => self.explicit_format(),
+            82..85 => self.filter(),
             _ => self.structural(),
         }
     }
@@ -905,27 +929,93 @@ impl Gen {
         }
     }
 
+    fn explicit_format(&mut self) -> Step {
+        match self.rng.below(5) {
+            0 => {
+                let on = self.rng.chance(70);
+                let style = *self.rng.pick(&["single", "singleAccounting"]);
+                self.with_range("home.underline", obj(&[("on", json!(on)), ("style", json!(style))]), false)
+            }
+            1 => {
+                let on = self.rng.chance(70);
+                self.with_range("home.doubleUnderline", obj(&[("on", json!(on)), ("style", json!("double"))]), false)
+            }
+            2 => {
+                let size = *self.rng.pick(&[9, 11, 12, 14, 18, 24]);
+                self.with_range("home.increaseFontSize", obj(&[("size", json!(size))]), false)
+            }
+            3 => {
+                let size = *self.rng.pick(&[8, 9, 10, 11, 12, 14]);
+                self.with_range("home.decreaseFontSize", obj(&[("size", json!(size))]), false)
+            }
+            _ => {
+                let strike = self.rng.chance(50);
+                self.with_range("home.formatCells", obj(&[("style", json!({"font":{"strike":strike}}))]), false)
+            }
+        }
+    }
+
+    fn filter(&mut self) -> Step {
+        let sheet = self.sheet();
+        let Some(filter) = self.filters.get(&sheet).cloned() else {
+            let start_col = self.rng.below((COLS - 3) as u64) as u32;
+            let end_col = start_col + 2 + self.rng.below(2) as u32;
+            let range = format!("{}{}:{}{}", letters(start_col), ROWS - 9, letters(end_col), ROWS);
+            self.filters.insert(sheet.clone(), GeneratedFilter { range: range.clone(), start_col, end_col });
+            return Step::new("data.filterSet", json!({"sheet":sheet,"range":range}));
+        };
+        match self.rng.below(5) {
+            0 | 1 => {
+                let column = filter.start_col + self.rng.below(u64::from(filter.end_col - filter.start_col + 1)) as u32;
+                Step::new(
+                    "data.filterBy",
+                    json!({"sheet":sheet,"range":filter.range,"column":letters(column),"values":[self.rng.pick(&["x","North","1"])]}),
+                )
+            }
+            2 => Step::new("data.clearFilter", json!({"sheet":sheet,"range":filter.range})),
+            3 => Step::new("data.reapply", json!({"sheet":sheet,"range":filter.range})),
+            _ => {
+                self.filters.remove(&sheet);
+                Step::new("data.filterRemove", json!({"sheet":sheet,"range":filter.range}))
+            }
+        }
+    }
+
+    fn unfiltered_sheet(&mut self) -> Option<String> {
+        let choices: Vec<String> = self.sheets.iter().filter(|sheet| !self.filters.contains_key(*sheet)).cloned().collect();
+        if choices.is_empty() { None } else { Some(self.rng.pick(&choices).clone()) }
+    }
+
+    fn remove_generated_filter(&mut self) -> Step {
+        let index = self.rng.below(self.filters.len() as u64) as usize;
+        let Some((sheet, filter)) = self.filters.iter().nth(index).map(|(sheet, filter)| (sheet.clone(), filter.clone())) else {
+            return self.add_sheet();
+        };
+        self.filters.remove(&sheet);
+        Step::new("data.filterRemove", json!({"sheet":sheet,"range":filter.range}))
+    }
+
     fn structural(&mut self) -> Step {
         let roll = self.rng.below(15);
         match roll {
             0..7 => {
                 let id = if roll < 4 { "home.insertRows" } else { "home.deleteRows" };
-                let sheet = self.sheet();
+                let Some(sheet) = self.unfiltered_sheet() else { return self.remove_generated_filter() };
                 let a = 1 + self.spot(&sheet).0 as u64;
                 let b = a + self.rng.below(3);
                 Step::new(id, json!({"sheet": sheet, "rows": format!("{a}:{b}")}))
             }
             7..12 => {
                 let id = if roll < 10 { "home.insertColumns" } else { "home.deleteColumns" };
-                let sheet = self.sheet();
+                let Some(sheet) = self.unfiltered_sheet() else { return self.remove_generated_filter() };
                 let a = self.spot(&sheet).1;
                 let b = a + self.rng.below(2) as u32;
                 Step::new(id, json!({"sheet": sheet, "cols": format!("{}:{}", letters(a), letters(b))}))
             }
             12 if self.sheets.len() < MAX_SHEETS => self.add_sheet(),
             13 => {
-                let i = self.rng.below(self.sheets.len() as u64) as usize;
-                let old = self.sheets[i].clone();
+                let Some(old) = self.unfiltered_sheet() else { return self.remove_generated_filter() };
+                let i = self.sheets.iter().position(|sheet| sheet == &old).unwrap_or(0);
                 let name = self.fresh_name();
                 self.sheets[i] = name.clone();
                 for w in self.written.iter_mut().filter(|w| w.0 == old) {
@@ -934,7 +1024,8 @@ impl Gen {
                 Step::new("sheet.rename", json!({"sheet": old, "name": name}))
             }
             _ if self.sheets.len() > 1 => {
-                let i = self.rng.below(self.sheets.len() as u64) as usize;
+                let Some(name) = self.unfiltered_sheet() else { return self.remove_generated_filter() };
+                let i = self.sheets.iter().position(|sheet| sheet == &name).unwrap_or(0);
                 let name = self.sheets.remove(i);
                 self.written.retain(|w| w.0 != name);
                 Step::new("home.deleteSheet", json!({"sheet": name}))

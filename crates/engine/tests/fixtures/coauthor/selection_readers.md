@@ -8,20 +8,13 @@ which are each person's own view. Found by reading each command's code on branch
 
 ## Left out of generation
 
-These read the selection or the active sheet even when given explicit parameters.
+This still reads the selection or active sheet by design and has no shared form.
 
 | Command | What it reads | Where |
 | --- | --- | --- |
 | `data.filter` | A toggle. On the active sheet it looks for a table at the active cell (`selection.active`), not at `range`, before deciding what to toggle. Whether it adds or removes the filter depends on the current state, so two people sending it at once cancel out. | `cmd/data/filter.rs`, `toggle_filter` |
-| `data.filterBy` | Has no `sheet` parameter: always filters the active sheet. With no filter on that sheet it first installs one over the current region of the selection. | `cmd/data/filter.rs`, `filter_by` |
-| `data.clearFilter` | Has no `sheet` parameter: always clears the active sheet's criteria. | `cmd/data/filter.rs`, `clear_filter` |
-| `data.reapply` | Same: active sheet only. | `cmd/data/filter.rs`, `reapply` |
-| `home.underline`, `home.doubleUnderline` | Reads the active cell's underline (it is computed even when `on` is given, though then unused); without `on` it toggles from the active cell. | `cmd/format.rs`, `underline` |
-| `home.increaseFontSize`, `home.decreaseFontSize` | Steps from the active cell's font size, whatever `range` says. | `cmd/format.rs`, `step_font` |
-| `home.formatCells` | Validates the style patch by merging it into the active cell's style. The result applied to `range` does not depend on it, but a patch could be accepted or refused depending on the active cell. | `cmd/format.rs`, `format_cells` |
-
-Set and clear filter are therefore not in the generated sequences. G3 needs a filter command
-with an explicit sheet, range and criteria (set and clear), with no toggle.
+The toggle remains outside generated and live sequences. Shared filtering uses the idempotent,
+target-explicit commands below instead.
 
 ## Generated only in their explicit form
 
@@ -35,6 +28,12 @@ always gives that parameter.
 | `home.numberFormat`, `home.fontName`, `home.fontSize`, `home.fontColor`, `home.fillColor`, `home.borders`, `home.alignTop`, `home.alignMiddle`, `home.alignBottom` | `sheet`, `range` | The selection's areas on the active sheet. A `Sheet!` prefix on `range` is honoured by the sheet lookup, but the range parser drops it, so the generator always passes `sheet`. |
 | `home.bold`, `home.italic`, `home.wrapText` | `sheet`, `range`, `on` | No `on`: toggles from the active cell's style. |
 | `home.alignLeft`, `home.alignCenter`, `home.alignRight` | `sheet`, `range`, `on: true` | No `on`: if the active cell already has that alignment, sets General instead. |
+| `home.underline`, `home.doubleUnderline` | `sheet`, `range`, `on`, `style` | No `on`: toggles from the active cell's underline. The explicit form does not read it. |
+| `home.increaseFontSize`, `home.decreaseFontSize` | `sheet`, `range`, `size` | No `size`: the local UI form steps from the active cell. The explicit form applies the sent half-point size. |
+| `home.formatCells` | `sheet`, `range`, `style` | The explicit form validates the patch against every distinct target style before changing any cell. |
+| `data.filterSet`, `data.filterRemove` | `sheet`, `range` | Idempotently install or remove exactly that AutoFilter. Another range is an error. |
+| `data.filterBy` | `sheet`, `range`, `column`, and one criterion | The named AutoFilter must already exist; no selection-based filter is installed. |
+| `data.clearFilter`, `data.reapply` | `sheet`, `range` | Clear criteria or reapply exactly the named AutoFilter. |
 | `home.insertRows`, `home.deleteRows`, `home.insertColumns`, `home.deleteColumns` | `sheet`, `rows` or `cols` | The selection's rows or columns. |
 | `home.insertSheet` | `name`, `before` | No `before`: after the active sheet. No `name`: the next free `SheetN`. It also makes the new sheet active (view state only). |
 | `sheet.rename`, `home.deleteSheet` | `sheet` (by name) | The active sheet. |
