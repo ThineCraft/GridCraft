@@ -5,6 +5,7 @@ mod cf_formula_validate;
 mod chart_area_stacked100;
 mod chart_workbook_names;
 mod coauthor_commands;
+mod coauthor_live;
 mod coauthor_replay;
 mod coauthor_save_reload;
 mod coauthor_timing;
@@ -44,3 +45,6 @@ mod wrap_row_height;
 /// Sequences of shared commands for the co-authoring proofs, shared with the browser-engine runs.
 #[path = "../support/sequences.rs"]
 mod sequences;
+
+#[path = "../support/live.rs"]
+mod live;
