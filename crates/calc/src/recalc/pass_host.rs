@@ -3,6 +3,7 @@ use super::{Evaluator, Host, Workbook, stack_position};
 use crate::spill_index::{Cover, SpillIndex};
 use gridcraft_core::{Array, CellError, CellRef, RangeRef, Value};
 use gridcraft_formula::Expr;
+use std::cell::Cell;
 
 /// Formulas a formula may calculate on demand one inside the other (each needing one another's
 /// value before it is done). Each level takes stack, so a chain deeper than this is suspended and
@@ -32,6 +33,7 @@ pub(super) struct PassHost<'a> {
     used: HashMap<usize, Option<RangeRef>>,
     rng: &'a mut u64,
     now: f64,
+    pub(super) stamp_read: Cell<bool>,
     cycle: bool,
     pub(super) cycles: Vec<Key>,
     depth: usize,
@@ -100,6 +102,7 @@ impl<'a> PassHost<'a> {
             used: HashMap::default(),
             rng,
             now,
+            stamp_read: Cell::new(false),
             cycle: false,
             cycles: vec![],
             depth: 0,
@@ -760,9 +763,11 @@ impl Host for PassHost<'_> {
         *self.used.entry(sheet).or_insert_with(|| wb.sheet(sheet).and_then(|s| s.used_range()))
     }
     fn now_serial(&self) -> f64 {
+        self.stamp_read.set(true);
         self.now
     }
     fn random(&mut self) -> f64 {
+        self.stamp_read.set(true);
         // xorshift64*
         let mut x = *self.rng;
         x ^= x >> 12;

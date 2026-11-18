@@ -48,6 +48,8 @@ pub struct Calc {
     /// Cells whose formulas have errors from cycles.
     pub circular: Vec<Key>,
     pub last_recalc_cells: usize,
+    /// Whether formula evaluation has read the clock or random stream since tracking was reset.
+    stamp_read: bool,
     /// The cells whose value is `#SPILL!`, kept so that finding the formulas an emptied cell or a
     /// freed spill area may unblock doesn't walk every formula or window of cells. Filled in
     /// `rebuild`, kept up to date by `cells_changed` and by the write-back of a run; an entry is
@@ -101,6 +103,7 @@ impl Default for Calc {
             fixed_now: None,
             circular: vec![],
             last_recalc_cells: 0,
+            stamp_read: false,
             spill_errors: SpillErrors::default(),
         }
     }
@@ -503,7 +506,7 @@ impl Calc {
             let now = self.now();
             let mut rng = self.rng;
             let tp = prof_now();
-            let (results, spills, cycles) = {
+            let (results, spills, cycles, stamp_read) = {
                 let mut host = PassHost::new(wb, &exprs, &mut rng, now).with_python(python);
                 host.iterate = wb.calc.iterative;
                 for k in &dirty {
@@ -515,8 +518,9 @@ impl Calc {
                         eprintln!("  iterative calculation: {} passes over {} formulas", passes, host.tainted.len());
                     }
                 }
-                (host.results, host.spills, host.cycles)
+                (host.results, host.spills, host.cycles, host.stamp_read.get())
             };
+            self.stamp_read |= stamp_read;
             self.rng = rng;
             if std::env::var_os("GRIDCRAFT_PROFILE").is_some() {
                 eprintln!("  eval {} formulas {:.1} ms", results.len(), prof_now() - tp);
@@ -556,6 +560,16 @@ impl Calc {
         } else {
             self.circular.retain(|k| self.graph.nodes.contains_key(k));
         }
+    }
+
+    /// Starts tracking whether subsequent formula evaluation reads the shared clock or RNG stamp.
+    pub fn clear_stamp_read(&mut self) {
+        self.stamp_read = false;
+    }
+
+    /// Returns whether formula evaluation read the shared clock or RNG since tracking was reset.
+    pub fn stamp_was_read(&self) -> bool {
+        self.stamp_read
     }
 
     fn write_back(

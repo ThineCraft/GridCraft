@@ -1,6 +1,7 @@
 //! Live co-authoring adapter types shared by the command encoder and apply loop.
 
 mod command;
+mod editor;
 mod ids;
 
 use collab_live::client::Mode;
@@ -11,6 +12,7 @@ pub use command::{
     IdentityAnchor, IdentityRefKind, IdentityReference, IdentitySheetSel, ResolvedCommand, SharedCommand, SharedEntry, decode_entry, encode_command,
     is_shared_command, resolve_command,
 };
+pub use editor::{GridLiveEditor, GridSnapshot, SharedDocumentSnapshot};
 pub use ids::{
     CellId, IdentityDelete, IdentityInsert, IdentityPosition, IdentityRange, IdentityRangeKind, IdentityRanges, IdentitySheetInsert,
     IdentityStructural, SheetIds, TargetGone, WorkbookIds,

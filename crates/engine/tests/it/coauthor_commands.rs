@@ -1,13 +1,16 @@
+use collab_live::client::{Effect, EntryView, LiveEditor, Stamp};
+use gridcraft_core::{CellRef, Value};
 use gridcraft_engine::catalog::CATALOG;
 use gridcraft_engine::coauthor::{
-    CoauthorError, GRIDCRAFT_LIVE_FORMAT, IdentityPosition, IdentityStructural, SharedCommand, TargetGone, WorkbookIds, decode_entry, encode_command,
-    is_shared_command, resolve_command,
+    CoauthorError, GRIDCRAFT_LIVE_FORMAT, GridLiveEditor, IdentityPosition, IdentityStructural, SharedCommand, TargetGone, WorkbookIds, decode_entry,
+    encode_command, is_shared_command, resolve_command,
 };
 use gridcraft_engine::fingerprint::{DocId, fingerprint};
 use gridcraft_engine::{DocState, Session, Trust};
 use gridcraft_formula::{parse, print};
 use gridcraft_model::{Sheet, Workbook};
 use protocol::live::MAX_PAYLOAD_BYTES;
+use protocol::live::ParticipantNo;
 use serde_json::{Value as Json, json};
 use std::sync::Arc;
 
@@ -54,6 +57,144 @@ fn move_view(session: &mut Session, cell: &str) {
 
 fn assert_entered_equal(a: &Session, b: &Session) {
     assert_eq!(fingerprint(a, DocId(0)).entered, fingerprint(b, DocId(0)).entered);
+}
+
+fn live_entry(payload: &str, stamp: Option<Stamp>) -> EntryView<'_> {
+    EntryView { seq: None, participant: ParticipantNo(1), own: false, stamp, payload }
+}
+
+fn live_cell_set(action: u64, row: u32, input: &str, year: i32, formula: bool) -> String {
+    json!({
+        "version":1,
+        "action":action,
+        "command":{
+            "id":"cell.set",
+            "sheet":[0,0],
+            "cell":{"sheet":[0,0],"row":[0,row],"col":[0,0]},
+            "input":input,
+            "originYear":year,
+            "formula":formula,
+            "references":[]
+        }
+    })
+    .to_string()
+}
+
+#[test]
+fn entry_stamp_controls_now_and_rand() {
+    let mut left_session = session_with_sheets(&["Sheet1"]);
+    let mut right_session = session_with_sheets(&["Sheet1"]);
+    left_session.doc_mut().expect("left document exists").calc.fixed_now = Some(1.0);
+    left_session.doc_mut().expect("left document exists").calc.set_rand_seed(11);
+    right_session.doc_mut().expect("right document exists").calc.fixed_now = Some(2.0);
+    right_session.doc_mut().expect("right document exists").calc.set_rand_seed(99);
+    let mut left = GridLiveEditor::new(left_session).expect("left editor builds");
+    let mut right = GridLiveEditor::new(right_session).expect("right editor builds");
+    let payload = live_cell_set(1, 0, "=NOW()+RAND()", 2026, true);
+    let stamp = Stamp { at_ms: 1_791_633_600_000, seed: 0x1234_5678 };
+
+    let left_outcome = left.apply(&live_entry(&payload, Some(stamp))).expect("left applies the entry");
+    let right_outcome = right.apply(&live_entry(&payload, Some(stamp))).expect("right applies the entry");
+
+    assert!(!left_outcome.read_stamp);
+    assert!(!right_outcome.read_stamp);
+    let left_value = left.session().doc().expect("left document exists").wb.sheet(0).expect("left sheet exists").value(CellRef::new(0, 0));
+    let right_value = right.session().doc().expect("right document exists").wb.sheet(0).expect("right sheet exists").value(CellRef::new(0, 0));
+    assert_eq!(left_value, right_value);
+
+    let unstamped = live_cell_set(2, 1, "=RAND()", 2026, true);
+    assert!(left.apply(&live_entry(&unstamped, None)).expect("local volatile entry applies").read_stamp);
+}
+
+#[test]
+fn plain_edit_with_existing_volatile_formula_reads_stamp() {
+    let mut session = session_with_sheets(&["Sheet1"]);
+    session.execute("cell.set", json!({"sheet":"Sheet1","cell":"A1","input":"=RAND()"})).expect("volatile formula applies");
+    let mut editor = GridLiveEditor::new(session).expect("editor builds");
+    let payload = live_cell_set(5, 1, "plain", 2026, false);
+
+    let outcome = editor.apply(&live_entry(&payload, None)).expect("plain edit applies");
+
+    assert!(matches!(outcome.effect, Effect::Applied));
+    assert!(outcome.read_stamp, "recalculation read RAND from the existing formula");
+}
+
+#[test]
+fn structural_edit_with_existing_volatile_formula_reads_stamp() {
+    let mut session = session_with_sheets(&["Sheet1"]);
+    session.execute("cell.set", json!({"sheet":"Sheet1","cell":"A1","input":"=NOW()"})).expect("volatile formula applies");
+    let mut editor = GridLiveEditor::new(session).expect("editor builds");
+    let payload = json!({
+        "version":1,
+        "action":6,
+        "command":{
+            "id":"home.insertRows",
+            "sheet":[0,0],
+            "rows":{"before":{"before":[0,1]},"first":[1,0],"count":1}
+        }
+    })
+    .to_string();
+
+    let outcome = editor.apply(&live_entry(&payload, None)).expect("row insert applies");
+
+    assert!(matches!(outcome.effect, Effect::Applied));
+    assert!(outcome.read_stamp, "structural recalculation read NOW from the existing formula");
+}
+
+#[test]
+fn yearless_date_uses_the_sent_year() {
+    let mut session = session_with_sheets(&["Sheet1"]);
+    let ids = WorkbookIds::from_workbook(&session.doc().expect("document exists").wb).expect("base identities build");
+    let mut allocate = |_count| Err(collab_live::ids::IdError::NoPlace);
+    let entry = encode_command(&ids, &session, 2, "cell.set", &json!({"sheet":"Sheet1","cell":"A1","input":"12/31"}), 2042, &mut allocate)
+        .expect("year-less date encodes");
+    let resolved = resolve_command(&ids, &session, &entry).expect("year-less date resolves");
+
+    session.execute(&resolved.id, resolved.params).expect("year-less date applies");
+
+    assert_eq!(session.doc().expect("document exists").wb.sheet(0).expect("sheet exists").value(CellRef::new(0, 0)), Value::Number(52_231.0));
+    let before = fingerprint(&session, DocId(0)).entered;
+    assert!(session.execute("cell.set", json!({"sheet":"Sheet1","cell":"A2","input":"12/31","originYear":10000})).is_err());
+    assert_eq!(fingerprint(&session, DocId(0)).entered, before);
+}
+
+#[test]
+fn snapshot_restores_rand_state() {
+    let mut editor = GridLiveEditor::new(session_with_sheets(&["Sheet1"])).expect("editor builds");
+    let seed_payload = live_cell_set(3, 0, "seed", 2026, false);
+    editor.apply(&live_entry(&seed_payload, Some(Stamp { at_ms: 1_791_633_600_000, seed: 77 }))).expect("stamp seeds the calculation state");
+    let snapshot = editor.snapshot();
+    let rand_payload = live_cell_set(4, 1, "=RAND()", 2026, true);
+
+    editor.apply(&live_entry(&rand_payload, None)).expect("first local RAND applies");
+    let first = editor.session().doc().expect("document exists").wb.sheet(0).expect("sheet exists").value(CellRef::new(1, 0));
+    editor.restore(&snapshot);
+    editor.apply(&live_entry(&rand_payload, None)).expect("replayed local RAND applies");
+    let replayed = editor.session().doc().expect("document exists").wb.sheet(0).expect("sheet exists").value(CellRef::new(1, 0));
+
+    assert_eq!(first, replayed);
+}
+
+#[test]
+fn agreement_digest_is_entered_only() {
+    let mut left = session_with_sheets(&["Sheet1"]);
+    left.execute("cell.set", json!({"sheet":"Sheet1","cell":"A1","input":"=SIN(PI()/4)"})).expect("formula applies");
+    let mut right = session_with_sheets(&["Sheet1"]);
+    right.execute("cell.set", json!({"sheet":"Sheet1","cell":"A1","input":"=SIN(PI()/4)"})).expect("formula applies");
+    let at = CellRef::new(0, 0);
+    let right_doc = right.doc_mut().expect("right document exists");
+    let workbook = Arc::make_mut(&mut right_doc.wb);
+    let sheet = workbook.sheet_mut(0).expect("right sheet exists");
+    let mut cell = sheet.cell(at).cloned().expect("formula cell exists");
+    let Value::Number(number) = cell.value else { panic!("formula result is numeric") };
+    cell.value = Value::Number(f64::from_bits(number.to_bits() + 1));
+    sheet.set_cell(at, cell);
+    assert_ne!(fingerprint(&left, DocId(0)).computed, fingerprint(&right, DocId(0)).computed);
+
+    let left = GridLiveEditor::new(left).expect("left editor builds");
+    let right = GridLiveEditor::new(right).expect("right editor builds");
+
+    assert_eq!(left.agreement_digest(), right.agreement_digest());
 }
 
 #[test]
