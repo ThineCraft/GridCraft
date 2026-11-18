@@ -222,6 +222,12 @@ impl WorkbookIds {
         Ok(())
     }
 
+    /// Checks a structural identity change without changing this table.
+    pub fn validate_structural(&self, change: &IdentityStructural) -> Result<(), CoauthorError> {
+        let mut next = self.clone();
+        next.apply_structural_in_place(change)
+    }
+
     fn apply_structural_in_place(&mut self, change: &IdentityStructural) -> Result<(), CoauthorError> {
         match change {
             IdentityStructural::InsertRows { sheet, before, first, count } => {

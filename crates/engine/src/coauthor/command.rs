@@ -15,6 +15,11 @@ use super::{
 };
 
 const MAX_IDENTITY_TARGETS: usize = MAX_PAYLOAD_BYTES / 8;
+// Each 3-D member carries both a sheet LiveId and a tagged identity reference;
+// 64 bytes is below the shortest JSON representation, so this cap rejects only
+// spans that cannot fit on the wire and does so before allocating for them.
+const MIN_ENCODED_3D_MEMBER_BYTES: usize = 64;
+const MAX_3D_SPAN_SHEETS: usize = MAX_PAYLOAD_BYTES / MIN_ENCODED_3D_MEMBER_BYTES;
 
 /// One command in the `gridcraft/1` payload format.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -27,7 +32,6 @@ pub enum SharedCommand {
         input: String,
         #[serde(rename = "originYear")]
         origin_year: i32,
-        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         formula: bool,
         references: Vec<IdentityReference>,
     },
@@ -753,7 +757,7 @@ pub fn is_shared_command(id: &str) -> bool {
 
 fn missing_required_field(id: &str, command: &serde_json::Map<String, Json>) -> Option<&'static str> {
     let fields: &[&str] = match id {
-        "cell.set" => &["sheet", "cell", "input", "originYear", "references"],
+        "cell.set" => &["sheet", "cell", "input", "originYear", "formula", "references"],
         "edit.clearContents" | "home.alignTop" | "home.alignMiddle" | "home.alignBottom" | "data.filterSet" | "data.filterRemove"
         | "data.clearFilter" | "data.reapply" => &["sheet", "range"],
         "home.bold" | "home.italic" | "home.wrapText" | "home.alignLeft" | "home.alignCenter" | "home.alignRight" => &["sheet", "range", "on"],
@@ -928,6 +932,12 @@ pub fn resolve_command(ids: &WorkbookIds, session: &crate::Session, entry: &Shar
                 if !references.is_empty() {
                     return Err(TargetGone::Malformed("literal input carries formula references".into()));
                 }
+                let document = session.doc().map_err(|error| TargetGone::Malformed(error.to_string()))?;
+                let text_formatted =
+                    document.wb.sheet(sheet).is_some_and(|target_sheet| document.wb.styles.get(target_sheet.style_id(cell)).num_fmt.as_str() == "@");
+                if crate::cmd::edit::is_formula_input(input) && !text_formatted {
+                    return Err(TargetGone::Malformed("formula-like input is marked as a literal outside a text-formatted cell".into()));
+                }
                 input.clone()
             };
             object.insert("input".into(), Json::String(resolved_input));
@@ -981,6 +991,9 @@ pub fn resolve_command(ids: &WorkbookIds, session: &crate::Session, entry: &Shar
         _ => {
             resolve_common_targets(ids, object)?;
         }
+    }
+    if let Some(change) = structural.as_ref() {
+        ids.validate_structural(change).map_err(|error| TargetGone::Malformed(format!("invalid structural identity change: {error}")))?;
     }
     Ok(ResolvedCommand { id, params: Json::Object(object.clone()), structural })
 }
@@ -1188,11 +1201,11 @@ fn identity_reference(
     reference: &Reference,
 ) -> Result<IdentityReference, CoauthorError> {
     let workbook = &session.doc()?.wb;
-    let (sheet, target_index, span_indices) = match &reference.sheet {
-        SheetSel::Current => (IdentitySheetSel::Current { sheet: ids.sheet_id(host_sheet)? }, host_sheet, Vec::new()),
+    let (sheet, target_index, span_bounds) = match &reference.sheet {
+        SheetSel::Current => (IdentitySheetSel::Current { sheet: ids.sheet_id(host_sheet)? }, host_sheet, None),
         SheetSel::Named(name) => {
             let index = workbook.sheet_index(name).ok_or_else(|| CoauthorError::MalformedPayload(format!("formula names no sheet `{name}`")))?;
-            (IdentitySheetSel::Named { sheet: ids.sheet_id(index)? }, index, Vec::new())
+            (IdentitySheetSel::Named { sheet: ids.sheet_id(index)? }, index, None)
         }
         SheetSel::Span(start, end) => {
             let start_index =
@@ -1200,16 +1213,25 @@ fn identity_reference(
             let end_index = workbook.sheet_index(end).ok_or_else(|| CoauthorError::MalformedPayload(format!("formula names no sheet `{end}`")))?;
             let low = start_index.min(end_index);
             let high = start_index.max(end_index);
-            let span_indices: Vec<usize> = (low..=high).collect();
-            (IdentitySheetSel::Span { start: ids.sheet_id(start_index)?, end: ids.sheet_id(end_index)? }, start_index, span_indices)
+            let span_len = high
+                .checked_sub(low)
+                .and_then(|len| len.checked_add(1))
+                .ok_or(CoauthorError::OversizedPayload { bytes: usize::MAX, max: MAX_PAYLOAD_BYTES })?;
+            if span_len > MAX_3D_SPAN_SHEETS {
+                return Err(CoauthorError::OversizedPayload { bytes: span_len.saturating_mul(MIN_ENCODED_3D_MEMBER_BYTES), max: MAX_PAYLOAD_BYTES });
+            }
+            (IdentitySheetSel::Span { start: ids.sheet_id(start_index)?, end: ids.sheet_id(end_index)? }, start_index, Some((low, high)))
         }
     };
     let encoded_reference = identity_ref_kind(ids, target_index, &reference.kind)?;
-    let mut span_sheets = Vec::with_capacity(span_indices.len());
-    let mut span_references = Vec::with_capacity(span_indices.len());
-    for index in span_indices {
-        span_sheets.push(ids.sheet_id(index)?);
-        span_references.push(identity_ref_kind(ids, index, &reference.kind)?);
+    let span_capacity = span_bounds.map_or(0, |(low, high)| high - low + 1);
+    let mut span_sheets = Vec::with_capacity(span_capacity);
+    let mut span_references = Vec::with_capacity(span_capacity);
+    if let Some((low, high)) = span_bounds {
+        for index in low..=high {
+            span_sheets.push(ids.sheet_id(index)?);
+            span_references.push(identity_ref_kind(ids, index, &reference.kind)?);
+        }
     }
     Ok(IdentityReference { sheet, reference: encoded_reference, span_sheets, span_references })
 }
@@ -1256,10 +1278,7 @@ fn resolve_formula(
     references: &[IdentityReference],
 ) -> Result<String, TargetGone> {
     let Some(body) = input.strip_prefix('=') else {
-        if references.is_empty() {
-            return Ok(input.to_string());
-        }
-        return Err(TargetGone::Malformed("non-formula input carries formula references".into()));
+        return Err(TargetGone::Malformed("input marked as a formula is not a canonical formula".into()));
     };
     let expr = gridcraft_formula::parse(body).map_err(|error| TargetGone::Malformed(format!("invalid canonical formula: {error}")))?;
     if expr.references().len() != references.len() {
@@ -1327,32 +1346,41 @@ fn resolve_identity_reference(
             if identity.span_sheets.is_empty() || identity.span_sheets.len() != identity.span_references.len() {
                 return Err(TargetGone::Malformed("3-D formula reference has incomplete span identities".into()));
             }
+            let first =
+                identity.span_sheets.first().copied().ok_or_else(|| TargetGone::Malformed("3-D formula reference has no span identities".into()))?;
+            let last =
+                identity.span_sheets.last().copied().ok_or_else(|| TargetGone::Malformed("3-D formula reference has no span identities".into()))?;
+            if !((first == start && last == end) || (first == end && last == start)) {
+                return Err(TargetGone::Malformed("3-D formula reference endpoints do not match its ordered members".into()));
+            }
             let low = start_index.min(end_index);
             let high = start_index.max(end_index);
-            if identity.span_sheets.len() != high.saturating_sub(low).saturating_add(1) {
-                return Err(TargetGone::Malformed("3-D formula reference does not cover its complete sheet span".into()));
-            }
-            for (offset, sheet) in identity.span_sheets.iter().copied().enumerate() {
-                let position = low
-                    .checked_add(offset)
-                    .and_then(|position| u32::try_from(position).ok())
-                    .ok_or_else(|| TargetGone::Malformed("3-D formula sheet span is too large".into()))?;
-                if ids.sheets.id_at(position) != Some(sheet) {
-                    return Err(TargetGone::Malformed("3-D formula reference does not follow workbook sheet order".into()));
+            let low = u32::try_from(low).map_err(|_| TargetGone::Malformed("3-D formula sheet span is too large".into()))?;
+            let high = u32::try_from(high).map_err(|_| TargetGone::Malformed("3-D formula sheet span is too large".into()))?;
+            let mut seen = HashSet::with_capacity(identity.span_sheets.len());
+            let mut previous = None;
+            let mut common = None;
+            for (sheet, reference) in identity.span_sheets.iter().copied().zip(&identity.span_references) {
+                if !seen.insert(sheet) {
+                    return Err(TargetGone::Malformed("3-D formula reference repeats an original sheet identity".into()));
+                }
+                match ids.sheets.find(sheet) {
+                    collab_live::ids::Lookup::At(position) => {
+                        if position < low || position > high || previous.is_some_and(|prior| position <= prior) {
+                            return Err(TargetGone::Malformed("3-D formula reference does not preserve its original sheet order".into()));
+                        }
+                        previous = Some(position);
+                        let resolved = resolve_identity_ref_kind(ids, sheet, reference)?;
+                        if common.as_ref().is_some_and(|current| current != &resolved) {
+                            return Err(TargetGone::UnrepresentableReference);
+                        }
+                        common.get_or_insert(resolved);
+                    }
+                    collab_live::ids::Lookup::Deleted { .. } => {}
+                    collab_live::ids::Lookup::Unknown => return Err(TargetGone::UnknownSheet(sheet)),
                 }
             }
-            let mut resolved = identity
-                .span_sheets
-                .iter()
-                .copied()
-                .zip(identity.span_references.iter())
-                .map(|(sheet, reference)| resolve_identity_ref_kind(ids, sheet, reference));
-            let common = resolved.next().transpose()?.ok_or_else(|| TargetGone::Malformed("3-D formula reference has no span identities".into()))?;
-            for reference in resolved {
-                if reference? != common {
-                    return Err(TargetGone::UnrepresentableReference);
-                }
-            }
+            let common = common.ok_or_else(|| TargetGone::Malformed("3-D formula reference has no live original sheet identities".into()))?;
             (SheetSel::Span(start_name, end_name), common)
         }
     };

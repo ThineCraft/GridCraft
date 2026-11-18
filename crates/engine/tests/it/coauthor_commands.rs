@@ -188,6 +188,82 @@ fn signed_formulas_use_identities_and_text_formatted_equals_stays_text() {
 }
 
 #[test]
+fn cell_set_formula_marker_is_required_and_consistent() {
+    let session = session_with_sheets(&["Sheet1"]);
+    let ids = WorkbookIds::from_workbook(&session.doc().expect("document exists").wb).expect("base identities build");
+    let missing_marker = json!({
+        "version":1,
+        "action":20,
+        "command":{
+            "id":"cell.set",
+            "sheet":[0,0],
+            "cell":cell_identity(0,0),
+            "input":"=A1",
+            "originYear":2026,
+            "references":[]
+        }
+    });
+    assert!(matches!(
+        decode_entry(&missing_marker.to_string()),
+        Err(CoauthorError::MissingTarget { command, target }) if command == "cell.set" && target == "formula"
+    ));
+
+    let positional_formula = decode_entry(&entry(json!({
+        "id":"cell.set",
+        "sheet":[0,0],
+        "cell":cell_identity(0,0),
+        "input":"=A1",
+        "originYear":2026,
+        "formula":false,
+        "references":[]
+    })))
+    .expect("typed literal entry decodes");
+    assert!(matches!(resolve_command(&ids, &session, &positional_formula), Err(TargetGone::Malformed(_))));
+
+    let false_with_references = decode_entry(&entry(json!({
+        "id":"cell.set",
+        "sheet":[0,0],
+        "cell":cell_identity(0,0),
+        "input":"plain text",
+        "originYear":2026,
+        "formula":false,
+        "references":[{
+            "sheet":{"kind":"current","sheet":[0,0]},
+            "reference":{"kind":"cell","anchor":{"row":[0,0],"col":[0,0],"row_abs":false,"col_abs":false}}
+        }]
+    })))
+    .expect("typed literal with references decodes");
+    assert!(matches!(resolve_command(&ids, &session, &false_with_references), Err(TargetGone::Malformed(_))));
+
+    let true_without_formula = decode_entry(&entry(json!({
+        "id":"cell.set",
+        "sheet":[0,0],
+        "cell":cell_identity(0,0),
+        "input":"A1",
+        "originYear":2026,
+        "formula":true,
+        "references":[]
+    })))
+    .expect("typed formula entry decodes");
+    assert!(matches!(resolve_command(&ids, &session, &true_without_formula), Err(TargetGone::Malformed(_))));
+
+    let mut text_session = session_with_sheets(&["Sheet1"]);
+    text_session.execute("home.numberFormat", json!({"sheet":"Sheet1","range":"A1","code":"@"})).expect("text format applies");
+    let text_ids = WorkbookIds::from_workbook(&text_session.doc().expect("document exists").wb).expect("base identities build");
+    let text_literal = decode_entry(&entry(json!({
+        "id":"cell.set",
+        "sheet":[0,0],
+        "cell":cell_identity(0,0),
+        "input":"=A1",
+        "originYear":2026,
+        "formula":false,
+        "references":[]
+    })))
+    .expect("typed text literal decodes");
+    assert_eq!(resolve_command(&text_ids, &text_session, &text_literal).expect("text literal resolves").params["input"], "=A1");
+}
+
+#[test]
 fn multi_area_and_delete_count_targets_survive_encoding() {
     let session = session_with_sheets(&["Sheet1"]);
     let ids = WorkbookIds::from_workbook(&session.doc().expect("document exists").wb).expect("base identities build");
@@ -242,6 +318,121 @@ fn structurally_divergent_three_d_reference_becomes_ref() {
 }
 
 #[test]
+fn three_d_reference_tolerates_interior_sheet_insertion() {
+    let mut session = session_with_sheets(&["Sheet1", "Middle", "Tail"]);
+    let mut ids = WorkbookIds::from_workbook(&session.doc().expect("document exists").wb).expect("base identities build");
+    let mut allocate = |_count| Err(collab_live::ids::IdError::NoPlace);
+    let entry =
+        encode_command(&ids, &session, 21, "cell.set", &json!({"sheet":"Sheet1","cell":"C3","input":"=SUM(Sheet1:Tail!A1)"}), 2026, &mut allocate)
+            .expect("3-D formula encodes");
+
+    session.execute("home.insertSheet", json!({"name":"Inserted","before":1})).expect("interior sheet inserts");
+    ids.apply_structural(&IdentityStructural::InsertSheet {
+        before: IdentityPosition::Before(collab_live::ids::LiveId(0, 1)),
+        id: collab_live::ids::LiveId(8, 0),
+    })
+    .expect("sheet identity inserts");
+
+    let resolved = resolve_command(&ids, &session, &entry).expect("3-D entry survives an interior insertion");
+    assert_eq!(resolved.params["input"], "=SUM(Sheet1:Tail!A1)");
+}
+
+#[test]
+fn three_d_reference_tolerates_interior_sheet_deletion() {
+    let mut session = session_with_sheets(&["Sheet1", "Middle", "Tail"]);
+    let mut ids = WorkbookIds::from_workbook(&session.doc().expect("document exists").wb).expect("base identities build");
+    let mut allocate = |_count| Err(collab_live::ids::IdError::NoPlace);
+    let entry =
+        encode_command(&ids, &session, 22, "cell.set", &json!({"sheet":"Sheet1","cell":"C3","input":"=SUM(Sheet1:Tail!A1)"}), 2026, &mut allocate)
+            .expect("3-D formula encodes");
+
+    session.execute("home.deleteSheet", json!({"sheet":"Middle"})).expect("interior sheet deletes");
+    ids.apply_structural(&IdentityStructural::DeleteSheet { id: collab_live::ids::LiveId(0, 1) }).expect("sheet identity deletes");
+
+    let resolved = resolve_command(&ids, &session, &entry).expect("3-D entry survives an interior deletion");
+    assert_eq!(resolved.params["input"], "=SUM(Sheet1:Tail!A1)");
+}
+
+#[test]
+fn structural_resolution_rejects_reused_identity_runs_atomically() {
+    let session = session_with_sheets(&["Sheet1"]);
+    let ids = WorkbookIds::from_workbook(&session.doc().expect("document exists").wb).expect("base identities build");
+    let ids_before = ids.clone();
+    let workbook_before = session.doc().expect("document exists").wb.clone();
+    let overlapping_insert = decode_entry(&entry(json!({
+        "id":"home.insertRows",
+        "sheet":[0,0],
+        "rows":{"before":{"before":[0,0]},"first":[0,1048575],"count":2}
+    })))
+    .expect("typed insert decodes");
+    let reused_replacement = decode_entry(&entry(json!({
+        "id":"home.deleteRows",
+        "sheet":[0,0],
+        "rows":{"ids":[[0,0]],"first":[0,1]}
+    })))
+    .expect("typed delete decodes");
+
+    assert!(matches!(resolve_command(&ids, &session, &overlapping_insert), Err(TargetGone::Malformed(_))));
+    assert!(matches!(resolve_command(&ids, &session, &reused_replacement), Err(TargetGone::Malformed(_))));
+    assert_eq!(ids, ids_before);
+    assert_eq!(session.doc().expect("document exists").wb, workbook_before);
+}
+
+#[test]
+fn three_d_encoding_rejects_huge_span_before_walking_members() {
+    let names: Vec<String> = (0..5_000).map(|index| format!("S{index}")).collect();
+    let refs: Vec<&str> = names.iter().map(String::as_str).collect();
+    let session = session_with_sheets(&refs);
+    let mut ids = WorkbookIds::from_workbook(&session.doc().expect("document exists").wb).expect("base identities build");
+    ids.by_id.remove(&collab_live::ids::LiveId(0, 1));
+    let mut allocate = |_count| Err(collab_live::ids::IdError::NoPlace);
+
+    assert!(matches!(
+        encode_command(&ids, &session, 23, "cell.set", &json!({"sheet":"S0","cell":"C3","input":"=SUM(S0:S4999!A1)"}), 2026, &mut allocate,),
+        Err(CoauthorError::OversizedPayload { .. })
+    ));
+}
+
+#[test]
+fn two_clients_apply_structural_entries_to_identical_identity_tables() {
+    let session = session_with_sheets(&["Sheet1", "Data"]);
+    let mut first = WorkbookIds::from_workbook(&session.doc().expect("document exists").wb).expect("first identities build");
+    let mut second = first.clone();
+    let entries = [
+        IdentityStructural::InsertRows {
+            sheet: collab_live::ids::LiveId(0, 0),
+            before: IdentityPosition::Before(collab_live::ids::LiveId(0, 2)),
+            first: collab_live::ids::LiveId(1, 0),
+            count: 2,
+        },
+        IdentityStructural::DeleteRows {
+            sheet: collab_live::ids::LiveId(0, 0),
+            ids: vec![collab_live::ids::LiveId(0, 1)],
+            first: collab_live::ids::LiveId(1, 2),
+        },
+        IdentityStructural::InsertColumns {
+            sheet: collab_live::ids::LiveId(0, 0),
+            before: IdentityPosition::Before(collab_live::ids::LiveId(0, 3)),
+            first: collab_live::ids::LiveId(2, 0),
+            count: 1,
+        },
+        IdentityStructural::DeleteColumns {
+            sheet: collab_live::ids::LiveId(0, 0),
+            ids: vec![collab_live::ids::LiveId(0, 1)],
+            first: collab_live::ids::LiveId(2, 1),
+        },
+        IdentityStructural::InsertSheet { before: IdentityPosition::Before(collab_live::ids::LiveId(0, 1)), id: collab_live::ids::LiveId(3, 0) },
+        IdentityStructural::DeleteSheet { id: collab_live::ids::LiveId(0, 1) },
+    ];
+
+    for change in entries {
+        first.apply_structural(&change).expect("first client applies log entry");
+        second.apply_structural(&change).expect("second client applies log entry");
+        assert_eq!(first, second);
+    }
+}
+
+#[test]
 fn identity_payloads_are_closed_and_local_encoding_is_bounded() {
     let extra_cell = json!({
         "version":1,
@@ -252,6 +443,7 @@ fn identity_payloads_are_closed_and_local_encoding_is_bounded() {
             "cell":{"sheet":[0,0],"row":[0,0],"col":[0,0],"extra":false},
             "input":"1",
             "originYear":2026,
+            "formula":false,
             "references":[]
         }
     });
@@ -335,6 +527,7 @@ fn mismatched_identity_targets_are_refused() {
                 "cell":{"sheet":[0,1],"row":[0,0],"col":[0,0]},
                 "input":"1",
                 "originYear":2026,
+                "formula":false,
                 "references":[]
             }
         })
@@ -368,7 +561,7 @@ fn mismatched_identity_targets_are_refused() {
 
 fn canonical_commands() -> Vec<Json> {
     vec![
-        json!({"id":"cell.set","sheet":[0,0],"cell":cell_identity(0,0),"input":"1","originYear":2026,"references":[]}),
+        json!({"id":"cell.set","sheet":[0,0],"cell":cell_identity(0,0),"input":"1","originYear":2026,"formula":false,"references":[]}),
         json!({"id":"edit.clearContents","sheet":[0,0],"range":range_identity((0,0),(1,1),"cells")}),
         json!({"id":"home.numberFormat","sheet":[0,0],"range":range_identity((0,0),(0,0),"cells"),"code":"0.00"}),
         json!({"id":"home.fontName","sheet":[0,0],"range":range_identity((0,0),(0,0),"cells"),"name":"Arial"}),
