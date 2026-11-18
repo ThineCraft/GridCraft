@@ -155,18 +155,18 @@
       }
     },
     {
-      "id": "home.insertColumns",
+      "id": "data.filterSet",
       "params": {
-        "cols": "F:F",
-        "sheet": "Data"
+        "range": "P191:R200",
+        "sheet": "Übersicht"
       }
     },
     {
-      "id": "cell.set",
+      "id": "home.numberFormat",
       "params": {
-        "cell": "M146",
-        "input": "626",
-        "sheet": "Q1 Plan"
+        "format": "Accounting",
+        "range": "Z80:AB81",
+        "sheet": "Übersicht"
       }
     },
     {
@@ -208,15 +208,15 @@
     {
       "id": "home.insertColumns",
       "params": {
-        "cols": "A:A",
-        "sheet": "Übersicht"
+        "cols": "D:D",
+        "sheet": "Q1 Plan"
       }
     },
     {
       "id": "home.insertRows",
       "params": {
-        "rows": "36:38",
-        "sheet": "Sheet1"
+        "rows": "142:144",
+        "sheet": "Q1 Plan"
       }
     },
     {
@@ -253,7 +253,7 @@
     {
       "id": "edit.clearContents",
       "params": {
-        "range": "F1:F5",
+        "range": "G127:G131",
         "sheet": "Q1 Plan"
       }
     },
@@ -277,7 +277,7 @@
       "id": "home.fillColor",
       "params": {
         "color": "#FFFF00",
-        "range": "N144:O146",
+        "range": "AA138:AB140",
         "sheet": "Q1 Plan"
       }
     },
@@ -292,8 +292,8 @@
     {
       "id": "home.insertColumns",
       "params": {
-        "cols": "J:K",
-        "sheet": "Data"
+        "cols": "G:H",
+        "sheet": "Q1 Plan"
       }
     },
     {
@@ -331,8 +331,8 @@
     {
       "id": "home.deleteColumns",
       "params": {
-        "cols": "B:C",
-        "sheet": "Übersicht"
+        "cols": "H:I",
+        "sheet": "Data"
       }
     },
     {
@@ -411,7 +411,7 @@
     {
       "id": "cell.set",
       "params": {
-        "cell": "C26",
+        "cell": "G2",
         "input": "147",
         "sheet": "Q1 Plan"
       }
@@ -467,7 +467,7 @@
       "id": "home.deleteRows",
       "params": {
         "rows": "37:38",
-        "sheet": "Sheet1"
+        "sheet": "Data"
       }
     },
     {

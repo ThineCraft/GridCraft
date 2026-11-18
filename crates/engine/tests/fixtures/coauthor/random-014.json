@@ -365,77 +365,60 @@
       }
     },
     {
-      "id": "home.deleteColumns",
+      "id": "data.filterSet",
       "params": {
-        "cols": "B:B",
+        "range": "I191:L200",
         "sheet": "Sales-2"
+      }
+    },
+    {
+      "id": "edit.clearContents",
+      "params": {
+        "range": "B6:E12",
+        "sheet": "2026"
+      }
+    },
+    {
+      "id": "home.fillColor",
+      "params": {
+        "color": {
+          "theme": 5,
+          "tint": 0.4
+        },
+        "range": "C65:D71",
+        "sheet": "Ref"
+      }
+    },
+    {
+      "id": "home.fillColor",
+      "params": {
+        "color": "#C6EFCE",
+        "range": "F32:H35",
+        "sheet": "Übersicht"
       }
     },
     {
       "id": "cell.set",
       "params": {
-        "cell": "H1",
-        "input": "-489.74",
-        "sheet": "Sales-2"
-      }
-    },
-    {
-      "id": "home.deleteSheet",
-      "params": {
-        "sheet": "Totals"
-      }
-    },
-    {
-      "id": "home.bold",
-      "params": {
-        "on": true,
-        "range": "B8:D15",
-        "sheet": "2026"
-      }
-    },
-    {
-      "id": "home.decreaseFontSize",
-      "params": {
-        "range": "B28:D31",
-        "sheet": "Übersicht",
-        "size": 14
+        "cell": "B28",
+        "input": "1E+300",
+        "sheet": "Übersicht"
       }
     },
     {
       "id": "cell.set",
       "params": {
-        "cell": "J132",
-        "input": "-967",
-        "sheet": "Sales-2"
-      }
-    },
-    {
-      "id": "home.insertColumns",
-      "params": {
-        "cols": "F:F",
-        "sheet": "2026"
-      }
-    },
-    {
-      "id": "sheet.rename",
-      "params": {
-        "name": "Q1 Plan",
+        "cell": "F15",
+        "input": "=UPPER(J16)",
         "sheet": "Sheet1"
       }
     },
     {
-      "id": "data.filterSet",
-      "params": {
-        "range": "Y191:AA200",
-        "sheet": "Q1 Plan"
-      }
-    },
-    {
       "id": "cell.set",
       "params": {
-        "cell": "I132",
-        "input": "-758",
-        "sheet": "Sales-2"
+        "cell": "G31",
+        "input": "=MEDIAN(H33:J35)",
+        "sheet": "Übersicht"
       }
     },
     {
@@ -443,7 +426,7 @@
       "params": {
         "on": true,
         "range": "AB31:AC34",
-        "sheet": "Übersicht",
+        "sheet": "Sheet1",
         "style": "double"
       }
     },
@@ -451,8 +434,8 @@
       "id": "home.borders",
       "params": {
         "preset": "insideHorizontal",
-        "range": "F120:I124",
-        "sheet": "Ref",
+        "range": "F9:I13",
+        "sheet": "Totals",
         "style": "hair"
       }
     },
@@ -467,9 +450,9 @@
     {
       "id": "cell.set",
       "params": {
-        "cell": "S21",
+        "cell": "H124",
         "input": "=ROUND(RANDBETWEEN(1,6)*100,2)",
-        "sheet": "Übersicht"
+        "sheet": "Ref"
       }
     },
     {
@@ -477,31 +460,53 @@
       "params": {
         "cell": "Q171",
         "input": "285.88",
+        "sheet": "Totals"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "G121",
+        "input": "=LEFT(\"abc\",2)",
+        "sheet": "Ref"
+      }
+    },
+    {
+      "id": "edit.clearContents",
+      "params": {
+        "range": "F122:O137",
         "sheet": "Ref"
       }
     },
     {
       "id": "cell.set",
       "params": {
-        "cell": "B2",
-        "input": "=ROUND(NOW()*100,2)",
-        "sheet": "Q1 Plan"
+        "cell": "Q173",
+        "input": "TRUE story",
+        "sheet": "Totals"
+      }
+    },
+    {
+      "id": "home.deleteRows",
+      "params": {
+        "rows": "14:16",
+        "sheet": "Sheet1"
       }
     },
     {
       "id": "cell.set",
       "params": {
-        "cell": "C3",
-        "input": "=VLOOKUP('2026'!A7,E40:H44,2,FALSE)",
-        "sheet": "Q1 Plan"
+        "cell": "E17",
+        "input": "=POWER(D16,1)",
+        "sheet": "Sheet1"
       }
     },
     {
       "id": "cell.set",
       "params": {
-        "cell": "Q19",
-        "input": "-31.44",
-        "sheet": "Übersicht"
+        "cell": "H123",
+        "input": "",
+        "sheet": "Ref"
       }
     }
   ]

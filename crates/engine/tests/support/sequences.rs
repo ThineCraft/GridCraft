@@ -636,7 +636,7 @@ impl Gen {
             69..73 => self.borders(),
             73..77 => self.alignment(),
             77..82 => self.explicit_format(),
-            82..85 => self.filter(),
+            82..87 => self.filter(),
             _ => self.structural(),
         }
     }

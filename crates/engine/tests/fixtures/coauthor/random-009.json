@@ -418,25 +418,65 @@
       }
     },
     {
-      "id": "home.insertColumns",
+      "id": "data.filterRemove",
       "params": {
-        "cols": "F:G",
-        "sheet": "Bob's"
+        "range": "G191:I200",
+        "sheet": "Ref"
       }
     },
     {
-      "id": "home.italic",
+      "id": "cell.set",
       "params": {
-        "on": true,
-        "range": "G30:H34",
+        "cell": "E160",
+        "input": "=ABS(Notes!E137)",
         "sheet": "Sheet1"
       }
     },
     {
-      "id": "home.insertRows",
+      "id": "home.fontName",
       "params": {
-        "rows": "51:53",
+        "name": "Calibri",
+        "range": "C64:F71",
         "sheet": "Bob's"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "G51",
+        "input": "  padded ",
+        "sheet": "Bob's"
+      }
+    },
+    {
+      "id": "edit.clearContents",
+      "params": {
+        "range": "AD8:AD11",
+        "sheet": "Notes"
+      }
+    },
+    {
+      "id": "home.fillColor",
+      "params": {
+        "color": "#C6EFCE",
+        "range": "E29",
+        "sheet": "Ref"
+      }
+    },
+    {
+      "id": "home.fillColor",
+      "params": {
+        "color": "#C6EFCE",
+        "range": "F29:I34",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "F28",
+        "input": "TRUE story",
+        "sheet": "Ref"
       }
     },
     {
@@ -446,48 +486,8 @@
           "theme": 5,
           "tint": 0.4
         },
-        "range": "17:17",
-        "sheet": "Notes"
-      }
-    },
-    {
-      "id": "cell.set",
-      "params": {
-        "cell": "F25",
-        "input": "-2.5E-300",
-        "sheet": "Sheet1"
-      }
-    },
-    {
-      "id": "cell.set",
-      "params": {
-        "cell": "G24",
-        "input": "-99.88",
-        "sheet": "Sheet1"
-      }
-    },
-    {
-      "id": "cell.set",
-      "params": {
-        "cell": "B30",
-        "input": "1E+300",
-        "sheet": "Notes"
-      }
-    },
-    {
-      "id": "home.wrapText",
-      "params": {
-        "on": true,
-        "range": "G30:I35",
-        "sheet": "Sheet1"
-      }
-    },
-    {
-      "id": "cell.set",
-      "params": {
-        "cell": "G54",
-        "input": "TRUE story",
-        "sheet": "Bob's"
+        "range": "A12:B17",
+        "sheet": "Ref"
       }
     }
   ]

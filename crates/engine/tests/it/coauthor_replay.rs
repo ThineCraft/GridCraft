@@ -501,6 +501,19 @@ fn expected_fixtures() -> Vec<(String, Sequence)> {
 #[test]
 fn fixtures_round_trip_as_json() {
     let expected = expected_fixtures();
+    let newly_shared = [
+        "home.underline",
+        "home.doubleUnderline",
+        "home.increaseFontSize",
+        "home.decreaseFontSize",
+        "home.formatCells",
+        "data.filterSet",
+        "data.filterRemove",
+        "data.filterBy",
+        "data.clearFilter",
+        "data.reapply",
+    ];
+    let mut random_commands = std::collections::BTreeSet::new();
     if std::env::var_os("GRIDCRAFT_COAUTHOR_WRITE_FIXTURES").is_some() {
         for (name, seq) in &expected {
             std::fs::write(fixtures_dir().join(name), seq.to_text()).expect("fixture written");
@@ -524,7 +537,13 @@ fn fixtures_round_trip_as_json() {
         }
         for step in &seq.steps {
             assert!(SHARED_COMMANDS.contains(&step.id.as_str()), "{name}: `{}` is not a shared command", step.id);
+            if name.starts_with("random-") {
+                random_commands.insert(step.id.clone());
+            }
         }
+    }
+    for command in newly_shared {
+        assert!(random_commands.contains(command), "the random fixtures never exercise `{command}`");
     }
     // The JSON form rejects what it doesn't know, so a typo can't pass as an empty sequence.
     for bad in [

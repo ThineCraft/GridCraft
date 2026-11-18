@@ -35,7 +35,7 @@ pub fn specs() -> Vec<CommandSpec> {
         ),
         cmd!("home.doubleUnderline", "Double Underline", ["Home", "Font"], None, "{range?}", has_doc, |s, p| underline(
             s,
-            &with(p, "style", json!("double"))
+            &with_default(p, "style", json!("double"))
         )),
         cmd!("home.strikethrough", "Strikethrough", ["Home", "Font"], Some("Cmd+Shift+X"), "{range?, on?}", has_doc, |s, p| toggle(
             s,
@@ -232,9 +232,9 @@ fn accounting_format(symbol: &str) -> String {
     format!("_({symbol}* #,##0.00_);_({symbol}* \\(#,##0.00\\);_({symbol}* \"-\"??_);_(@_)")
 }
 
-fn with(p: &Json, key: &str, v: Json) -> Json {
+fn with_default(p: &Json, key: &str, v: Json) -> Json {
     let mut m = p.as_object().cloned().unwrap_or_default();
-    m.insert(key.into(), v);
+    m.entry(key).or_insert(v);
     Json::Object(m)
 }
 

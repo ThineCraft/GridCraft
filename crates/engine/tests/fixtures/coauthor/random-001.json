@@ -240,34 +240,33 @@
       }
     },
     {
-      "id": "home.deleteRows",
+      "id": "data.filterSet",
       "params": {
-        "rows": "36:36",
+        "range": "C191:E200",
         "sheet": "Notes"
       }
     },
     {
       "id": "cell.set",
       "params": {
-        "cell": "D187",
-        "input": "x y z",
-        "sheet": "Notes"
-      }
-    },
-    {
-      "id": "cell.set",
-      "params": {
-        "cell": "D183",
-        "input": "=MEDIAN(C35:E36)",
-        "sheet": "Notes"
-      }
-    },
-    {
-      "id": "cell.set",
-      "params": {
-        "cell": "J6",
-        "input": "-857",
+        "cell": "O79",
+        "input": "=DATE(2026,5,P81)",
         "sheet": "AB12"
+      }
+    },
+    {
+      "id": "edit.clearContents",
+      "params": {
+        "range": "H6:I7",
+        "sheet": "AB12"
+      }
+    },
+    {
+      "id": "home.numberFormat",
+      "params": {
+        "code": "#,##0",
+        "range": "H3:K7",
+        "sheet": "Sheet1"
       }
     },
     {
@@ -306,14 +305,14 @@
     {
       "id": "home.deleteColumns",
       "params": {
-        "cols": "E:F",
-        "sheet": "Notes"
+        "cols": "N:O",
+        "sheet": "AB12"
       }
     },
     {
       "id": "home.fontSize",
       "params": {
-        "range": "I7:I14",
+        "range": "N80:N87",
         "sheet": "AB12",
         "size": 18
       }
@@ -353,8 +352,8 @@
     {
       "id": "cell.set",
       "params": {
-        "cell": "D38",
-        "input": "=AND(E36>0,73<50)",
+        "cell": "K65",
+        "input": "=AND(F183>0,73<50)",
         "sheet": "Notes"
       }
     },
@@ -369,7 +368,7 @@
     {
       "id": "cell.set",
       "params": {
-        "cell": "E182",
+        "cell": "J62",
         "input": "TRUE",
         "sheet": "Notes"
       }
@@ -377,85 +376,91 @@
     {
       "id": "cell.set",
       "params": {
-        "cell": "H28",
+        "cell": "C37",
         "input": "64%",
         "sheet": "Notes"
       }
     },
     {
-      "id": "home.insertRows",
+      "id": "data.filterRemove",
       "params": {
-        "rows": "181:183",
-        "sheet": "Notes"
-      }
-    },
-    {
-      "id": "cell.set",
-      "params": {
-        "cell": "C36",
-        "input": "=IFERROR(COUNTA(C37:C43,B29),-1)",
-        "sheet": "Notes"
-      }
-    },
-    {
-      "id": "cell.set",
-      "params": {
-        "cell": "B3",
-        "input": "=DATE(2026,5,Notes!H25)",
-        "sheet": "Sheet1"
-      }
-    },
-    {
-      "id": "cell.set",
-      "params": {
-        "cell": "A27",
-        "input": "2026-05-02",
-        "sheet": "Sheet1"
-      }
-    },
-    {
-      "id": "cell.set",
-      "params": {
-        "cell": "G23",
-        "input": "=SQRT(C15)",
-        "sheet": "Sheet1"
-      }
-    },
-    {
-      "id": "cell.set",
-      "params": {
-        "cell": "D34",
-        "input": "=POWER(53,3)",
-        "sheet": "Notes"
-      }
-    },
-    {
-      "id": "home.borders",
-      "params": {
-        "color": "#00B050",
-        "preset": "right",
-        "range": "F184:I184",
-        "sheet": "Notes",
-        "style": "thick"
-      }
-    },
-    {
-      "id": "cell.set",
-      "params": {
-        "cell": "D26",
-        "input": "=ROUND(TODAY()*100,2)",
-        "sheet": "Notes"
-      }
-    },
-    {
-      "id": "data.filterBy",
-      "params": {
-        "column": "N",
         "range": "N191:P200",
-        "sheet": "Sheet1",
-        "values": [
-          "North"
-        ]
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "edit.clearContents",
+      "params": {
+        "range": "D15:G19",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "home.numberFormat",
+      "params": {
+        "format": "Time",
+        "range": "H27:J33",
+        "sheet": "Notes"
+      }
+    },
+    {
+      "id": "home.fontColor",
+      "params": {
+        "color": "#1F4E79",
+        "range": "A12:A14",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "home.numberFormat",
+      "params": {
+        "format": "Accounting",
+        "range": "B20:B25",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "edit.clearContents",
+      "params": {
+        "range": "F1",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "home.deleteColumns",
+      "params": {
+        "cols": "E:E",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "L66",
+        "input": "=IF(F185>79,D28,'Sheet1'!B3)",
+        "sheet": "Notes"
+      }
+    },
+    {
+      "id": "home.deleteSheet",
+      "params": {
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "J62",
+        "input": "550",
+        "sheet": "Notes"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "G27",
+        "input": "TRUE story",
+        "sheet": "Notes"
       }
     },
     {
@@ -469,31 +474,15 @@
     {
       "id": "data.filterRemove",
       "params": {
-        "range": "N191:P200",
-        "sheet": "Sheet1"
+        "range": "C191:E200",
+        "sheet": "Notes"
       }
     },
     {
       "id": "home.insertColumns",
       "params": {
-        "cols": "F:F",
-        "sheet": "Sheet1"
-      }
-    },
-    {
-      "id": "cell.set",
-      "params": {
-        "cell": "D37",
-        "input": "=AVERAGEIF('Sheet1'!G4:H8,\"apple\")",
+        "cols": "K:K",
         "sheet": "Notes"
-      }
-    },
-    {
-      "id": "cell.set",
-      "params": {
-        "cell": "H25",
-        "input": "826",
-        "sheet": "Sheet1"
       }
     }
   ]

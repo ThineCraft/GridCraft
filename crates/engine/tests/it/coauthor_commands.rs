@@ -114,6 +114,31 @@ fn filter_set_and_remove_are_idempotent() {
 }
 
 #[test]
+fn repeated_filter_set_preserves_existing_criteria() {
+    let mut session = explicit_command_session();
+    let target = json!({"sheet":"Data","range":"A1:C4"});
+
+    session.execute("data.filterSet", target.clone()).expect("filter is set");
+    session.execute("data.filterBy", json!({"sheet":"Data","range":"A1:C4","column":"B","values":["x"]})).expect("criterion is set");
+    let before = fingerprint(&session, DocId(0)).entered;
+
+    session.execute("data.filterSet", target).expect("setting the same filter is harmless");
+
+    assert_eq!(fingerprint(&session, DocId(0)).entered, before, "setting the same filter must preserve its criterion and filtered rows");
+}
+
+#[test]
+fn filter_remove_refuses_a_mismatched_range_without_changes() {
+    let mut session = explicit_command_session();
+    session.execute("data.filterSet", json!({"sheet":"Data","range":"A1:C4"})).expect("filter is set");
+    session.execute("data.filterBy", json!({"sheet":"Data","range":"A1:C4","column":"B","values":["x"]})).expect("criterion is set");
+    let before = fingerprint(&session, DocId(0)).entered;
+
+    assert!(session.execute("data.filterRemove", json!({"sheet":"Data","range":"A1:B4"})).is_err());
+    assert_eq!(fingerprint(&session, DocId(0)).entered, before, "a mismatched remove must preserve the filter and its effects");
+}
+
+#[test]
 fn underline_with_on_ignores_active_cell() {
     let mut a = explicit_command_session();
     let mut b = explicit_command_session();
@@ -126,6 +151,20 @@ fn underline_with_on_ignores_active_cell() {
         b.execute("home.underline", params).expect("explicit underline applies")
     );
     assert_entered_equal(&a, &b);
+}
+
+#[test]
+fn double_underline_stores_the_supplied_accounting_style() {
+    let mut session = explicit_command_session();
+
+    session
+        .execute("home.doubleUnderline", json!({"sheet":"Data","range":"C2:C3","on":true,"style":"doubleAccounting"}))
+        .expect("explicit double accounting underline applies");
+
+    assert_eq!(
+        session.execute("cell.get", json!({"sheet":"Data","cell":"C2"})).expect("target reads")["style"]["font"]["underline"],
+        "DoubleAccounting"
+    );
 }
 
 #[test]
@@ -143,6 +182,24 @@ fn font_step_uses_the_sent_size() {
     assert_entered_equal(&a, &b);
     for session in [&mut a, &mut b] {
         assert_eq!(session.execute("cell.get", json!({"sheet":"Data","cell":"C2"})).expect("target reads")["style"]["font"]["size"], 14.0);
+    }
+}
+
+#[test]
+fn decrease_font_step_uses_the_sent_size() {
+    let mut a = explicit_command_session();
+    let mut b = explicit_command_session();
+    move_view(&mut a, "A1");
+    move_view(&mut b, "B1");
+    let params = json!({"sheet":"Data","range":"C2:C3","size":10});
+
+    assert_eq!(
+        a.execute("home.decreaseFontSize", params.clone()).expect("explicit decreased size applies"),
+        b.execute("home.decreaseFontSize", params).expect("explicit decreased size applies")
+    );
+    assert_entered_equal(&a, &b);
+    for session in [&mut a, &mut b] {
+        assert_eq!(session.execute("cell.get", json!({"sheet":"Data","cell":"C2"})).expect("target reads")["style"]["font"]["size"], 10.0);
     }
 }
 

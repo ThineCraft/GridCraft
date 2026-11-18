@@ -214,140 +214,149 @@
       }
     },
     {
-      "id": "home.deleteColumns",
+      "id": "data.filterBy",
       "params": {
-        "cols": "O:O",
-        "sheet": "Sheet1"
+        "column": "I",
+        "range": "H191:K200",
+        "sheet": "2026",
+        "values": [
+          "North"
+        ]
       }
     },
     {
       "id": "cell.set",
       "params": {
-        "cell": "M77",
-        "input": "=SQRT(A27)",
+        "cell": "D39",
+        "input": "=AVERAGE('2026'!B7:C13,O78)",
         "sheet": "Sheet1"
-      }
-    },
-    {
-      "id": "cell.set",
-      "params": {
-        "cell": "O79",
-        "input": "=COUNTIF(O76:P82,\"<=0\")",
-        "sheet": "Sheet1"
-      }
-    },
-    {
-      "id": "edit.clearContents",
-      "params": {
-        "range": "B15:B21",
-        "sheet": "Sheet1"
-      }
-    },
-    {
-      "id": "cell.set",
-      "params": {
-        "cell": "M77",
-        "input": "76%",
-        "sheet": "Sheet1"
-      }
-    },
-    {
-      "id": "home.numberFormat",
-      "params": {
-        "code": "yyyy-mm-dd",
-        "range": "G27:H34",
-        "sheet": "Bob's"
-      }
-    },
-    {
-      "id": "cell.set",
-      "params": {
-        "cell": "B9",
-        "input": "=UPPER(A7)",
-        "sheet": "Bob's"
       }
     },
     {
       "id": "home.insertColumns",
       "params": {
-        "cols": "B:C",
-        "sheet": "Bob's"
+        "cols": "C:C",
+        "sheet": "Sheet1"
       }
     },
     {
-      "id": "home.insertSheet",
+      "id": "home.fillColor",
       "params": {
-        "before": 2,
-        "name": "Notes"
-      }
-    },
-    {
-      "id": "cell.set",
-      "params": {
-        "cell": "Y75",
-        "input": "=COUNTA(N6:P7)",
-        "sheet": "Notes"
+        "color": {
+          "theme": 5,
+          "tint": 0.4
+        },
+        "range": "L78:L82",
+        "sheet": "Sheet1"
       }
     },
     {
       "id": "cell.set",
       "params": {
-        "cell": "G28",
-        "input": "860",
-        "sheet": "Bob's"
+        "cell": "E39",
+        "input": "=AVERAGE(C39:E46)",
+        "sheet": "Sheet1"
       }
     },
     {
       "id": "cell.set",
       "params": {
         "cell": "G28",
-        "input": "=AVERAGE(H27:H40)",
+        "input": "=IFERROR(SUMPRODUCT(H30:K35,I30:L35),-1)",
         "sheet": "Bob's"
-      }
-    },
-    {
-      "id": "home.wrapText",
-      "params": {
-        "on": true,
-        "range": "B9:C15",
-        "sheet": "2026"
       }
     },
     {
       "id": "home.insertRows",
       "params": {
-        "rows": "76:77",
-        "sheet": "Notes"
+        "rows": "27:29",
+        "sheet": "Bob's"
       }
     },
     {
       "id": "cell.set",
       "params": {
-        "cell": "X76",
-        "input": "2026-03-23",
-        "sheet": "Notes"
+        "cell": "O158",
+        "input": "FALSE",
+        "sheet": "Bob's"
       }
     },
     {
       "id": "edit.clearContents",
       "params": {
-        "range": "F32:F36",
+        "range": "A8:A9",
         "sheet": "2026"
+      }
+    },
+    {
+      "id": "home.borders",
+      "params": {
+        "preset": "bottom",
+        "range": "M78:M83",
+        "sheet": "Sheet1",
+        "style": "thick"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "H28",
+        "input": "447.16",
+        "sheet": "Bob's"
+      }
+    },
+    {
+      "id": "home.fontName",
+      "params": {
+        "name": "Arial",
+        "range": "D28:G29",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "H152",
+        "input": "=CONCAT(\"  Mixed Case \",\"-\",0)",
+        "sheet": "Bob's"
+      }
+    },
+    {
+      "id": "home.alignRight",
+      "params": {
+        "on": true,
+        "range": "L78:N79",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "data.filterSet",
+      "params": {
+        "range": "A191:C200",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "H30",
+        "input": "50%",
+        "sheet": "Bob's"
       }
     },
     {
       "id": "edit.clearContents",
       "params": {
         "range": "N195:Q197",
-        "sheet": "Bob's"
+        "sheet": "2026"
       }
     },
     {
       "id": "home.fillColor",
       "params": {
         "color": "#C6EFCE",
-        "range": "X75:Z76",
-        "sheet": "Notes"
+        "range": "H27:J28",
+        "sheet": "Bob's"
       }
     },
     {
@@ -355,20 +364,20 @@
       "params": {
         "cell": "E14",
         "input": "-0",
-        "sheet": "Bob's"
+        "sheet": "Sheet1"
       }
     },
     {
       "id": "edit.clearContents",
       "params": {
-        "range": "F32:H39",
-        "sheet": "2026"
+        "range": "E38:G45",
+        "sheet": "Sheet1"
       }
     },
     {
       "id": "home.insertSheet",
       "params": {
-        "before": 1,
+        "before": 2,
         "name": "Data"
       }
     },
@@ -376,40 +385,51 @@
       "id": "home.fontName",
       "params": {
         "name": "Courier New",
-        "range": "G27:G30",
-        "sheet": "Notes"
+        "range": "Q25:T30",
+        "sheet": "Data"
       }
     },
     {
-      "id": "cell.set",
+      "id": "home.fillColor",
       "params": {
-        "cell": "O78",
-        "input": "=ABS(-17)",
+        "color": {
+          "theme": 5,
+          "tint": 0.4
+        },
+        "range": "N78:P83",
         "sheet": "Sheet1"
       }
     },
     {
       "id": "cell.set",
       "params": {
-        "cell": "A8",
-        "input": "=AVERAGEIF(F35:I42,10)+'Bob''s'!$F$30",
+        "cell": "A7",
+        "input": "=ROUNDUP(F35/7,1)",
         "sheet": "2026"
       }
     },
     {
       "id": "cell.set",
       "params": {
-        "cell": "J13",
-        "input": "781",
-        "sheet": "Data"
+        "cell": "E12",
+        "input": "416.60",
+        "sheet": "Sheet1"
       }
     },
     {
       "id": "cell.set",
       "params": {
-        "cell": "K14",
+        "cell": "F152",
+        "input": "781",
+        "sheet": "Bob's"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "G29",
         "input": "=RIGHT(\"  Mixed Case \",2)",
-        "sheet": "Data"
+        "sheet": "Bob's"
       }
     },
     {
@@ -425,44 +445,45 @@
       "params": {
         "cell": "F21",
         "input": "apple",
+        "sheet": "Bob's"
+      }
+    },
+    {
+      "id": "data.reapply",
+      "params": {
+        "range": "H191:K200",
         "sheet": "2026"
       }
     },
     {
-      "id": "data.filterSet",
+      "id": "cell.set",
       "params": {
-        "range": "S191:U200",
+        "cell": "A8",
+        "input": "640",
+        "sheet": "2026"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "C74",
+        "input": "",
         "sheet": "Data"
       }
     },
     {
       "id": "cell.set",
       "params": {
-        "cell": "N77",
-        "input": "262.46",
-        "sheet": "Sheet1"
-      }
-    },
-    {
-      "id": "sheet.rename",
-      "params": {
-        "name": "Übersicht",
-        "sheet": "Sheet1"
-      }
-    },
-    {
-      "id": "cell.set",
-      "params": {
-        "cell": "B11",
+        "cell": "D76",
         "input": "=LEFT(\"\",2)+-4",
-        "sheet": "2026"
+        "sheet": "Data"
       }
     },
     {
       "id": "home.deleteRows",
       "params": {
-        "rows": "28:28",
-        "sheet": "Bob's"
+        "rows": "76:76",
+        "sheet": "Data"
       }
     },
     {
@@ -470,7 +491,7 @@
       "params": {
         "color": "#00B050",
         "preset": "insideVertical",
-        "range": "F28:G34",
+        "range": "G28:H34",
         "sheet": "Bob's",
         "style": "hair"
       }
@@ -478,16 +499,9 @@
     {
       "id": "cell.set",
       "params": {
-        "cell": "J12",
+        "cell": "A6",
         "input": "  padded ",
-        "sheet": "Data"
-      }
-    },
-    {
-      "id": "home.insertRows",
-      "params": {
-        "rows": "77:77",
-        "sheet": "Notes"
+        "sheet": "2026"
       }
     }
   ]
