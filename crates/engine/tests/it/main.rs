@@ -4,6 +4,7 @@ mod autofit_filter_buttons;
 mod cf_formula_validate;
 mod chart_area_stacked100;
 mod chart_workbook_names;
+mod coauthor_commands;
 mod coauthor_replay;
 mod coauthor_save_reload;
 mod coauthor_timing;
