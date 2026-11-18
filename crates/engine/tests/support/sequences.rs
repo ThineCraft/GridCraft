@@ -262,6 +262,31 @@ pub fn timing_document(cells: usize) -> Result<DocState, String> {
     Ok(document)
 }
 
+/// A timing document with the same 100,000-cell shape but much wider dependency fan-out.
+/// Every formula sums an 80-cell constant block on the other sheet, so one source edit dirties
+/// thousands of formulas and a structural edit must rewrite and recalculate all of them.
+pub fn heavier_timing_document(cells: usize) -> Result<DocState, String> {
+    let mut workbook = timing_workbook(cells)?;
+    let rows = cells / 200;
+    let rows = u32::try_from(rows).map_err(|_| format!("heavier timing workbook has too many rows: {rows}"))?;
+    for sheet_index in 0..2 {
+        let other = if sheet_index == 0 { "Data" } else { "Sheet1" };
+        let sheet = workbook.sheet_mut(sheet_index).ok_or_else(|| format!("heavier timing workbook is missing sheet {sheet_index}"))?;
+        for row in 0..rows {
+            for col in (0..100u32).step_by(5) {
+                let formula = format!("=SUM({other}!$B$1:$E$20)+{}", row.saturating_add(col));
+                sheet.set_cell(CellRef::new(row, col), Cell::formula(Formula::new(&formula)));
+            }
+        }
+    }
+    let mut document = DocState::new(workbook, None, format!("Heavier-Timing-{cells}"), Trust::Local);
+    document.calc.fixed_now = Some(DEFAULT_NOW);
+    document.calc.set_rand_seed(0xC0A7_7402_0000_0006);
+    let wb = Arc::make_mut(&mut document.wb);
+    document.calc.recalc_all(wb);
+    Ok(document)
+}
+
 /// Fifty deterministic shared commands with explicit targets. Seven are structural (14 %), close
 /// to the 15 % mix in co-author replay sequences; insert/delete pairs keep later targets stable.
 pub fn timing_pending_commands() -> Vec<Step> {

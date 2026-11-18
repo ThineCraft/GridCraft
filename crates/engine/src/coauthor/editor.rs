@@ -6,7 +6,7 @@ use collab_live::client::{Crash, Effect, EntryView, LiveEditor, Outcome, Stamp};
 use collab_live::ids::{IdError, LiveId};
 use serde_json::Value as Json;
 
-use super::{CoauthorError, LARGE_WORKBOOK_CELLS, PreparedChange, SharedCommand, WorkbookIds, decode_entry, encode_command, resolve_command};
+use super::{CoauthorError, PreparedChange, WorkbookIds, decode_entry, encode_command, mode_for, resolve_command};
 use crate::fingerprint::{DocId, fingerprint};
 use crate::{Calc, EngineError, Selection, Session};
 
@@ -27,7 +27,7 @@ pub struct GridSnapshot {
 }
 
 #[derive(Clone, Debug)]
-struct PersonalView {
+pub(super) struct PersonalView {
     active_sheet: LiveId,
     active_position: usize,
     selections: BTreeMap<LiveId, Selection>,
@@ -40,6 +40,7 @@ pub struct GridLiveEditor {
     session: Session,
     ids: WorkbookIds,
     applying_seq: Option<Seq>,
+    local_action_high_water: u64,
     #[cfg(test)]
     test_command_override: Option<&'static str>,
 }
@@ -51,6 +52,7 @@ impl GridLiveEditor {
             session,
             ids,
             applying_seq: None,
+            local_action_high_water: 0,
             #[cfg(test)]
             test_command_override: None,
         })
@@ -78,18 +80,8 @@ impl GridLiveEditor {
     ) -> Result<PreparedChange, CoauthorError> {
         let entry = encode_command(&self.ids, &self.session, action, id, params, origin_year, allocate)?;
         let payload = serde_json::to_string(&entry).map_err(|error| CoauthorError::MalformedPayload(error.to_string()))?;
-        let structural = matches!(
-            entry.command,
-            SharedCommand::InsertRows { .. }
-                | SharedCommand::DeleteRows { .. }
-                | SharedCommand::InsertColumns { .. }
-                | SharedCommand::DeleteColumns { .. }
-                | SharedCommand::InsertSheet { .. }
-                | SharedCommand::RenameSheet { .. }
-                | SharedCommand::DeleteSheet { .. }
-        );
-        let large = self.session.doc()?.wb.sheets.iter().fold(0usize, |count, sheet| count.saturating_add(sheet.cells.len())) >= LARGE_WORKBOOK_CELLS;
-        let mode = if structural && large { collab_live::client::Mode::WaitForServer } else { collab_live::client::Mode::ShowAtOnce };
+        let stored_cells = self.session.doc()?.wb.sheets.iter().fold(0usize, |count, sheet| count.saturating_add(sheet.cells.len()));
+        let mode = mode_for(&entry.command, stored_cells);
         Ok(PreparedChange { payload, mode, action })
     }
 
@@ -110,7 +102,7 @@ impl GridLiveEditor {
         fingerprint(&self.session, DocId(self.session.active_index())).entered
     }
 
-    fn capture_view(&self) -> Option<PersonalView> {
+    pub(super) fn capture_view(&self) -> Option<PersonalView> {
         let document = self.session.doc().ok()?;
         let active_position = document.wb.active_sheet();
         let active_sheet = self.ids.sheet_id(active_position).ok()?;
@@ -133,7 +125,7 @@ impl GridLiveEditor {
         })
     }
 
-    fn restore_view(&mut self, view: &PersonalView) {
+    pub(super) fn restore_view(&mut self, view: &PersonalView) {
         let sheet_count = match self.session.doc() {
             Ok(document) => document.wb.sheets.len(),
             Err(_) => return,
@@ -223,6 +215,7 @@ impl LiveEditor for GridLiveEditor {
         if let Ok(document) = self.session.doc_mut() {
             document.calc.clear_stamp_read();
         }
+        let prior_stamp = entry.stamp.and_then(|_| self.session.doc().ok().map(|document| document.calc.stamp_state()));
         if let Some(stamp) = entry.stamp {
             self.apply_stamp(stamp);
         }
@@ -231,18 +224,32 @@ impl LiveEditor for GridLiveEditor {
         #[cfg(not(test))]
         let command_id = resolved.id.as_str();
         let result = self.session.execute(command_id, resolved.params);
-        let read_stamp = entry.stamp.is_none() && self.session.doc().is_ok_and(|document| document.calc.stamp_was_read());
+        let stamp_was_read = self.session.doc().is_ok_and(|document| document.calc.stamp_was_read());
         if let Err(error) = result {
             self.restore_shared(&before, view.as_ref(), true);
-            return Self::engine_error_outcome(error, read_stamp);
+            return Self::engine_error_outcome(error, entry.stamp.is_none() && stamp_was_read);
         }
         if let Some(structural) = resolved.structural
             && self.ids.apply_structural(&structural).is_err()
         {
             self.restore_shared(&before, view.as_ref(), true);
-            return Ok(Self::no_effect("The shared identities could not be updated.", read_stamp));
+            return Ok(Self::no_effect("The shared identities could not be updated.", entry.stamp.is_none() && stamp_was_read));
         }
-        let first_local_apply = entry.own && entry.seq.is_none();
+        if !stamp_was_read
+            && let Some(prior_stamp) = prior_stamp
+            && let Ok(document) = self.session.doc_mut()
+        {
+            document.calc.restore_stamp_state(prior_stamp);
+        }
+        let read_stamp = entry.stamp.is_none() && stamp_was_read;
+        // G2 presents both the first optimistic application and later pending replays as
+        // `own` entries without a sequence number. Action numbers increase for this person, so
+        // only a new high-water mark is the first application; replay must preserve the view.
+        // This also recognizes the first application of a WaitForServer action at acknowledgement.
+        let first_local_apply = entry.own && decoded.action > self.local_action_high_water;
+        if first_local_apply {
+            self.local_action_high_water = decoded.action;
+        }
         if !first_local_apply && let Some(view) = view.as_ref() {
             self.restore_view(view);
         }

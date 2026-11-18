@@ -57,6 +57,13 @@ pub struct Calc {
     spill_errors: SpillErrors,
 }
 
+/// The clock and random-stream context supplied by one ordered shared entry.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CalcStampState {
+    fixed_now: Option<f64>,
+    rng: u64,
+}
+
 /// A set of cells by row, each row's columns in their own set: a window of rows and columns is
 /// found by one column range per row that has an entry, so the cost follows the cells in the
 /// window, not those to the side of it in the same rows.
@@ -188,6 +195,17 @@ impl Calc {
         z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
         z ^= z >> 31;
         self.rng = if z == 0 { 0x9E37_79B9_7F4A_7C15 } else { z };
+    }
+
+    /// Captures the shared clock and random stream without copying other calculation state.
+    pub fn stamp_state(&self) -> CalcStampState {
+        CalcStampState { fixed_now: self.fixed_now, rng: self.rng }
+    }
+
+    /// Restores a context captured by [`Calc::stamp_state`].
+    pub fn restore_stamp_state(&mut self, state: CalcStampState) {
+        self.fixed_now = state.fixed_now;
+        self.rng = state.rng;
     }
 
     fn now(&self) -> f64 {
