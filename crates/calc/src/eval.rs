@@ -519,6 +519,12 @@ impl<'h> Evaluator<'h> {
         }
         let v = self.value(x);
         let sys = self.host.workbook().date_system;
+        let year = if op != UnOp::Plus && array::contains_text(&v) {
+            gridcraft_core::date::datetime_from_serial(gridcraft_core::DateSystem::D1900, self.host.now_serial())
+                .map_or(2026, |date| i64::from(date.year))
+        } else {
+            2026
+        };
         Ev::V(map_unary(
             &v,
             &|n| match op {
@@ -529,6 +535,7 @@ impl<'h> Evaluator<'h> {
             },
             op == UnOp::Plus,
             sys,
+            year,
         ))
     }
 
@@ -615,7 +622,14 @@ impl<'h> Evaluator<'h> {
                 let mut acc = self.value(left);
                 while let Some((o, r)) = rest.pop() {
                     let y = self.value(r);
-                    acc = binary_values(o, &acc, &y, self.host.workbook().date_system);
+                    let numeric = matches!(o, BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Pow);
+                    let year = if numeric && (array::contains_text(&acc) || array::contains_text(&y)) {
+                        gridcraft_core::date::datetime_from_serial(gridcraft_core::DateSystem::D1900, self.host.now_serial())
+                            .map_or(2026, |date| i64::from(date.year))
+                    } else {
+                        2026
+                    };
+                    acc = array::binary_values_in_year(o, &acc, &y, self.host.workbook().date_system, year);
                 }
                 Ev::V(acc)
             }
@@ -635,7 +649,13 @@ impl<'h> Evaluator<'h> {
             None | Some(Expr::Missing) => Ok(default),
             Some(e) => {
                 let v = self.value(e);
-                v.scalar().to_number()
+                let year = if array::contains_text(&v) {
+                    gridcraft_core::date::datetime_from_serial(gridcraft_core::DateSystem::D1900, self.host.now_serial())
+                        .map_or(2026, |date| i64::from(date.year))
+                } else {
+                    2026
+                };
+                v.scalar().to_number_in_year(gridcraft_core::DateSystem::D1900, year)
             }
         }
     }

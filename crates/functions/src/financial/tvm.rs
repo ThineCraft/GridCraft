@@ -244,9 +244,9 @@ pub(super) fn npv(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
 }
 
 /// Values and dates for XNPV/XIRR: both must be numeric and of equal length.
-fn dated_flows(values: &Value, dates: &Value) -> R<(Vec<f64>, Vec<f64>)> {
-    let va = as_array(values);
-    let da = as_array(dates);
+fn dated_flows(values: &Arg, dates: &Arg) -> R<(Vec<f64>, Vec<f64>)> {
+    let va = as_array(&values.value);
+    let da = as_array(&dates.value);
     if va.data.len() != da.data.len() {
         return Err(CellError::Num);
     }
@@ -261,7 +261,7 @@ fn dated_flows(values: &Value, dates: &Value) -> R<(Vec<f64>, Vec<f64>)> {
         match y {
             Value::Number(n) => d.push(n.trunc()),
             Value::Error(e) => return Err(*e),
-            Value::Text(_) => d.push(y.to_number()?.trunc()),
+            Value::Text(_) => d.push(crate::util::number(y, dates.coercion_year)?.trunc()),
             _ => return Err(CellError::Value),
         }
     }
@@ -282,12 +282,12 @@ pub(super) fn xnpv(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     if rate <= -1.0 {
         return Err(CellError::Num);
     }
-    let (v, d) = dated_flows(&a.get(1).ok_or(CellError::Value)?.value, &a.get(2).ok_or(CellError::Value)?.value)?;
+    let (v, d) = dated_flows(a.get(1).ok_or(CellError::Value)?, a.get(2).ok_or(CellError::Value)?)?;
     num_val(xnpv_calc(rate, &v, &d))
 }
 
 pub(super) fn xirr(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let (v, d) = dated_flows(&a.first().ok_or(CellError::Value)?.value, &a.get(1).ok_or(CellError::Value)?.value)?;
+    let (v, d) = dated_flows(a.first().ok_or(CellError::Value)?, a.get(1).ok_or(CellError::Value)?)?;
     let guess = opt_num(a, 2, 0.1)?;
     if !v.iter().any(|x| *x > 0.0) || !v.iter().any(|x| *x < 0.0) {
         return Err(CellError::Num);
@@ -296,7 +296,7 @@ pub(super) fn xirr(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
 }
 
 pub(super) fn irr(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let v = array_numbers(&a.first().ok_or(CellError::Value)?.value)?;
+    let v = array_numbers(a.first().ok_or(CellError::Value)?)?;
     let guess = opt_num(a, 1, 0.1)?;
     if !v.iter().any(|x| *x > 0.0) || !v.iter().any(|x| *x < 0.0) {
         return Err(CellError::Num);
@@ -314,7 +314,7 @@ pub(super) fn irr(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
 }
 
 pub(super) fn mirr(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let v = array_numbers(&a.first().ok_or(CellError::Value)?.value)?;
+    let v = array_numbers(a.first().ok_or(CellError::Value)?)?;
     let (fr, rr) = (num(a, 1)?, num(a, 2)?);
     let n = v.len() as f64;
     if v.len() < 2 {

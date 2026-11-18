@@ -79,7 +79,7 @@ pub(crate) mod text;
 pub(crate) mod util;
 
 pub use ets::Timeline;
-pub use stat::{aggregate_values, aggregate_values_k};
+pub use stat::{aggregate_values, aggregate_values_k, aggregate_values_k_in_year};
 
 /// An evaluated argument. Ranges arrive as `Value::Array` (blank cells = `Value::Empty`) with
 /// `from_ref = true`.
@@ -87,16 +87,17 @@ pub use stat::{aggregate_values, aggregate_values_k};
 pub struct Arg {
     pub value: Value,
     pub from_ref: bool,
+    pub coercion_year: Option<i64>,
 }
 
 impl Arg {
     /// A literal (non-reference) argument.
     pub fn val(value: impl Into<Value>) -> Arg {
-        Arg { value: value.into(), from_ref: false }
+        Arg { value: value.into(), from_ref: false, coercion_year: None }
     }
     /// An argument that came from a cell or range reference.
     pub fn reference(value: impl Into<Value>) -> Arg {
-        Arg { value: value.into(), from_ref: true }
+        Arg { value: value.into(), from_ref: true, coercion_year: None }
     }
 }
 
@@ -105,6 +106,11 @@ pub trait Ctx {
     fn date_system(&self) -> DateSystem;
     /// Current local date-time serial.
     fn now_serial(&self) -> f64;
+    /// Calendar year from the same clock as [`Ctx::now_serial`]. Calling this reads that clock,
+    /// so a live evaluator records that the formula depends on its server stamp.
+    fn date_year(&self) -> i64 {
+        gridcraft_core::date::datetime_from_serial(DateSystem::D1900, self.now_serial()).map_or(2026, |date| i64::from(date.year))
+    }
     /// Uniform in [0, 1).
     fn random(&mut self) -> f64;
     /// For the database functions: whether the formula in the criteria cell at (`row`, `col`) holds
@@ -257,7 +263,24 @@ pub fn call(spec: &FnSpec, args: &[Arg], ctx: &mut dyn Ctx) -> Value {
     if !spec.accepts(args.len()) {
         return Value::Error(CellError::Value);
     }
-    lift::call_lifted(spec, args, ctx)
+    let year = args.iter().any(|arg| value_contains_text(&arg.value)).then(|| ctx.date_year());
+    if let Some(year) = year {
+        let mut stamped = args.to_vec();
+        for arg in &mut stamped {
+            arg.coercion_year = Some(year);
+        }
+        lift::call_lifted(spec, &stamped, ctx)
+    } else {
+        lift::call_lifted(spec, args, ctx)
+    }
+}
+
+fn value_contains_text(value: &Value) -> bool {
+    match value {
+        Value::Text(_) => true,
+        Value::Array(array) => array.iter().any(value_contains_text),
+        _ => false,
+    }
 }
 
 #[cfg(test)]

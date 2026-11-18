@@ -53,7 +53,12 @@ pub fn parse_number_text(s: &str) -> Option<f64> {
 
 /// Like [`parse_number_text`], with date text read in the given workbook date system.
 pub fn parse_number_text_in(s: &str, sys: DateSystem) -> Option<f64> {
-    parse_numeric(s.trim(), sys, current_year()).map(|(n, _)| n)
+    parse_number_text_in_year(s, sys, current_year())
+}
+
+/// Like [`parse_number_text_in`], using `year` for dates that omit one.
+pub fn parse_number_text_in_year(s: &str, sys: DateSystem, year: i64) -> Option<f64> {
+    parse_numeric(s.trim(), sys, year).map(|(n, _)| n)
 }
 
 /// Text that Excel's "Number Stored as Text" check flags: it would be a number if typed (signs,

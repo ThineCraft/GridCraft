@@ -63,10 +63,19 @@ impl Evaluator<'_> {
     fn trim_mode(&mut self, args: &[Expr], i: usize) -> Result<(bool, bool), CellError> {
         match args.get(i) {
             None | Some(Expr::Missing) => Ok((true, true)),
-            Some(e) => match self.value(e).scalar() {
-                Value::Error(e) => Err(e),
-                v => mode(v.to_number()?),
-            },
+            Some(e) => {
+                let value = self.value(e).scalar();
+                let year = if matches!(value, Value::Text(_)) {
+                    gridcraft_core::date::datetime_from_serial(gridcraft_core::DateSystem::D1900, self.host.now_serial())
+                        .map_or(2026, |date| i64::from(date.year))
+                } else {
+                    2026
+                };
+                match value {
+                    Value::Error(e) => Err(e),
+                    value => mode(value.to_number_in_year(gridcraft_core::DateSystem::D1900, year)?),
+                }
+            }
         }
     }
 

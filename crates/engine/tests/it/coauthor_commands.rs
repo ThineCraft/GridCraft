@@ -1,9 +1,10 @@
-use collab_live::client::{Effect, EntryView, LiveEditor, Stamp};
+use collab_core::ids::Seq;
+use collab_live::client::{Crash, Effect, EntryView, Event, LiveClient, LiveConfig, LiveEditor, Mode, Outcome, Stamp};
 use gridcraft_core::{CellRef, Value};
 use gridcraft_engine::catalog::CATALOG;
 use gridcraft_engine::coauthor::{
-    CoauthorError, GRIDCRAFT_LIVE_FORMAT, GridLiveEditor, IdentityPosition, IdentityStructural, SharedCommand, TargetGone, WorkbookIds, decode_entry,
-    encode_command, is_shared_command, resolve_command,
+    CoauthorError, GRIDCRAFT_LIVE_FORMAT, GridLiveEditor, GridSnapshot, IdentityPosition, IdentityStructural, SharedCommand, TargetGone, WorkbookIds,
+    decode_entry, encode_command, is_shared_command, resolve_command,
 };
 use gridcraft_engine::fingerprint::{DocId, fingerprint};
 use gridcraft_engine::{DocState, Session, Trust};
@@ -80,6 +81,69 @@ fn live_cell_set(action: u64, row: u32, input: &str, year: i32, formula: bool) -
     .to_string()
 }
 
+fn live_server_frame(value: Json) -> String {
+    value.to_string()
+}
+
+fn start_live_client<E: LiveEditor>(editor: &mut E) -> (LiveClient<E>, String) {
+    let mut client = LiveClient::new(LiveConfig { format: GRIDCRAFT_LIVE_FORMAT.to_string(), crashed_at: None });
+    let join = client.connected(0);
+    let join: Json = serde_json::from_str(join.first().expect("join frame exists")).expect("join frame is JSON");
+    let client_id = join["client"].as_str().expect("join names the client").to_string();
+    client
+        .receive(
+            editor,
+            &live_server_frame(json!({
+                "type":"live_joined",
+                "session":"00000000-0000-0000-0000-00000000005e",
+                "participant":1,
+                "place":{"is":"new"},
+                "can_edit":true,
+                "heartbeat_ms":60_000,
+                "people":[]
+            })),
+            1,
+        )
+        .expect("join is accepted");
+    let catchup = client
+        .receive(editor, &live_server_frame(json!({"type":"catchup","base":0,"revision":null,"from":0,"head":0})), 2)
+        .expect("empty catch-up is accepted");
+    assert!(matches!(catchup.events.as_slice(), [Event::LoadBase { .. }]));
+    client.base_ready(editor, 3).expect("empty base becomes live");
+    (client, client_id)
+}
+
+struct LifecycleEditor {
+    inner: GridLiveEditor,
+    crash: bool,
+    saw_applying: Option<Seq>,
+}
+
+impl LiveEditor for LifecycleEditor {
+    type Snapshot = GridSnapshot;
+
+    fn snapshot(&self) -> Self::Snapshot {
+        self.inner.snapshot()
+    }
+
+    fn restore(&mut self, snapshot: &Self::Snapshot) {
+        self.inner.restore(snapshot);
+    }
+
+    fn apply(&mut self, entry: &EntryView<'_>) -> Result<Outcome, Crash> {
+        self.saw_applying = self.inner.applying_seq();
+        if self.crash { Err(Crash) } else { self.inner.apply(entry) }
+    }
+
+    fn note_applying(&mut self, seq: Option<Seq>) {
+        self.inner.note_applying(seq);
+    }
+}
+
+fn cell_value(editor: &GridLiveEditor, row: u32) -> Value {
+    editor.session().doc().expect("document exists").wb.sheet(0).expect("sheet exists").value(CellRef::new(row, 0))
+}
+
 #[test]
 fn entry_stamp_controls_now_and_rand() {
     let mut left_session = session_with_sheets(&["Sheet1"]);
@@ -104,6 +168,118 @@ fn entry_stamp_controls_now_and_rand() {
 
     let unstamped = live_cell_set(2, 1, "=RAND()", 2026, true);
     assert!(left.apply(&live_entry(&unstamped, None)).expect("local volatile entry applies").read_stamp);
+}
+
+#[test]
+fn formula_yearless_dates_read_the_stamped_clock() {
+    let mut session = session_with_sheets(&["Sheet1"]);
+    session.doc_mut().expect("document exists").calc.fixed_now = Some(gridcraft_core::date::serial_from_unix_ms(2_285_193_600_000.0));
+    let mut editor = GridLiveEditor::new(session).expect("editor builds");
+
+    for (action, row, input) in [(20, 0, "=DATEVALUE(\"12/31\")"), (21, 1, "=VALUE(\"12/31\")"), (22, 2, "=\"12/31\"+0"), (23, 3, "=ABS(\"12/31\")")]
+    {
+        let payload = live_cell_set(action, row, input, 2026, true);
+        let outcome = editor.apply(&live_entry(&payload, None)).expect("formula applies");
+        assert!(outcome.read_stamp, "{input} must report that it read the stamped clock");
+        assert_eq!(cell_value(&editor, row), Value::Number(52_231.0), "{input} must use the stamped year");
+    }
+
+    let payload = live_cell_set(24, 4, "=YEAR(\"12/31\")", 2026, true);
+    let outcome = editor.apply(&live_entry(&payload, None)).expect("YEAR applies");
+    assert!(outcome.read_stamp, "YEAR must report that it read the stamped clock");
+    assert_eq!(cell_value(&editor, 4), Value::Number(2042.0), "YEAR must use the stamped year");
+
+    let payload = live_cell_set(25, 5, "=COUNTIF(52231,\"12/31\")", 2026, true);
+    let outcome = editor.apply(&live_entry(&payload, None)).expect("COUNTIF applies");
+    assert!(outcome.read_stamp, "criteria coercion must report that it read the stamped clock");
+    assert_eq!(cell_value(&editor, 5), Value::Number(1.0), "criteria coercion must use the stamped year");
+
+    let payload = live_cell_set(26, 6, "=INDEX({1;2},\"12/31\")", 2026, true);
+    let outcome = editor.apply(&live_entry(&payload, None)).expect("INDEX applies");
+    assert!(outcome.read_stamp, "special-form coercion must report that it read the stamped clock");
+    assert_eq!(cell_value(&editor, 6), Value::Error(gridcraft_core::CellError::Ref));
+
+    for (action, row, input, expected) in [
+        (27, 7, "=NETWORKDAYS(52231,52231,\"12/31\")", Value::Number(0.0)),
+        (28, 8, "=DSUM({\"Date\";52231},1,{\"Date\";\"12/31\"})", Value::Number(52_231.0)),
+        (29, 9, "=XNPV(0.1,{-100;110},{52231;\"12/31\"})", Value::Number(10.0)),
+    ] {
+        let payload = live_cell_set(action, row, input, 2026, true);
+        let outcome = editor.apply(&live_entry(&payload, None)).expect("formula applies");
+        assert!(outcome.read_stamp, "{input} must report that it read the stamped clock");
+        assert_eq!(cell_value(&editor, row), expected, "{input} must use the stamped year");
+    }
+}
+
+#[test]
+fn live_client_reruns_yearless_date_with_the_server_stamp() {
+    let mut session = session_with_sheets(&["Sheet1"]);
+    session.doc_mut().expect("document exists").calc.fixed_now = Some(gridcraft_core::date::serial_from_unix_ms(2_285_193_600_000.0));
+    let mut editor = GridLiveEditor::new(session).expect("editor builds");
+    let (mut client, client_id) = start_live_client(&mut editor);
+    let payload = live_cell_set(30, 0, "=DATEVALUE(\"12/31\")", 2026, true);
+
+    let preview = client.local(&mut editor, payload.clone(), Mode::ShowAtOnce, 4).expect("local preview is accepted");
+    assert_eq!(cell_value(&editor, 0), Value::Number(52_231.0), "the preview uses the local stamped year");
+    let sent: Json = serde_json::from_str(preview.send.first().expect("preview is sent")).expect("entry frame is JSON");
+    let confirmation = live_server_frame(json!({
+        "type":"entry",
+        "entry":{
+            "seq":1,
+            "at_ms":1_906_502_400_000i64,
+            "seed":77,
+            "kind":"change",
+            "participant":1,
+            "client":client_id,
+            "local":sent["local"].clone(),
+            "seen":sent["seen"].clone(),
+            "payload":payload,
+            "cancelled":false
+        }
+    }));
+
+    let confirmed = client.receive(&mut editor, &confirmation, 5).expect("stamped confirmation is accepted");
+
+    assert!(matches!(confirmed.events.as_slice(), [Event::Applied { own: true, .. }]));
+    assert_eq!(client.pending(), 0);
+    assert_eq!(editor.applying_seq(), None, "the successful confirmation clears its crash note");
+    assert_eq!(cell_value(&editor, 0), Value::Number(47_848.0), "confirmation rolls back and uses the server year");
+}
+
+#[test]
+fn live_client_keeps_the_applying_sequence_through_a_crash() {
+    for crash in [false, true] {
+        let inner = GridLiveEditor::new(session_with_sheets(&["Sheet1"])).expect("editor builds");
+        let mut editor = LifecycleEditor { inner, crash, saw_applying: None };
+        let (mut client, _) = start_live_client(&mut editor);
+        let payload = live_cell_set(40, 0, "ok", 2026, false);
+        let frame = live_server_frame(json!({
+            "type":"entry",
+            "entry":{
+                "seq":1,
+                "at_ms":1_906_502_400_000i64,
+                "seed":88,
+                "kind":"change",
+                "participant":2,
+                "client":"00000000-0000-0000-0000-000000000099",
+                "local":1,
+                "seen":0,
+                "payload":payload,
+                "cancelled":false
+            }
+        }));
+
+        let step = client.receive(&mut editor, &frame, 4).expect("ordered entry is accepted");
+
+        assert_eq!(editor.saw_applying.map(|seq| seq.0), Some(1), "the sequence is stored before apply");
+        if crash {
+            assert_eq!(editor.inner.applying_seq().map(|seq| seq.0), Some(1), "a crash preserves the sequence");
+            assert!(matches!(step.events.as_slice(), [Event::Crashed { .. }]));
+        } else {
+            assert_eq!(editor.inner.applying_seq(), None, "success clears the sequence");
+            assert!(matches!(step.events.as_slice(), [Event::Applied { .. }]));
+        }
+    }
 }
 
 #[test]

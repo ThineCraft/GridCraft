@@ -2124,6 +2124,7 @@ dependencies = [
 name = "gridcraft-engine"
 version = "0.16.0"
 dependencies = [
+ "collab-core",
  "collab-live",
  "gridcraft-calc",
  "gridcraft-chart",

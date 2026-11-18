@@ -203,14 +203,20 @@ impl<'h> Evaluator<'h> {
         let index = self.value(&args[0]);
         if let Value::Array(_) = index {
             let Some(spec) = gridcraft_functions::lookup("CHOOSE") else { return err(CellError::Name) };
-            let mut evaluated = vec![Arg { value: index, from_ref: false }];
+            let mut evaluated = vec![Arg { value: index, from_ref: false, coercion_year: None }];
             for argument in &args[1..] {
-                evaluated.push(Arg { value: self.value(argument), from_ref: false });
+                evaluated.push(Arg { value: self.value(argument), from_ref: false, coercion_year: None });
             }
             let mut context = FnCtx { ev: self, criteria: None, lambda: None };
             return gridcraft_functions::call(spec, &evaluated, &mut context).pipe(Ev::V);
         }
-        let index = match index.to_number() {
+        let year = if super::array::contains_text(&index) {
+            gridcraft_core::date::datetime_from_serial(gridcraft_core::DateSystem::D1900, self.host.now_serial())
+                .map_or(2026, |date| i64::from(date.year))
+        } else {
+            2026
+        };
+        let index = match index.to_number_in_year(gridcraft_core::DateSystem::D1900, year) {
             Ok(number) => number.trunc() as i64,
             Err(error) => return err(error),
         };
@@ -351,7 +357,7 @@ impl<'h> Evaluator<'h> {
                 }
                 ev => self.deref(ev),
             };
-            evaluated.push(Arg { value, from_ref });
+            evaluated.push(Arg { value, from_ref, coercion_year: None });
         }
         let mut ctx = FnCtx { ev: self, criteria, lambda };
         gridcraft_functions::call(spec, &evaluated, &mut ctx).pipe(Ev::V)
@@ -414,7 +420,7 @@ impl<'h> Evaluator<'h> {
         let (Some(sum), Some(count)) = (gridcraft_functions::lookup("SUM"), gridcraft_functions::lookup("COUNT")) else {
             return Err(err(CellError::Name));
         };
-        let args = [Arg { value, from_ref }];
+        let args = [Arg { value, from_ref, coercion_year: None }];
         if kind != Agg::Count {
             match gridcraft_functions::call(sum, &args, &mut FnCtx { ev: self, criteria: None, lambda: None }) {
                 Value::Number(n) => acc.sum += n,

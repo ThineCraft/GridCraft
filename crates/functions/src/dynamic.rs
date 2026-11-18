@@ -154,12 +154,12 @@ fn cmp_keys(a: &[Value], b: &[Value], orders: &[i64]) -> Ordering {
     Ordering::Equal
 }
 
-fn int_list(v: &Value) -> R<Vec<i64>> {
-    let a = as_array(v);
+fn int_list(arg: &Arg) -> R<Vec<i64>> {
+    let a = as_array(&arg.value);
     a.data
         .iter()
         .map(|x| {
-            let n = x.to_number()?;
+            let n = crate::util::number(x, arg.coercion_year)?;
             if !n.is_finite() || n.abs() > 1e15 { Err(CellError::Value) } else { Ok(n.trunc() as i64) }
         })
         .collect()
@@ -169,8 +169,8 @@ fn sort(args: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     let a = arr_arg(args, 0)?;
     let by_col = opt_bool(args, 3, false)?;
     let a = if by_col { a.transpose() } else { a };
-    let idx = if has(args, 1) { int_list(&arg(args, 1)?.value)? } else { vec![1] };
-    let ord = if has(args, 2) { int_list(&arg(args, 2)?.value)? } else { vec![1] };
+    let idx = if has(args, 1) { int_list(arg(args, 1)?)? } else { vec![1] };
+    let ord = if has(args, 2) { int_list(arg(args, 2)?)? } else { vec![1] };
     if idx.is_empty() || idx.iter().any(|&i| i < 1 || i as usize > a.cols) || ord.iter().any(|&o| o != 1 && o != -1) {
         return Err(CellError::Value);
     }
@@ -464,7 +464,7 @@ fn choose_lines(args: &[Arg], rows: bool) -> R<Value> {
     let grid = rows_of(&base);
     let mut out = Vec::new();
     for i in 1..args.len() {
-        for k in int_list(&arg(args, i)?.value)? {
+        for k in int_list(arg(args, i)?)? {
             let len = grid.len() as i64;
             let idx = if k > 0 && k <= len {
                 k - 1

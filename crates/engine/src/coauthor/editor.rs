@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use collab_core::ids::Seq;
 use collab_live::client::{Crash, Effect, EntryView, LiveEditor, Outcome, Stamp};
 
 use super::{WorkbookIds, decode_entry, resolve_command};
@@ -26,12 +27,13 @@ pub struct GridSnapshot {
 pub struct GridLiveEditor {
     session: Session,
     ids: WorkbookIds,
+    applying_seq: Option<Seq>,
 }
 
 impl GridLiveEditor {
     pub fn new(session: Session) -> Result<Self, super::CoauthorError> {
         let ids = WorkbookIds::from_workbook(&session.doc()?.wb)?;
-        Ok(Self { session, ids })
+        Ok(Self { session, ids, applying_seq: None })
     }
 
     pub fn session(&self) -> &Session {
@@ -44,6 +46,12 @@ impl GridLiveEditor {
 
     pub fn ids(&self) -> &WorkbookIds {
         &self.ids
+    }
+
+    /// The ordered entry currently being applied, retained when that apply crashes so the host
+    /// can persist it for the next live client.
+    pub fn applying_seq(&self) -> Option<Seq> {
+        self.applying_seq
     }
 
     fn apply_stamp(&mut self, stamp: Stamp) {
@@ -114,5 +122,9 @@ impl LiveEditor for GridLiveEditor {
             return Ok(Self::no_effect("The shared identities could not be updated.", read_stamp));
         }
         Ok(Outcome { effect: Effect::Applied, read_stamp })
+    }
+
+    fn note_applying(&mut self, seq: Option<Seq>) {
+        self.applying_seq = seq;
     }
 }
