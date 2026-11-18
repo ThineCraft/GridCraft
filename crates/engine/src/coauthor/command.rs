@@ -1,13 +1,20 @@
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 use std::fmt;
 
-use collab_live::ids::LiveId;
+use collab_live::ids::{IdError, LiveId};
+use gridcraft_core::{CellError, CellRef, RangeRef};
+use gridcraft_formula::{Anchor, Expr, RefKind, Reference, SheetSel};
 use protocol::live::MAX_PAYLOAD_BYTES;
 use serde::de::{self, DeserializeSeed, MapAccess, SeqAccess, Visitor};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as Json;
 
-use super::CoauthorError;
+use super::{
+    CellId, CoauthorError, IdentityDelete, IdentityInsert, IdentityPosition, IdentityRanges, IdentitySheetInsert, IdentityStructural, TargetGone,
+    WorkbookIds,
+};
+
+const MAX_IDENTITY_TARGETS: usize = MAX_PAYLOAD_BYTES / 8;
 
 /// One command in the `gridcraft/1` payload format.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -16,35 +23,37 @@ pub enum SharedCommand {
     #[serde(rename = "cell.set")]
     CellSet {
         sheet: LiveId,
-        cell: Json,
+        cell: CellId,
         input: String,
         #[serde(rename = "originYear")]
         origin_year: i32,
-        references: Vec<Json>,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        formula: bool,
+        references: Vec<IdentityReference>,
     },
     #[serde(rename = "edit.clearContents")]
-    ClearContents { sheet: LiveId, range: Json },
+    ClearContents { sheet: LiveId, range: IdentityRanges },
     #[serde(rename = "home.numberFormat")]
     NumberFormat {
         sheet: LiveId,
-        range: Json,
+        range: IdentityRanges,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         format: Option<NumberFormatName>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         code: Option<String>,
     },
     #[serde(rename = "home.fontName")]
-    FontName { sheet: LiveId, range: Json, name: String },
+    FontName { sheet: LiveId, range: IdentityRanges, name: String },
     #[serde(rename = "home.fontSize")]
-    FontSize { sheet: LiveId, range: Json, size: f64 },
+    FontSize { sheet: LiveId, range: IdentityRanges, size: f64 },
     #[serde(rename = "home.fontColor")]
-    FontColor { sheet: LiveId, range: Json, color: CommandColor },
+    FontColor { sheet: LiveId, range: IdentityRanges, color: CommandColor },
     #[serde(rename = "home.fillColor")]
-    FillColor { sheet: LiveId, range: Json, color: CommandColor },
+    FillColor { sheet: LiveId, range: IdentityRanges, color: CommandColor },
     #[serde(rename = "home.borders")]
     Borders {
         sheet: LiveId,
-        range: Json,
+        range: IdentityRanges,
         preset: BorderPreset,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         style: Option<CommandBorderStyle>,
@@ -52,63 +61,107 @@ pub enum SharedCommand {
         color: Option<CommandColor>,
     },
     #[serde(rename = "home.alignTop")]
-    AlignTop { sheet: LiveId, range: Json },
+    AlignTop { sheet: LiveId, range: IdentityRanges },
     #[serde(rename = "home.alignMiddle")]
-    AlignMiddle { sheet: LiveId, range: Json },
+    AlignMiddle { sheet: LiveId, range: IdentityRanges },
     #[serde(rename = "home.alignBottom")]
-    AlignBottom { sheet: LiveId, range: Json },
+    AlignBottom { sheet: LiveId, range: IdentityRanges },
     #[serde(rename = "home.bold")]
-    Bold { sheet: LiveId, range: Json, on: bool },
+    Bold { sheet: LiveId, range: IdentityRanges, on: bool },
     #[serde(rename = "home.italic")]
-    Italic { sheet: LiveId, range: Json, on: bool },
+    Italic { sheet: LiveId, range: IdentityRanges, on: bool },
     #[serde(rename = "home.wrapText")]
-    WrapText { sheet: LiveId, range: Json, on: bool },
+    WrapText { sheet: LiveId, range: IdentityRanges, on: bool },
     #[serde(rename = "home.alignLeft")]
-    AlignLeft { sheet: LiveId, range: Json, on: bool },
+    AlignLeft { sheet: LiveId, range: IdentityRanges, on: bool },
     #[serde(rename = "home.alignCenter")]
-    AlignCenter { sheet: LiveId, range: Json, on: bool },
+    AlignCenter { sheet: LiveId, range: IdentityRanges, on: bool },
     #[serde(rename = "home.alignRight")]
-    AlignRight { sheet: LiveId, range: Json, on: bool },
+    AlignRight { sheet: LiveId, range: IdentityRanges, on: bool },
     #[serde(rename = "home.underline")]
-    Underline { sheet: LiveId, range: Json, on: bool, style: UnderlineStyle },
+    Underline { sheet: LiveId, range: IdentityRanges, on: bool, style: UnderlineStyle },
     #[serde(rename = "home.doubleUnderline")]
-    DoubleUnderline { sheet: LiveId, range: Json, on: bool, style: UnderlineStyle },
+    DoubleUnderline { sheet: LiveId, range: IdentityRanges, on: bool, style: UnderlineStyle },
     #[serde(rename = "home.increaseFontSize")]
-    IncreaseFontSize { sheet: LiveId, range: Json, size: f64 },
+    IncreaseFontSize { sheet: LiveId, range: IdentityRanges, size: f64 },
     #[serde(rename = "home.decreaseFontSize")]
-    DecreaseFontSize { sheet: LiveId, range: Json, size: f64 },
+    DecreaseFontSize { sheet: LiveId, range: IdentityRanges, size: f64 },
     #[serde(rename = "home.formatCells")]
-    FormatCells { sheet: LiveId, range: Json, style: StylePatch },
+    FormatCells { sheet: LiveId, range: IdentityRanges, style: StylePatch },
     #[serde(rename = "data.filterSet")]
-    FilterSet { sheet: LiveId, range: Json },
+    FilterSet { sheet: LiveId, range: IdentityRanges },
     #[serde(rename = "data.filterRemove")]
-    FilterRemove { sheet: LiveId, range: Json },
+    FilterRemove { sheet: LiveId, range: IdentityRanges },
     #[serde(rename = "data.filterBy")]
     FilterBy {
         sheet: LiveId,
-        range: Json,
+        range: IdentityRanges,
         column: LiveId,
         #[serde(flatten)]
         criteria: FilterCriteria,
     },
     #[serde(rename = "data.clearFilter")]
-    ClearFilter { sheet: LiveId, range: Json },
+    ClearFilter { sheet: LiveId, range: IdentityRanges },
     #[serde(rename = "data.reapply")]
-    Reapply { sheet: LiveId, range: Json },
+    Reapply { sheet: LiveId, range: IdentityRanges },
     #[serde(rename = "home.insertRows")]
-    InsertRows { sheet: LiveId, rows: Json },
+    InsertRows { sheet: LiveId, rows: IdentityInsert },
     #[serde(rename = "home.deleteRows")]
-    DeleteRows { sheet: LiveId, rows: Json },
+    DeleteRows { sheet: LiveId, rows: IdentityDelete },
     #[serde(rename = "home.insertColumns")]
-    InsertColumns { sheet: LiveId, cols: Json },
+    InsertColumns { sheet: LiveId, cols: IdentityInsert },
     #[serde(rename = "home.deleteColumns")]
-    DeleteColumns { sheet: LiveId, cols: Json },
+    DeleteColumns { sheet: LiveId, cols: IdentityDelete },
     #[serde(rename = "home.insertSheet")]
-    InsertSheet { name: String, before: Json },
+    InsertSheet { name: String, before: IdentitySheetInsert },
     #[serde(rename = "sheet.rename")]
     RenameSheet { sheet: LiveId, name: String },
     #[serde(rename = "home.deleteSheet")]
     DeleteSheet { sheet: LiveId },
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
+pub enum IdentitySheetSel {
+    Current { sheet: LiveId },
+    Named { sheet: LiveId },
+    Span { start: LiveId, end: LiveId },
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct IdentityAnchor {
+    pub row: LiveId,
+    pub col: LiveId,
+    pub row_abs: bool,
+    pub col_abs: bool,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
+pub enum IdentityRefKind {
+    Cell { anchor: IdentityAnchor },
+    Range { start: IdentityAnchor, end: IdentityAnchor },
+    Rows { start: LiveId, start_abs: bool, end: LiveId, end_abs: bool },
+    Columns { start: LiveId, start_abs: bool, end: LiveId, end_abs: bool },
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct IdentityReference {
+    pub sheet: IdentitySheetSel,
+    pub reference: IdentityRefKind,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub span_sheets: Vec<LiveId>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub span_references: Vec<IdentityRefKind>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct ResolvedCommand {
+    pub id: String,
+    pub params: Json,
+    pub structural: Option<IdentityStructural>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -631,7 +684,7 @@ impl<'de> Visitor<'de> for DuplicateFreeVisitor {
 
 fn unexpected_command_field<'a>(id: &str, command: &'a serde_json::Map<String, Json>) -> Option<&'a str> {
     let allowed: &[&str] = match id {
-        "cell.set" => &["id", "sheet", "cell", "input", "originYear", "references"],
+        "cell.set" => &["id", "sheet", "cell", "input", "originYear", "formula", "references"],
         "edit.clearContents" | "home.alignTop" | "home.alignMiddle" | "home.alignBottom" | "data.filterSet" | "data.filterRemove"
         | "data.clearFilter" | "data.reapply" => &["id", "sheet", "range"],
         "home.numberFormat" => &["id", "sheet", "range", "format", "code"],
@@ -728,5 +781,655 @@ fn missing_required_field(id: &str, command: &serde_json::Map<String, Json>) -> 
             Some("values|custom|top|aboveAverage|clear")
         }
         _ => None,
+    }
+}
+
+pub fn encode_command(
+    ids: &WorkbookIds,
+    session: &crate::Session,
+    action: u64,
+    id: &str,
+    params: &Json,
+    origin_year: i32,
+    allocate: &mut dyn FnMut(u32) -> Result<LiveId, IdError>,
+) -> Result<SharedEntry, CoauthorError> {
+    if !is_shared_command(id) {
+        return Err(CoauthorError::UnsupportedCommand(id.to_string()));
+    }
+    let mut command = serde_json::Map::new();
+    command.insert("id".into(), Json::String(id.to_string()));
+    match id {
+        "home.insertSheet" => {
+            copy_required(params, &mut command, "name", id)?;
+            let workbook = &session.doc()?.wb;
+            let at = params
+                .get("before")
+                .and_then(Json::as_u64)
+                .and_then(|value| usize::try_from(value).ok())
+                .unwrap_or_else(|| workbook.active_sheet().saturating_add(1))
+                .min(workbook.sheets.len());
+            let before = if at == workbook.sheets.len() { IdentityPosition::End } else { IdentityPosition::Before(ids.sheet_id(at)?) };
+            let target = IdentitySheetInsert { before, id: allocate(1)? };
+            command.insert("before".into(), to_json(target)?);
+        }
+        "home.insertRows" | "home.insertColumns" => {
+            let sheet_index = crate::cmd::target_sheet(session, params)?;
+            let sheet = ids.sheet_id(sheet_index)?;
+            command.insert("sheet".into(), to_json(sheet)?);
+            let key = if id == "home.insertRows" { "rows" } else { "cols" };
+            let axis = if id == "home.insertRows" { AxisParam::Rows } else { AxisParam::Columns };
+            let (at, count) = line_span(session, params, key, axis)?;
+            let limit = if axis == AxisParam::Rows { gridcraft_core::MAX_ROWS } else { gridcraft_core::MAX_COLS };
+            if count == 0 || at.checked_add(count).is_none_or(|end| end > limit) {
+                return Err(CoauthorError::MalformedPayload(format!("insert span {at}..+{count} is outside a worksheet axis of {limit}")));
+            }
+            let axes = ids.by_id.get(&sheet).ok_or_else(|| CoauthorError::UnknownIdentity(format!("sheet {sheet:?}")))?;
+            let ordered = if axis == AxisParam::Rows { &axes.rows } else { &axes.cols };
+            let before = ordered.id_at(at).map_or(IdentityPosition::End, IdentityPosition::Before);
+            let insert = IdentityInsert { before, first: allocate(count)?, count };
+            command.insert(key.into(), to_json(insert)?);
+        }
+        "home.deleteRows" | "home.deleteColumns" => {
+            let sheet_index = crate::cmd::target_sheet(session, params)?;
+            let sheet = ids.sheet_id(sheet_index)?;
+            command.insert("sheet".into(), to_json(sheet)?);
+            let key = if id == "home.deleteRows" { "rows" } else { "cols" };
+            let axis = if id == "home.deleteRows" { AxisParam::Rows } else { AxisParam::Columns };
+            let positions = deletion_positions(params, key, axis)?;
+            if positions.len() > MAX_IDENTITY_TARGETS {
+                return Err(CoauthorError::OversizedPayload { bytes: positions.len().saturating_mul(8), max: MAX_PAYLOAD_BYTES });
+            }
+            let axes = ids.by_id.get(&sheet).ok_or_else(|| CoauthorError::UnknownIdentity(format!("sheet {sheet:?}")))?;
+            let ordered = if axis == AxisParam::Rows { &axes.rows } else { &axes.cols };
+            let mut targets = Vec::with_capacity(positions.len());
+            for position in positions {
+                targets.push(ordered.id_at(position).ok_or_else(|| CoauthorError::UnknownIdentity(format!("{key} position {position}")))?);
+            }
+            let first = allocate(
+                u32::try_from(targets.len())
+                    .map_err(|_| CoauthorError::OversizedPayload { bytes: targets.len().saturating_mul(8), max: MAX_PAYLOAD_BYTES })?,
+            )?;
+            command.insert(key.into(), to_json(IdentityDelete { ids: targets, first })?);
+        }
+        _ => {
+            let sheet_index = crate::cmd::target_sheet(session, params)?;
+            let sheet = ids.sheet_id(sheet_index)?;
+            command.insert("sheet".into(), to_json(sheet)?);
+            if id == "cell.set" {
+                let cell_ref =
+                    crate::cmd::cell_param_on(session, params, "cell", sheet_index)?.unwrap_or(crate::cmd::target_range(session, params)?.start);
+                let cell = ids.cell_id(sheet_index, cell_ref)?;
+                let input = params
+                    .get("input")
+                    .and_then(Json::as_str)
+                    .ok_or_else(|| CoauthorError::MissingTarget { command: id.to_string(), target: "input".into() })?;
+                let (input, formula, references) = encode_formula(ids, session, sheet_index, cell_ref, input)?;
+                command.insert("cell".into(), to_json(cell)?);
+                command.insert("input".into(), Json::String(input));
+                command.insert("originYear".into(), Json::from(origin_year));
+                command.insert("formula".into(), Json::from(formula));
+                command.insert("references".into(), to_json(references)?);
+            } else if id == "sheet.rename" {
+                copy_required(params, &mut command, "name", id)?;
+            } else if id != "home.deleteSheet" {
+                if params.get("range").and_then(Json::as_str).is_some_and(|value| value.len() > MAX_PAYLOAD_BYTES) {
+                    return Err(CoauthorError::OversizedPayload { bytes: params["range"].as_str().map_or(0, str::len), max: MAX_PAYLOAD_BYTES });
+                }
+                let ranges = crate::cmd::target_ranges(session, params)?;
+                let identity_ranges = ranges.iter().copied().map(|range| ids.range_id(sheet_index, range)).collect::<Result<Vec<_>, _>>()?;
+                command.insert("range".into(), to_json(IdentityRanges::from_vec(identity_ranges)?)?);
+                if id == "data.filterBy" {
+                    if ranges.len() != 1 {
+                        return Err(CoauthorError::MalformedPayload("filter command requires exactly one range".into()));
+                    }
+                    let range =
+                        ranges.first().copied().ok_or_else(|| CoauthorError::MalformedPayload("filter command requires exactly one range".into()))?;
+                    let column = filter_column(params, range)?;
+                    let axes = ids.by_id.get(&sheet).ok_or_else(|| CoauthorError::UnknownIdentity(format!("sheet {sheet:?}")))?;
+                    let column = axes.cols.id_at(column).ok_or_else(|| CoauthorError::UnknownIdentity(format!("column position {column}")))?;
+                    command.insert("column".into(), to_json(column)?);
+                }
+                copy_command_values(id, params, &mut command)?;
+            }
+        }
+    }
+    if let Some(field) = unexpected_command_field(id, &command) {
+        return Err(CoauthorError::MalformedPayload(format!("unknown encoded field `{field}` in command `{id}`")));
+    }
+    let command = serde_json::from_value(Json::Object(command)).map_err(|error| CoauthorError::MalformedPayload(error.to_string()))?;
+    let entry = SharedEntry { version: 1, action, command };
+    let bytes = serde_json::to_vec(&entry).map_err(|error| CoauthorError::MalformedPayload(error.to_string()))?.len();
+    if bytes > MAX_PAYLOAD_BYTES {
+        return Err(CoauthorError::OversizedPayload { bytes, max: MAX_PAYLOAD_BYTES });
+    }
+    Ok(entry)
+}
+
+pub fn resolve_command(ids: &WorkbookIds, session: &crate::Session, entry: &SharedEntry) -> Result<ResolvedCommand, TargetGone> {
+    let mut value = serde_json::to_value(&entry.command).map_err(|error| TargetGone::Malformed(error.to_string()))?;
+    let object = value.as_object_mut().ok_or_else(|| TargetGone::Malformed("command did not serialize as an object".into()))?;
+    let id = object
+        .remove("id")
+        .and_then(|value| value.as_str().map(str::to_owned))
+        .ok_or_else(|| TargetGone::Malformed("command id is absent".into()))?;
+    let mut structural = None;
+
+    match &entry.command {
+        SharedCommand::CellSet { sheet: declared_sheet, cell, input, formula, references, .. } => {
+            if *declared_sheet != cell.sheet {
+                return Err(TargetGone::Malformed("cell target names a different sheet".into()));
+            }
+            let (sheet, cell) = ids.resolve_cell(*cell)?;
+            object.insert("sheet".into(), Json::from(sheet));
+            object.insert("cell".into(), Json::String(cell.a1()));
+            let resolved_input = if *formula {
+                resolve_formula(ids, session, *declared_sheet, input, references)?
+            } else {
+                if !references.is_empty() {
+                    return Err(TargetGone::Malformed("literal input carries formula references".into()));
+                }
+                input.clone()
+            };
+            object.insert("input".into(), Json::String(resolved_input));
+            object.remove("formula");
+            object.remove("references");
+        }
+        SharedCommand::InsertRows { sheet, rows } => {
+            let sheet_index = ids.resolve_sheet(*sheet)?;
+            let at = resolve_position(ids, *sheet, rows.before, AxisParam::Rows)?;
+            validate_insert_span(at, rows.count, gridcraft_core::MAX_ROWS)?;
+            object.insert("sheet".into(), Json::from(sheet_index));
+            object.insert("rows".into(), Json::String(line_text(at, rows.count, AxisParam::Rows)?));
+            structural = Some(IdentityStructural::InsertRows { sheet: *sheet, before: rows.before, first: rows.first, count: rows.count });
+        }
+        SharedCommand::DeleteRows { sheet, rows } => {
+            let sheet_index = ids.resolve_sheet(*sheet)?;
+            object.insert("sheet".into(), Json::from(sheet_index));
+            object.insert("rows".into(), Json::String(resolve_delete_lines(ids, *sheet, &rows.ids, AxisParam::Rows)?));
+            structural = Some(IdentityStructural::DeleteRows { sheet: *sheet, ids: rows.ids.clone(), first: rows.first });
+        }
+        SharedCommand::InsertColumns { sheet, cols } => {
+            let sheet_index = ids.resolve_sheet(*sheet)?;
+            let at = resolve_position(ids, *sheet, cols.before, AxisParam::Columns)?;
+            validate_insert_span(at, cols.count, gridcraft_core::MAX_COLS)?;
+            object.insert("sheet".into(), Json::from(sheet_index));
+            object.insert("cols".into(), Json::String(line_text(at, cols.count, AxisParam::Columns)?));
+            structural = Some(IdentityStructural::InsertColumns { sheet: *sheet, before: cols.before, first: cols.first, count: cols.count });
+        }
+        SharedCommand::DeleteColumns { sheet, cols } => {
+            let sheet_index = ids.resolve_sheet(*sheet)?;
+            object.insert("sheet".into(), Json::from(sheet_index));
+            object.insert("cols".into(), Json::String(resolve_delete_lines(ids, *sheet, &cols.ids, AxisParam::Columns)?));
+            structural = Some(IdentityStructural::DeleteColumns { sheet: *sheet, ids: cols.ids.clone(), first: cols.first });
+        }
+        SharedCommand::InsertSheet { before, .. } => {
+            let at = match before.before {
+                IdentityPosition::End => ids.sheets.len(),
+                IdentityPosition::Before(target) => match ids.sheets.find(target) {
+                    collab_live::ids::Lookup::At(at) => at,
+                    collab_live::ids::Lookup::Deleted { .. } => return Err(TargetGone::DeletedSheet(target)),
+                    collab_live::ids::Lookup::Unknown => return Err(TargetGone::UnknownSheet(target)),
+                },
+            };
+            object.insert("before".into(), Json::from(at));
+            structural = Some(IdentityStructural::InsertSheet { before: before.before, id: before.id });
+        }
+        SharedCommand::DeleteSheet { sheet } => {
+            object.insert("sheet".into(), Json::from(ids.resolve_sheet(*sheet)?));
+            structural = Some(IdentityStructural::DeleteSheet { id: *sheet });
+        }
+        _ => {
+            resolve_common_targets(ids, object)?;
+        }
+    }
+    Ok(ResolvedCommand { id, params: Json::Object(object.clone()), structural })
+}
+
+fn resolve_common_targets(ids: &WorkbookIds, object: &mut serde_json::Map<String, Json>) -> Result<(), TargetGone> {
+    let declared_sheet = object
+        .get("sheet")
+        .cloned()
+        .map(|value| serde_json::from_value(value).map_err(|error| TargetGone::Malformed(error.to_string())))
+        .transpose()?;
+    if let Some(sheet) = declared_sheet {
+        object.insert("sheet".into(), Json::from(ids.resolve_sheet(sheet)?));
+    }
+    if let Some(range_value) = object.get("range").cloned() {
+        let ranges: IdentityRanges = serde_json::from_value(range_value).map_err(|error| TargetGone::Malformed(error.to_string()))?;
+        if ranges.as_slice().is_empty() {
+            return Err(TargetGone::Malformed("range target is empty".into()));
+        }
+        let mut resolved = Vec::with_capacity(ranges.as_slice().len());
+        for range in ranges.as_slice() {
+            if declared_sheet != Some(range.sheet) {
+                return Err(TargetGone::Malformed("range target names a different sheet".into()));
+            }
+            resolved.push(ids.resolve_range(*range)?.1.a1());
+        }
+        object.insert("range".into(), Json::String(resolved.join(",")));
+    }
+    if let Some(column_value) = object.get("column").cloned() {
+        let column: LiveId = serde_json::from_value(column_value).map_err(|error| TargetGone::Malformed(error.to_string()))?;
+        let sheet = declared_sheet.ok_or_else(|| TargetGone::Malformed("filter column has no resolved sheet".into()))?;
+        let axes = ids.by_id.get(&sheet).ok_or(TargetGone::UnknownSheet(sheet))?;
+        let position = match axes.cols.find(column) {
+            collab_live::ids::Lookup::At(position) => position,
+            collab_live::ids::Lookup::Deleted { .. } => return Err(TargetGone::DeletedColumn(column)),
+            collab_live::ids::Lookup::Unknown => return Err(TargetGone::UnknownColumn(column)),
+        };
+        let range = object
+            .get("range")
+            .and_then(Json::as_str)
+            .and_then(RangeRef::parse)
+            .ok_or_else(|| TargetGone::Malformed("filter range is absent".into()))?;
+        if position < range.start.col || position > range.end.col {
+            return Err(TargetGone::Malformed("filter column is outside its range".into()));
+        }
+        object.insert("column".into(), Json::from(position - range.start.col));
+    }
+    Ok(())
+}
+
+fn copy_command_values(id: &str, params: &Json, command: &mut serde_json::Map<String, Json>) -> Result<(), CoauthorError> {
+    let keys: &[&str] = match id {
+        "home.numberFormat" => &["format", "code"],
+        "home.fontName" => &["name"],
+        "home.fontSize" | "home.increaseFontSize" | "home.decreaseFontSize" => &["size"],
+        "home.fontColor" | "home.fillColor" => &["color"],
+        "home.borders" => &["preset", "style", "color"],
+        "home.bold" | "home.italic" | "home.wrapText" | "home.alignLeft" | "home.alignCenter" | "home.alignRight" => &["on"],
+        "home.underline" | "home.doubleUnderline" => &["on", "style"],
+        "home.formatCells" => &["style"],
+        "data.filterBy" => &["values", "blanks", "custom", "top", "aboveAverage", "clear"],
+        _ => &[],
+    };
+    for key in keys {
+        if let Some(value) = params.get(*key) {
+            command.insert((*key).to_string(), value.clone());
+        }
+    }
+    if let Some(target) = missing_required_field(id, command) {
+        return Err(CoauthorError::MissingTarget { command: id.to_string(), target: target.to_string() });
+    }
+    Ok(())
+}
+
+fn copy_required(params: &Json, output: &mut serde_json::Map<String, Json>, key: &str, id: &str) -> Result<(), CoauthorError> {
+    let value = params.get(key).cloned().ok_or_else(|| CoauthorError::MissingTarget { command: id.to_string(), target: key.to_string() })?;
+    output.insert(key.to_string(), value);
+    Ok(())
+}
+
+fn to_json(value: impl Serialize) -> Result<Json, CoauthorError> {
+    serde_json::to_value(value).map_err(|error| CoauthorError::MalformedPayload(error.to_string()))
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum AxisParam {
+    Rows,
+    Columns,
+}
+
+impl AxisParam {
+    fn bounds(self, range: RangeRef) -> (u32, u32) {
+        match self {
+            Self::Rows => (range.start.row, range.end.row),
+            Self::Columns => (range.start.col, range.end.col),
+        }
+    }
+}
+
+fn line_span(session: &crate::Session, params: &Json, key: &str, axis: AxisParam) -> Result<(u32, u32), CoauthorError> {
+    let range = params
+        .get(key)
+        .and_then(Json::as_str)
+        .and_then(crate::cmd::parse_lines)
+        .or_else(|| crate::cmd::target_range(session, params).ok())
+        .ok_or_else(|| CoauthorError::MissingTarget { command: key.to_string(), target: key.to_string() })?;
+    let (start, end) = axis.bounds(range);
+    let count = params
+        .get("count")
+        .and_then(Json::as_u64)
+        .and_then(|value| u32::try_from(value).ok())
+        .unwrap_or_else(|| end.saturating_sub(start).saturating_add(1))
+        .max(1);
+    Ok((start, count))
+}
+
+fn deletion_positions(params: &Json, key: &str, axis: AxisParam) -> Result<Vec<u32>, CoauthorError> {
+    let text =
+        params.get(key).and_then(Json::as_str).ok_or_else(|| CoauthorError::MissingTarget { command: key.to_string(), target: key.to_string() })?;
+    if text.len() > MAX_PAYLOAD_BYTES {
+        return Err(CoauthorError::OversizedPayload { bytes: text.len(), max: MAX_PAYLOAD_BYTES });
+    }
+    let limit = if axis == AxisParam::Rows { gridcraft_core::MAX_ROWS } else { gridcraft_core::MAX_COLS };
+    let mut positions = BTreeSet::new();
+    if let Some(count) = params.get("count").and_then(Json::as_u64).and_then(|value| u32::try_from(value).ok()) {
+        let range = crate::cmd::parse_lines(text).ok_or_else(|| CoauthorError::MalformedPayload(format!("invalid {key} target `{text}`")))?;
+        let start = axis.bounds(range).0;
+        if count == 0 {
+            return Err(CoauthorError::MalformedPayload(format!("{key} deletion count must be positive")));
+        }
+        let count = count.min(limit.saturating_sub(start));
+        if usize::try_from(count).unwrap_or(usize::MAX) > MAX_IDENTITY_TARGETS {
+            return Err(CoauthorError::OversizedPayload {
+                bytes: usize::try_from(count).unwrap_or(usize::MAX).saturating_mul(8),
+                max: MAX_PAYLOAD_BYTES,
+            });
+        }
+        for position in start..start.saturating_add(count) {
+            positions.insert(position);
+        }
+    } else {
+        for part in text.split(',') {
+            let range = crate::cmd::parse_lines(part).ok_or_else(|| CoauthorError::MalformedPayload(format!("invalid {key} target `{part}`")))?;
+            let (start, end) = axis.bounds(range);
+            for position in start..=end {
+                positions.insert(position);
+                if positions.len() > MAX_IDENTITY_TARGETS {
+                    return Err(CoauthorError::OversizedPayload { bytes: positions.len().saturating_mul(8), max: MAX_PAYLOAD_BYTES });
+                }
+            }
+        }
+    }
+    if positions.is_empty() {
+        return Err(CoauthorError::MalformedPayload(format!("{key} target is empty")));
+    }
+    Ok(positions.into_iter().collect())
+}
+
+fn validate_insert_span(at: u32, count: u32, limit: u32) -> Result<(), TargetGone> {
+    if count == 0 || at.checked_add(count).is_none_or(|end| end > limit) {
+        return Err(TargetGone::Malformed(format!("insert span {at}..+{count} is outside a worksheet axis of {limit}")));
+    }
+    Ok(())
+}
+
+fn filter_column(params: &Json, range: RangeRef) -> Result<u32, CoauthorError> {
+    match params.get("column") {
+        Some(Json::String(value)) => gridcraft_core::letters_to_col(value.trim_start_matches('$'))
+            .filter(|column| *column >= range.start.col && *column <= range.end.col)
+            .ok_or_else(|| CoauthorError::MalformedPayload("filter column is outside the range".into())),
+        Some(Json::Number(value)) => value
+            .as_u64()
+            .and_then(|offset| u32::try_from(offset).ok())
+            .and_then(|offset| range.start.col.checked_add(offset))
+            .filter(|column| *column <= range.end.col)
+            .ok_or_else(|| CoauthorError::MalformedPayload("filter column is outside the range".into())),
+        _ => Err(CoauthorError::MissingTarget { command: "data.filterBy".into(), target: "column".into() }),
+    }
+}
+
+fn encode_formula(
+    ids: &WorkbookIds,
+    session: &crate::Session,
+    host_sheet: usize,
+    target: CellRef,
+    input: &str,
+) -> Result<(String, bool, Vec<IdentityReference>), CoauthorError> {
+    let document = session.doc()?;
+    let text_formatted = document.wb.sheet(host_sheet).is_some_and(|sheet| document.wb.styles.get(sheet.style_id(target)).num_fmt.as_str() == "@");
+    if text_formatted || !crate::cmd::edit::is_formula_input(input) {
+        return Ok((input.to_string(), false, Vec::new()));
+    }
+    let body = input.strip_prefix('=').unwrap_or(input);
+    let expr = gridcraft_formula::parse(body).map_err(|error| CoauthorError::MalformedPayload(format!("invalid formula: {error}")))?;
+    let mut references = Vec::new();
+    for reference in expr.references() {
+        references.push(identity_reference(ids, session, host_sheet, reference)?);
+    }
+    Ok((format!("={}", gridcraft_formula::print(&expr)), true, references))
+}
+
+fn identity_reference(
+    ids: &WorkbookIds,
+    session: &crate::Session,
+    host_sheet: usize,
+    reference: &Reference,
+) -> Result<IdentityReference, CoauthorError> {
+    let workbook = &session.doc()?.wb;
+    let (sheet, target_index, span_indices) = match &reference.sheet {
+        SheetSel::Current => (IdentitySheetSel::Current { sheet: ids.sheet_id(host_sheet)? }, host_sheet, Vec::new()),
+        SheetSel::Named(name) => {
+            let index = workbook.sheet_index(name).ok_or_else(|| CoauthorError::MalformedPayload(format!("formula names no sheet `{name}`")))?;
+            (IdentitySheetSel::Named { sheet: ids.sheet_id(index)? }, index, Vec::new())
+        }
+        SheetSel::Span(start, end) => {
+            let start_index =
+                workbook.sheet_index(start).ok_or_else(|| CoauthorError::MalformedPayload(format!("formula names no sheet `{start}`")))?;
+            let end_index = workbook.sheet_index(end).ok_or_else(|| CoauthorError::MalformedPayload(format!("formula names no sheet `{end}`")))?;
+            let low = start_index.min(end_index);
+            let high = start_index.max(end_index);
+            let span_indices: Vec<usize> = (low..=high).collect();
+            (IdentitySheetSel::Span { start: ids.sheet_id(start_index)?, end: ids.sheet_id(end_index)? }, start_index, span_indices)
+        }
+    };
+    let encoded_reference = identity_ref_kind(ids, target_index, &reference.kind)?;
+    let mut span_sheets = Vec::with_capacity(span_indices.len());
+    let mut span_references = Vec::with_capacity(span_indices.len());
+    for index in span_indices {
+        span_sheets.push(ids.sheet_id(index)?);
+        span_references.push(identity_ref_kind(ids, index, &reference.kind)?);
+    }
+    Ok(IdentityReference { sheet, reference: encoded_reference, span_sheets, span_references })
+}
+
+fn identity_ref_kind(ids: &WorkbookIds, target_index: usize, reference: &RefKind) -> Result<IdentityRefKind, CoauthorError> {
+    let target_sheet = ids.sheet_id(target_index)?;
+    let encoded = match reference {
+        RefKind::Cell(anchor) => IdentityRefKind::Cell { anchor: identity_anchor(ids, target_index, *anchor)? },
+        RefKind::Range(start, end) => {
+            IdentityRefKind::Range { start: identity_anchor(ids, target_index, *start)?, end: identity_anchor(ids, target_index, *end)? }
+        }
+        RefKind::Rows(start, start_abs, end, end_abs) => {
+            let axes = ids.by_id.get(&target_sheet).ok_or_else(|| CoauthorError::UnknownIdentity(format!("sheet {target_sheet:?}")))?;
+            IdentityRefKind::Rows {
+                start: axes.rows.id_at(*start).ok_or_else(|| CoauthorError::UnknownIdentity(format!("row {start}")))?,
+                start_abs: *start_abs,
+                end: axes.rows.id_at(*end).ok_or_else(|| CoauthorError::UnknownIdentity(format!("row {end}")))?,
+                end_abs: *end_abs,
+            }
+        }
+        RefKind::Cols(start, start_abs, end, end_abs) => {
+            let axes = ids.by_id.get(&target_sheet).ok_or_else(|| CoauthorError::UnknownIdentity(format!("sheet {target_sheet:?}")))?;
+            IdentityRefKind::Columns {
+                start: axes.cols.id_at(*start).ok_or_else(|| CoauthorError::UnknownIdentity(format!("column {start}")))?,
+                start_abs: *start_abs,
+                end: axes.cols.id_at(*end).ok_or_else(|| CoauthorError::UnknownIdentity(format!("column {end}")))?,
+                end_abs: *end_abs,
+            }
+        }
+    };
+    Ok(encoded)
+}
+
+fn identity_anchor(ids: &WorkbookIds, sheet: usize, anchor: Anchor) -> Result<IdentityAnchor, CoauthorError> {
+    let cell = ids.cell_id(sheet, anchor.cell())?;
+    Ok(IdentityAnchor { row: cell.row, col: cell.col, row_abs: anchor.row_abs, col_abs: anchor.col_abs })
+}
+
+fn resolve_formula(
+    ids: &WorkbookIds,
+    session: &crate::Session,
+    host_sheet: LiveId,
+    input: &str,
+    references: &[IdentityReference],
+) -> Result<String, TargetGone> {
+    let Some(body) = input.strip_prefix('=') else {
+        if references.is_empty() {
+            return Ok(input.to_string());
+        }
+        return Err(TargetGone::Malformed("non-formula input carries formula references".into()));
+    };
+    let expr = gridcraft_formula::parse(body).map_err(|error| TargetGone::Malformed(format!("invalid canonical formula: {error}")))?;
+    if expr.references().len() != references.len() {
+        return Err(TargetGone::Malformed("formula reference count does not match its identity references".into()));
+    }
+    let workbook = &session.doc().map_err(|error| TargetGone::Malformed(error.to_string()))?.wb;
+    let mut replacements = Vec::with_capacity(references.len());
+    for reference in references {
+        replacements.push(resolve_identity_reference(ids, workbook, host_sheet, reference));
+    }
+    let mut replacements = replacements.into_iter();
+    let mut failure = None;
+    let resolved = expr.map(&mut |node| {
+        if !matches!(node, Expr::Ref(_)) {
+            return node;
+        }
+        match replacements.next() {
+            Some(Ok(reference)) => Expr::Ref(reference),
+            Some(Err(error)) if is_deleted(&error) => Expr::Error(CellError::Ref),
+            Some(Err(error)) => {
+                failure = Some(error);
+                Expr::Error(CellError::Ref)
+            }
+            None => {
+                failure = Some(TargetGone::Malformed("formula reference replacement ran out".into()));
+                Expr::Error(CellError::Ref)
+            }
+        }
+    });
+    if let Some(error) = failure {
+        return Err(error);
+    }
+    Ok(format!("={}", gridcraft_formula::print(&resolved)))
+}
+
+fn resolve_identity_reference(
+    ids: &WorkbookIds,
+    workbook: &gridcraft_model::Workbook,
+    host_sheet: LiveId,
+    identity: &IdentityReference,
+) -> Result<Reference, TargetGone> {
+    let (sheet, kind) = match identity.sheet {
+        IdentitySheetSel::Current { sheet } => {
+            if sheet != host_sheet {
+                return Err(TargetGone::Malformed("current-sheet formula reference names a different sheet".into()));
+            }
+            if !identity.span_sheets.is_empty() || !identity.span_references.is_empty() {
+                return Err(TargetGone::Malformed("non-span formula reference carries span identities".into()));
+            }
+            (SheetSel::Current, resolve_identity_ref_kind(ids, sheet, &identity.reference)?)
+        }
+        IdentitySheetSel::Named { sheet } => {
+            if !identity.span_sheets.is_empty() || !identity.span_references.is_empty() {
+                return Err(TargetGone::Malformed("non-span formula reference carries span identities".into()));
+            }
+            let index = ids.resolve_sheet(sheet)?;
+            let name = workbook.sheet(index).ok_or(TargetGone::UnknownSheet(sheet))?.name.clone();
+            (SheetSel::Named(name), resolve_identity_ref_kind(ids, sheet, &identity.reference)?)
+        }
+        IdentitySheetSel::Span { start, end } => {
+            let start_index = ids.resolve_sheet(start)?;
+            let end_index = ids.resolve_sheet(end)?;
+            let start_name = workbook.sheet(start_index).ok_or(TargetGone::UnknownSheet(start))?.name.clone();
+            let end_name = workbook.sheet(end_index).ok_or(TargetGone::UnknownSheet(end))?.name.clone();
+            if identity.span_sheets.is_empty() || identity.span_sheets.len() != identity.span_references.len() {
+                return Err(TargetGone::Malformed("3-D formula reference has incomplete span identities".into()));
+            }
+            let low = start_index.min(end_index);
+            let high = start_index.max(end_index);
+            if identity.span_sheets.len() != high.saturating_sub(low).saturating_add(1) {
+                return Err(TargetGone::Malformed("3-D formula reference does not cover its complete sheet span".into()));
+            }
+            for (offset, sheet) in identity.span_sheets.iter().copied().enumerate() {
+                let position = low
+                    .checked_add(offset)
+                    .and_then(|position| u32::try_from(position).ok())
+                    .ok_or_else(|| TargetGone::Malformed("3-D formula sheet span is too large".into()))?;
+                if ids.sheets.id_at(position) != Some(sheet) {
+                    return Err(TargetGone::Malformed("3-D formula reference does not follow workbook sheet order".into()));
+                }
+            }
+            let mut resolved = identity
+                .span_sheets
+                .iter()
+                .copied()
+                .zip(identity.span_references.iter())
+                .map(|(sheet, reference)| resolve_identity_ref_kind(ids, sheet, reference));
+            let common = resolved.next().transpose()?.ok_or_else(|| TargetGone::Malformed("3-D formula reference has no span identities".into()))?;
+            for reference in resolved {
+                if reference? != common {
+                    return Err(TargetGone::UnrepresentableReference);
+                }
+            }
+            (SheetSel::Span(start_name, end_name), common)
+        }
+    };
+    Ok(Reference { sheet, kind })
+}
+
+fn resolve_identity_ref_kind(ids: &WorkbookIds, target: LiveId, identity: &IdentityRefKind) -> Result<RefKind, TargetGone> {
+    ids.resolve_sheet(target)?;
+    let axes = ids.by_id.get(&target).ok_or(TargetGone::UnknownSheet(target))?;
+    let kind = match *identity {
+        IdentityRefKind::Cell { anchor } => RefKind::Cell(resolve_anchor(axes, anchor)?),
+        IdentityRefKind::Range { start, end } => RefKind::Range(resolve_anchor(axes, start)?, resolve_anchor(axes, end)?),
+        IdentityRefKind::Rows { start, start_abs, end, end_abs } => RefKind::Rows(
+            resolve_axis_reference(&axes.rows, start, AxisParam::Rows)?,
+            start_abs,
+            resolve_axis_reference(&axes.rows, end, AxisParam::Rows)?,
+            end_abs,
+        ),
+        IdentityRefKind::Columns { start, start_abs, end, end_abs } => RefKind::Cols(
+            resolve_axis_reference(&axes.cols, start, AxisParam::Columns)?,
+            start_abs,
+            resolve_axis_reference(&axes.cols, end, AxisParam::Columns)?,
+            end_abs,
+        ),
+    };
+    Ok(kind)
+}
+
+fn resolve_anchor(axes: &super::SheetIds, anchor: IdentityAnchor) -> Result<Anchor, TargetGone> {
+    Ok(Anchor {
+        row: resolve_axis_reference(&axes.rows, anchor.row, AxisParam::Rows)?,
+        col: resolve_axis_reference(&axes.cols, anchor.col, AxisParam::Columns)?,
+        row_abs: anchor.row_abs,
+        col_abs: anchor.col_abs,
+    })
+}
+
+fn resolve_axis_reference(ids: &collab_live::ids::OrderedIds, id: LiveId, axis: AxisParam) -> Result<u32, TargetGone> {
+    match (ids.find(id), axis) {
+        (collab_live::ids::Lookup::At(position), _) => Ok(position),
+        (collab_live::ids::Lookup::Deleted { .. }, AxisParam::Rows) => Err(TargetGone::DeletedRow(id)),
+        (collab_live::ids::Lookup::Deleted { .. }, AxisParam::Columns) => Err(TargetGone::DeletedColumn(id)),
+        (collab_live::ids::Lookup::Unknown, AxisParam::Rows) => Err(TargetGone::UnknownRow(id)),
+        (collab_live::ids::Lookup::Unknown, AxisParam::Columns) => Err(TargetGone::UnknownColumn(id)),
+    }
+}
+
+fn is_deleted(error: &TargetGone) -> bool {
+    matches!(error, TargetGone::DeletedSheet(_) | TargetGone::DeletedRow(_) | TargetGone::DeletedColumn(_) | TargetGone::UnrepresentableReference)
+}
+
+fn resolve_position(ids: &WorkbookIds, sheet: LiveId, before: IdentityPosition, axis: AxisParam) -> Result<u32, TargetGone> {
+    let axes = ids.by_id.get(&sheet).ok_or(TargetGone::UnknownSheet(sheet))?;
+    let ordered = if axis == AxisParam::Rows { &axes.rows } else { &axes.cols };
+    match before {
+        IdentityPosition::End => Ok(ordered.len()),
+        IdentityPosition::Before(id) => resolve_axis_reference(ordered, id, axis),
+    }
+}
+
+fn resolve_delete_lines(ids: &WorkbookIds, sheet: LiveId, targets: &[LiveId], axis: AxisParam) -> Result<String, TargetGone> {
+    let axes = ids.by_id.get(&sheet).ok_or(TargetGone::UnknownSheet(sheet))?;
+    let ordered = if axis == AxisParam::Rows { &axes.rows } else { &axes.cols };
+    let mut positions = Vec::with_capacity(targets.len());
+    for target in targets {
+        positions.push(resolve_axis_reference(ordered, *target, axis)?);
+    }
+    positions.sort_unstable();
+    positions.dedup();
+    let parts: Result<Vec<_>, _> = positions.into_iter().map(|position| line_text(position, 1, axis)).collect();
+    Ok(parts?.join(","))
+}
+
+fn line_text(at: u32, count: u32, axis: AxisParam) -> Result<String, TargetGone> {
+    let end = at.checked_add(count.saturating_sub(1)).ok_or_else(|| TargetGone::Malformed("line span overflows".into()))?;
+    match axis {
+        AxisParam::Rows => Ok(format!("{}:{}", u64::from(at) + 1, u64::from(end) + 1)),
+        AxisParam::Columns => Ok(format!("{}:{}", gridcraft_core::col_to_letters(at), gridcraft_core::col_to_letters(end))),
     }
 }

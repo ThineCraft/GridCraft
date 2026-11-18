@@ -1,11 +1,20 @@
 //! Live co-authoring adapter types shared by the command encoder and apply loop.
 
 mod command;
+mod ids;
 
 use collab_live::client::Mode;
+use collab_live::ids::IdError;
 use thiserror::Error;
 
-pub use command::{SharedCommand, SharedEntry, decode_entry, is_shared_command};
+pub use command::{
+    IdentityAnchor, IdentityRefKind, IdentityReference, IdentitySheetSel, ResolvedCommand, SharedCommand, SharedEntry, decode_entry, encode_command,
+    is_shared_command, resolve_command,
+};
+pub use ids::{
+    CellId, IdentityDelete, IdentityInsert, IdentityPosition, IdentityRange, IdentityRangeKind, IdentityRanges, IdentitySheetInsert,
+    IdentityStructural, SheetIds, TargetGone, WorkbookIds,
+};
 
 /// The format name negotiated with a live room.
 pub const GRIDCRAFT_LIVE_FORMAT: &str = "gridcraft/1";
@@ -42,4 +51,6 @@ pub enum CoauthorError {
     OversizedPayload { bytes: usize, max: usize },
     #[error("personal history refused the change: {0}")]
     HistoryRefusal(String),
+    #[error(transparent)]
+    Identity(IdError),
 }
