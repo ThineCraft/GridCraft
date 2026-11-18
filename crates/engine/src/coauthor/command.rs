@@ -139,7 +139,8 @@ pub enum CommandColor {
 #[serde(deny_unknown_fields)]
 pub struct ThemeColor {
     pub theme: u8,
-    pub tint: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tint: Option<f64>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -315,8 +316,10 @@ pub struct BordersPatch {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct BorderLinePatch {
-    pub style: StyleBorderStyle,
-    pub color: StyleColor,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub style: Option<StyleBorderStyle>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<StyleColor>,
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -446,13 +449,7 @@ pub struct FilterValues {
     pub blanks: Option<bool>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-#[serde(untagged)]
-pub enum FilterValue {
-    String(String),
-    Number(f64),
-    Bool(bool),
-}
+pub type FilterValue = Json;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
@@ -463,8 +460,10 @@ pub struct FilterCustom {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct CustomFilter {
-    pub op: String,
-    pub value: FilterValue,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub op: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value: Option<FilterValue>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub op2: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

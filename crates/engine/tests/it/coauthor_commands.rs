@@ -127,7 +127,13 @@ fn shared_entry_rejects_extra_and_duplicate_keys_at_every_wire_level() {
         r#"{"version":1,"action":1,"command":{"id":"home.bold","sheet":[0,0],"range":"A1","on":true,"extra":false}}"#,
         r#"{"version":1,"action":1,"command":{"id":"home.formatCells","sheet":[0,0],"range":"A1","style":{"font":{"bold":true},"extra":false}}}"#,
         r#"{"version":1,"action":1,"command":{"id":"home.formatCells","sheet":[0,0],"range":"A1","style":{"font":{"bold":true,"extra":false}}}}"#,
+        r#"{"version":1,"action":1,"command":{"id":"home.formatCells","sheet":[0,0],"range":"A1","style":{"fill":{"pattern":"Solid","extra":false}}}}"#,
+        r#"{"version":1,"action":1,"command":{"id":"home.formatCells","sheet":[0,0],"range":"A1","style":{"borders":{"top":{"style":"Thin","extra":false}}}}}"#,
+        r#"{"version":1,"action":1,"command":{"id":"home.formatCells","sheet":[0,0],"range":"A1","style":{"align":{"wrap":true,"extra":false}}}}"#,
+        r#"{"version":1,"action":1,"command":{"id":"home.formatCells","sheet":[0,0],"range":"A1","style":{"protection":{"locked":true,"extra":false}}}}"#,
+        r#"{"version":1,"action":1,"command":{"id":"home.fontColor","sheet":[0,0],"range":"A1","color":{"theme":4,"extra":false}}}"#,
         r#"{"version":1,"action":1,"command":{"id":"data.filterBy","sheet":[0,0],"range":"A1:B2","column":[0,0],"custom":{"op":"=","value":"x","extra":false}}}"#,
+        r#"{"version":1,"action":1,"command":{"id":"data.filterBy","sheet":[0,0],"range":"A1:B2","column":[0,0],"top":{"count":10,"extra":false}}}"#,
         r#"{"version":1,"version":1,"action":1,"command":{"id":"home.bold","sheet":[0,0],"range":"A1","on":true}}"#,
         r#"{"version":1,"action":1,"command":{"id":"home.bold","id":"home.bold","sheet":[0,0],"range":"A1","on":true}}"#,
         r#"{"version":1,"action":1,"command":{"id":"home.formatCells","sheet":[0,0],"range":"A1","style":{"font":{"bold":true,"bold":false}}}}"#,
@@ -136,6 +142,21 @@ fn shared_entry_rejects_extra_and_duplicate_keys_at_every_wire_level() {
 
     for payload in cases {
         assert!(matches!(decode_entry(payload), Err(CoauthorError::MalformedPayload(_))), "accepted non-closed payload: {payload}");
+    }
+}
+
+#[test]
+fn shared_commands_accept_engine_defaulted_nested_fields_and_arbitrary_filter_values() {
+    let commands = [
+        json!({"id":"home.formatCells","sheet":[0,0],"range":"A1","style":{"borders":{"top":{"style":"Thin"}}}}),
+        json!({"id":"home.formatCells","sheet":[0,0],"range":"A1","style":{"borders":{"top":{"color":"Auto"}}}}),
+        json!({"id":"home.fontColor","sheet":[0,0],"range":"A1","color":{"theme":4}}),
+        json!({"id":"data.filterBy","sheet":[0,0],"range":"A1:C9","column":[0,1],"values":[null,{"region":"East"},[1,2]]}),
+        json!({"id":"data.filterBy","sheet":[0,0],"range":"A1:C9","column":[0,1],"custom":{}}),
+    ];
+
+    for command in commands {
+        decode_entry(&entry(command.clone())).unwrap_or_else(|error| panic!("engine-compatible command was refused: {command}: {error}"));
     }
 }
 
