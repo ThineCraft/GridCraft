@@ -6,7 +6,10 @@ use collab_live::client::{Crash, Effect, EntryView, LiveEditor, Outcome, Stamp};
 use collab_live::ids::{IdError, LiveId};
 use serde_json::Value as Json;
 
-use super::{CoauthorError, PreparedChange, WorkbookIds, decode_entry, encode_command, mode_for, resolve_command};
+use super::{
+    CoauthorError, PreparedChange, SharedCommand, UndoAction, UndoReport, WorkbookIds, apply_guarded_patch, build_undo_action, decode_entry,
+    encode_command, mode_for, resolve_command,
+};
 use crate::fingerprint::{DocId, fingerprint};
 use crate::{Calc, EngineError, Selection, Session};
 
@@ -41,6 +44,8 @@ pub struct GridLiveEditor {
     ids: WorkbookIds,
     applying_seq: Option<Seq>,
     local_action_high_water: u64,
+    history_updates: BTreeMap<u64, Option<UndoAction>>,
+    undo_reports: BTreeMap<u64, UndoReport>,
     #[cfg(test)]
     test_command_override: Option<&'static str>,
 }
@@ -53,6 +58,8 @@ impl GridLiveEditor {
             ids,
             applying_seq: None,
             local_action_high_water: 0,
+            history_updates: BTreeMap::new(),
+            undo_reports: BTreeMap::new(),
             #[cfg(test)]
             test_command_override: None,
         })
@@ -93,6 +100,14 @@ impl GridLiveEditor {
 
     pub(super) fn local_action_high_water(&self) -> u64 {
         self.local_action_high_water
+    }
+
+    pub(super) fn take_history_update(&mut self, action: u64) -> Option<Option<UndoAction>> {
+        self.history_updates.remove(&action)
+    }
+
+    pub(super) fn take_undo_report(&mut self, action: u64) -> Option<UndoReport> {
+        self.undo_reports.remove(&action)
     }
 
     fn apply_stamp(&mut self, stamp: Stamp) {
@@ -210,6 +225,38 @@ impl LiveEditor for GridLiveEditor {
             Ok(decoded) => decoded,
             Err(_) => return Ok(Self::no_effect("The shared change is not valid.", false)),
         };
+        if let SharedCommand::Guarded { patch } = &decoded.command {
+            let view = self.capture_view();
+            let before = self.snapshot();
+            let report = match apply_guarded_patch(&mut self.session, &self.ids, patch) {
+                Ok(report) => report,
+                Err(error) => {
+                    self.restore_shared(&before, view.as_ref(), true);
+                    return Self::engine_error_outcome(error, false);
+                }
+            };
+            if entry.own {
+                self.undo_reports.insert(decoded.action, report.clone());
+            }
+            let first_local_apply = entry.own && decoded.action > self.local_action_high_water;
+            if first_local_apply {
+                self.local_action_high_water = decoded.action;
+            }
+            if !first_local_apply && let Some(view) = view.as_ref() {
+                self.restore_view(view);
+            }
+            let effect = if report.restored == 0 && report.left > 0 {
+                Effect::NoEffect { reason: report.reason.clone().unwrap_or_else(|| "The guarded fields changed after this action.".into()) }
+            } else {
+                Effect::Applied
+            };
+            return Ok(Outcome { effect, read_stamp: false });
+        }
+        if entry.own {
+            // Replays replace the first optimistic inverse. `None` is meaningful: the same
+            // pending action can become a no-effect after an earlier structural entry lands.
+            self.history_updates.insert(decoded.action, None);
+        }
         let resolved = match resolve_command(&self.ids, &self.session, &decoded) {
             Ok(resolved) => resolved,
             Err(_) => return Ok(Self::no_effect("The shared target is no longer available.", false)),
@@ -256,6 +303,12 @@ impl LiveEditor for GridLiveEditor {
         }
         if !first_local_apply && let Some(view) = view.as_ref() {
             self.restore_view(view);
+        }
+        if entry.own
+            && let Ok(document) = self.session.doc()
+            && let Ok(Some(action)) = build_undo_action(decoded.action, &self.ids, &before.document.wb, &document.wb, &decoded.command)
+        {
+            self.history_updates.insert(decoded.action, Some(action));
         }
         Ok(Outcome { effect: Effect::Applied, read_stamp })
     }

@@ -9,6 +9,7 @@ mod coauthor_live;
 mod coauthor_replay;
 mod coauthor_save_reload;
 mod coauthor_timing;
+mod coauthor_undo;
 mod command_sequence_fuzz;
 mod cross_sheet_cut;
 mod csv_export_budget;

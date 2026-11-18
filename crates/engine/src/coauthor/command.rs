@@ -10,8 +10,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value as Json;
 
 use super::{
-    CellId, CoauthorError, IdentityDelete, IdentityInsert, IdentityPosition, IdentityRanges, IdentitySheetInsert, IdentityStructural, TargetGone,
-    WorkbookIds,
+    CellId, CoauthorError, GuardedPatch, IdentityDelete, IdentityInsert, IdentityPosition, IdentityRanges, IdentitySheetInsert, IdentityStructural,
+    TargetGone, WorkbookIds,
 };
 
 const MAX_IDENTITY_TARGETS: usize = MAX_PAYLOAD_BYTES / 8;
@@ -122,6 +122,8 @@ pub enum SharedCommand {
     RenameSheet { sheet: LiveId, name: String },
     #[serde(rename = "home.deleteSheet")]
     DeleteSheet { sheet: LiveId },
+    #[serde(rename = "edit.guardedPatch")]
+    Guarded { patch: GuardedPatch },
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -581,7 +583,7 @@ pub fn decode_entry(payload: &str) -> Result<SharedEntry, CoauthorError> {
     }
     let command = value.get("command").and_then(Json::as_object).ok_or_else(|| malformed("missing or invalid `command`"))?;
     let id = command.get("id").and_then(Json::as_str).ok_or_else(|| malformed("missing or invalid command `id`"))?;
-    if !is_shared_command(id) {
+    if !is_wire_command(id) {
         return Err(CoauthorError::UnsupportedCommand(id.to_string()));
     }
     if let Some(field) = unexpected_command_field(id, command) {
@@ -705,6 +707,7 @@ fn unexpected_command_field<'a>(id: &str, command: &'a serde_json::Map<String, J
         "home.insertSheet" => &["id", "name", "before"],
         "sheet.rename" => &["id", "sheet", "name"],
         "home.deleteSheet" => &["id", "sheet"],
+        "edit.guardedPatch" => &["id", "patch"],
         _ => &[],
     };
     command.keys().find(|field| !allowed.contains(&field.as_str())).map(String::as_str)
@@ -755,6 +758,10 @@ pub fn is_shared_command(id: &str) -> bool {
     )
 }
 
+fn is_wire_command(id: &str) -> bool {
+    is_shared_command(id) || id == "edit.guardedPatch"
+}
+
 fn missing_required_field(id: &str, command: &serde_json::Map<String, Json>) -> Option<&'static str> {
     let fields: &[&str] = match id {
         "cell.set" => &["sheet", "cell", "input", "originYear", "formula", "references"],
@@ -774,6 +781,7 @@ fn missing_required_field(id: &str, command: &serde_json::Map<String, Json>) -> 
         "home.insertSheet" => &["name", "before"],
         "sheet.rename" => &["sheet", "name"],
         "home.deleteSheet" => &["sheet"],
+        "edit.guardedPatch" => &["patch"],
         _ => &[],
     };
     if let Some(field) = fields.iter().find(|field| !command.contains_key(**field)) {
@@ -797,6 +805,9 @@ pub fn encode_command(
     origin_year: i32,
     allocate: &mut dyn FnMut(u32) -> Result<LiveId, IdError>,
 ) -> Result<SharedEntry, CoauthorError> {
+    if id == "edit.guardedPatch" {
+        return Err(CoauthorError::UnsupportedCommand(id.to_string()));
+    }
     if !is_shared_command(id) {
         return Err(CoauthorError::UnsupportedCommand(id.to_string()));
     }
@@ -909,6 +920,10 @@ pub fn encode_command(
     Ok(entry)
 }
 
+pub(crate) fn guarded_entry(action: u64, patch: GuardedPatch) -> SharedEntry {
+    SharedEntry { version: 1, action, command: SharedCommand::Guarded { patch } }
+}
+
 pub fn resolve_command(ids: &WorkbookIds, session: &crate::Session, entry: &SharedEntry) -> Result<ResolvedCommand, TargetGone> {
     let mut value = serde_json::to_value(&entry.command).map_err(|error| TargetGone::Malformed(error.to_string()))?;
     let object = value.as_object_mut().ok_or_else(|| TargetGone::Malformed("command did not serialize as an object".into()))?;
@@ -988,6 +1003,7 @@ pub fn resolve_command(ids: &WorkbookIds, session: &crate::Session, entry: &Shar
             object.insert("sheet".into(), Json::from(ids.resolve_sheet(*sheet)?));
             structural = Some(IdentityStructural::DeleteSheet { id: *sheet });
         }
+        SharedCommand::Guarded { .. } => return Err(TargetGone::Malformed("guarded patch is resolved by the co-author editor".into())),
         _ => {
             resolve_common_targets(ids, object)?;
         }
