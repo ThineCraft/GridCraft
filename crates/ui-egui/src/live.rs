@@ -21,14 +21,20 @@ use std::fmt;
 
 use egui::{Color32, Painter, Rect, Stroke, StrokeKind, pos2, vec2};
 use gridcraft_engine::Session;
-use gridcraft_engine::coauthor::{Route, explicit_params, route};
-use gridcraft_engine::core::RangeRef;
+use gridcraft_engine::coauthor::{CellId, Route, UNSHARED_REASON, explicit_params, route};
+use gridcraft_engine::core::{CellRef, RangeRef};
 use serde_json::Value as Json;
 
 use crate::{SheetApp, now_ms};
 
 /// Why an edit is refused when the person may only view.
 pub const READ_ONLY_REASON: &str = "You can view this workbook but not change it while editing together";
+
+/// The most Undo steps one click on the Undo list asks for.
+const MAX_UNDO_STEPS: usize = 100;
+
+/// The longest typed text a deleted-cell notice repeats.
+const MAX_KEPT_CHARS: usize = 200;
 
 /// What Save says while editing together.
 pub const SAVED_BY_ROOM: &str = "Changes are saved automatically while editing together";
@@ -48,6 +54,14 @@ pub trait LiveLink {
     fn set_editing(&self, editing: bool);
     /// Other people's places, resolved against the shown workbook.
     fn others(&self) -> Vec<OtherPlace>;
+    /// The person's own Undo list, the most recent first.
+    fn undo_labels(&self) -> Vec<String>;
+    /// Whether an Undo or Redo still waits for the server (the next must wait).
+    fn history_waiting(&self) -> bool;
+    /// A cell's lasting identity, for a draft to follow while others change the sheet.
+    fn cell_identity(&self, sheet: usize, cell: CellRef) -> Option<CellId>;
+    /// Where that cell is now; `None` once it was deleted.
+    fn find_cell(&self, id: CellId) -> Option<(usize, CellRef)>;
 }
 
 /// Another person's place to draw.
@@ -116,7 +130,15 @@ impl SheetApp {
                 return Some(Ok(Json::Null));
             }
             "edit.undo" | "edit.redo" if !link.may_edit() => Err(READ_ONLY_REASON.to_string()),
-            "edit.undo" => link.undo(&mut self.session),
+            "edit.undo" => {
+                // Each Undo waits for the server before the next; the rest of a multi-step
+                // click goes on in later frames (`continue_live_undo`).
+                let steps =
+                    params.get("steps").and_then(Json::as_u64).map_or(1, |n| usize::try_from(n).unwrap_or(MAX_UNDO_STEPS)).clamp(1, MAX_UNDO_STEPS);
+                let result = link.undo(&mut self.session);
+                self.live_undo_steps = if result.is_ok() { steps - 1 } else { 0 };
+                result
+            }
             "edit.redo" => link.redo(&mut self.session),
             _ => {
                 gridcraft_engine::find_command(id)?;
@@ -135,6 +157,63 @@ impl SheetApp {
             self.after_engine();
         }
         Some(result.map(|()| Json::Null))
+    }
+
+    /// Goes on with a multi-step Undo from the Undo list once the previous step is stored.
+    pub(crate) fn continue_live_undo(&mut self) {
+        if self.live_undo_steps == 0 {
+            return;
+        }
+        let Some(link) = self.live.as_deref() else {
+            self.live_undo_steps = 0;
+            return;
+        };
+        if link.history_waiting() {
+            return;
+        }
+        match link.undo(&mut self.session) {
+            Ok(()) => {
+                self.live_undo_steps -= 1;
+                self.after_engine();
+            }
+            Err(error) => {
+                self.live_undo_steps = 0;
+                self.toast = Some((error, now_ms()));
+            }
+        }
+    }
+
+    /// The Undo list's labels, the most recent first: the person's own history while live.
+    pub fn undo_labels(&self) -> Vec<String> {
+        match &self.live {
+            Some(link) => link.undo_labels(),
+            None => self.session.active().map(|d| d.undo.iter().rev().map(|e| e.label.clone()).collect()).unwrap_or_default(),
+        }
+    }
+
+    /// Runs a command a screen gesture makes straight on the session (a drag, a control). While
+    /// editing together the session refuses it, and the person is told once, by a toast.
+    pub(crate) fn run_gesture(&mut self, id: &str, params: Json) -> Result<Json, String> {
+        let result = self.session.run(id, params);
+        if let Err(error) = &result
+            && error == UNSHARED_REASON
+        {
+            self.toast = Some((UNSHARED_REASON.into(), now_ms()));
+        }
+        result
+    }
+
+    /// The draft's cell, by identity, while editing together: a remote insert or delete moves
+    /// it. `Err` holds the notice when the cell is gone.
+    pub(crate) fn live_draft_target(&self, ed: &crate::editor::EditState) -> Result<Option<(usize, CellRef)>, String> {
+        let (Some(link), Some(id)) = (self.live.as_deref(), ed.live_cell) else { return Ok(None) };
+        match link.find_cell(id) {
+            Some(target) => Ok(Some(target)),
+            None => {
+                let kept: String = ed.text.chars().take(MAX_KEPT_CHARS).collect();
+                Err(format!("The cell you were typing in was deleted by someone else, so your entry was not made: \u{201c}{kept}\u{201d}"))
+            }
+        }
     }
 
     /// Runs an engine command the screen makes itself (a committed cell draft): through the live
@@ -301,6 +380,22 @@ mod tests {
 
         fn others(&self) -> Vec<OtherPlace> {
             self.0.others.clone()
+        }
+
+        fn undo_labels(&self) -> Vec<String> {
+            self.0.coauthor.borrow().history().undo_labels()
+        }
+
+        fn history_waiting(&self) -> bool {
+            self.0.coauthor.borrow().history().is_pending()
+        }
+
+        fn cell_identity(&self, sheet: usize, cell: CellRef) -> Option<gridcraft_engine::coauthor::CellId> {
+            self.0.coauthor.borrow().cell_id(sheet, cell)
+        }
+
+        fn find_cell(&self, id: gridcraft_engine::coauthor::CellId) -> Option<(usize, CellRef)> {
+            self.0.coauthor.borrow().find_cell(id)
         }
     }
 
@@ -571,5 +666,99 @@ mod tests {
         let mut elsewhere = place(true, true, false);
         elsewhere.sheet = 1;
         assert!(painted(&[elsewhere]).is_empty(), "nor for one on another sheet");
+    }
+
+    /// Bob (participant 3) on the same base makes one change; the server's ordered frame for it at
+    /// position `seq`.
+    fn bobs_entry(id: &str, params: Json, seq: u64) -> String {
+        let config = LiveConfig { format: GRIDCRAFT_LIVE_FORMAT.to_string(), crashed_at: None };
+        let mut bob = GridCoauthor::new(config, GridLiveEditor::new(data_session()).unwrap());
+        let join: Json =
+            bob.tick(1).iter().filter_map(|frame| serde_json::from_str::<Json>(frame).ok()).find(|frame| frame["type"] == "live_join").unwrap();
+        let joined = json!({"type":"live_joined","session":"00000000-0000-0000-0000-00000000005e","participant":3,"place":{"is":"new"},
+            "can_edit":true,"heartbeat_ms":60_000,"people":[]});
+        bob.receive(&joined.to_string(), 2).unwrap();
+        bob.receive(&json!({"type":"catchup","base":0,"revision":null,"from":0,"head":0}).to_string(), 3).unwrap();
+        bob.base_ready(4).unwrap();
+        let step = bob.submit(id, params, 2026, 10).unwrap();
+        let sent: Json =
+            step.send.iter().filter_map(|frame| serde_json::from_str::<Json>(frame).ok()).find(|frame| frame["type"] == "entry").unwrap();
+        json!({
+            "type":"entry",
+            "entry":{"seq":seq,"at_ms":1_795_219_200_000_i64,"seed":7,"kind":"change","participant":3,"client":join["client"],
+                "local":sent["local"],"seen":sent["seen"],"payload":sent["payload"],"cancelled":false}
+        })
+        .to_string()
+    }
+
+    /// Delivers another person's frame to the seat, as between two frames of the screen.
+    fn deliver(app: &mut SheetApp, seat: &Seat, frame: &str) {
+        let now = seat.tick();
+        lend(&mut app.session, &seat.coauthor, |coauthor| coauthor.receive(frame, now).unwrap());
+    }
+
+    #[test]
+    fn a_draft_follows_its_cell_when_rows_are_inserted_above() {
+        let (mut app, seat, _) = live_app(true, true, vec![]);
+        app.run("selection.set", json!({"range":"B5"})).unwrap();
+        app.begin_edit(Some("typed".into()), false);
+        deliver(&mut app, &seat, &bobs_entry("home.insertRows", json!({"sheet":0,"rows":"2:3"}), 1));
+        assert!(app.commit_edit(1, 0, false, false));
+        assert_eq!(value(&app, "B7"), Value::Text("typed".into()), "the entry lands in the cell the draft was opened on, now two rows down");
+        assert_eq!(value(&app, "B5"), Value::Empty, "not in the cell that moved under it");
+    }
+
+    #[test]
+    fn a_draft_on_a_deleted_cell_does_nothing_and_says_so() {
+        let (mut app, seat, _) = live_app(true, true, vec![]);
+        app.run("selection.set", json!({"range":"B5"})).unwrap();
+        app.begin_edit(Some("typed".into()), false);
+        deliver(&mut app, &seat, &bobs_entry("home.deleteRows", json!({"sheet":0,"rows":"5:5"}), 1));
+        let before = entered(&app);
+        app.commit_edit(1, 0, false, false);
+        assert!(seat.entries().is_empty(), "nothing is sent");
+        assert_eq!(entered(&app), before, "nothing changes");
+        let (_, message) = app.message.clone().expect("the author is told");
+        assert!(message.contains("deleted") && message.contains("typed"), "the notice keeps what was typed: {message}");
+        assert!(app.editor.is_none());
+    }
+
+    #[test]
+    fn the_undo_list_shows_personal_history_and_honours_steps() {
+        let (mut app, seat, _) = live_app(true, true, vec![]);
+        app.run("cell.set", json!({"cell":"A1","input":"1"})).unwrap();
+        seat.confirm(&mut app.session, 0, 1);
+        app.run("cell.set", json!({"cell":"A2","input":"2"})).unwrap();
+        seat.confirm(&mut app.session, 1, 2);
+        assert_eq!(app.undo_labels().len(), 2, "the person's own history, not the shared list");
+        app.run("edit.undo", json!({"steps": 2})).unwrap();
+        assert_eq!(seat.entries().len(), 3, "the first step goes at once");
+        app.continue_live_undo();
+        assert_eq!(seat.entries().len(), 3, "the second waits for the first to be stored");
+        seat.confirm(&mut app.session, 2, 3);
+        app.continue_live_undo();
+        assert_eq!(seat.entries().len(), 4, "two steps, two Undo changes");
+        assert_eq!((value(&app, "A1"), value(&app, "A2")), (Value::Empty, Value::Empty));
+    }
+
+    #[test]
+    fn refused_gestures_are_toasted() {
+        let (mut app, _seat, _) = live_app(true, true, vec![]);
+        for (id, params) in [
+            ("home.rowHeight", json!({"rows":"1:1","height":30})),
+            ("home.columnWidth", json!({"cols":"A:A","width":90})),
+            ("control.setValue", json!({"id":1,"value":2})),
+        ] {
+            app.toast = None;
+            assert!(app.run_gesture(id, params).is_err());
+            assert!(app.toast.as_ref().is_some_and(|(text, _)| text.contains("editing together")), "{id}: {:?}", app.toast);
+        }
+    }
+
+    #[test]
+    fn a_viewer_cannot_open_the_python_editor() {
+        let (mut app, _seat, _) = live_app(false, true, vec![]);
+        app.begin_python_edit();
+        assert!(app.editor.is_none());
     }
 }

@@ -69,6 +69,7 @@ impl SheetApp {
             None => (current.clone(), false),
         };
         let mut ed = editor::EditState::new(d.uid, d.wb.active_sheet(), at, text, replace, from_formula_bar).on_sheet(&d.wb);
+        ed.live_cell = self.live.as_ref().and_then(|link| link.cell_identity(d.wb.active_sheet(), at));
         ed.window = self.session.active_window();
         ed.locale = locale;
         if replace && self.ui.autocomplete && !ed.is_formula() {
@@ -136,6 +137,19 @@ impl SheetApp {
         let Some(mut ed) = self.editor.take() else { return true };
         self.session.mode = gridcraft_engine::Mode::Ready;
         self.live_editing(false);
+        // Editing together, the draft goes to its cell by identity: others may have inserted or
+        // deleted rows and columns while it was open.
+        match self.live_draft_target(&ed) {
+            Ok(Some((sheet, cell))) => {
+                ed.sheet = sheet;
+                ed.cell = cell;
+            }
+            Ok(None) => {}
+            Err(notice) => {
+                self.message = Some(("GridCraft".into(), notice));
+                return true;
+            }
+        }
         if !self.follow_draft_sheet(&mut ed) {
             return true;
         }
@@ -296,6 +310,10 @@ impl SheetApp {
     /// formula bar's other entry paths.
     pub fn begin_python_edit(&mut self) {
         if formula_bar::active_spill_anchor(self).is_some() {
+            return;
+        }
+        if !self.live_may_edit() {
+            self.toast = Some((crate::live::READ_ONLY_REASON.into(), now_ms()));
             return;
         }
         if let Err(e) = self.commit_text_box_edit() {

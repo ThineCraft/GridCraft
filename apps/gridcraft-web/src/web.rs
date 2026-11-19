@@ -155,7 +155,6 @@ fn stored(key: &str) -> Option<String> {
 
 impl eframe::App for WebShell {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        self.lend_live();
         let dropped = ctx.input_mut(|i| std::mem::take(&mut i.raw.dropped_files));
         // Hosted, a dropped file would replace the host's workbook: drops are ignored.
         let dropped = if self.hosted { Vec::new() } else { dropped };
@@ -173,7 +172,12 @@ impl eframe::App for WebShell {
                 }
             });
         }
-        self.app.logic(ctx);
+        // Each call into the app gets the shared session for itself and gives it back, so a
+        // hidden tab (eframe runs `logic` without `ui`) leaves the seat to apply frames.
+        match self.live.clone() {
+            Some(live) => live.during(&mut self.app, |app| app.logic(ctx)),
+            None => self.app.logic(ctx),
+        }
         // Store changed preferences straight away: a reload or closed tab runs no exit code (#1562).
         let changed = self.prefs.changed(&self.app);
         if !changed.is_empty() {
@@ -192,33 +196,19 @@ impl eframe::App for WebShell {
 
     /// Forwards a browser frame's raw input to the shared app before eframe handles it.
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
-        self.lend_live();
-        self.app.raw_input_hook(ctx, raw);
+        match self.live.clone() {
+            Some(live) => live.during(&mut self.app, |app| app.raw_input_hook(ctx, raw)),
+            None => self.app.raw_input_hook(ctx, raw),
+        }
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        self.app.ui(ui);
-        // The shared session goes back to the live seat between frames, so frames and ticks
-        // that arrive meanwhile apply to it without waiting for drawing.
-        if let Some(live) = &self.live {
-            self.app.live = None;
-            live.give_back(&mut self.app.session);
+        match self.live.clone() {
+            Some(live) => live.during(&mut self.app, |app| app.ui(ui)),
+            None => self.app.ui(ui),
         }
         if let Some(bridge) = &self.bridge {
             bridge.sync(&mut self.app);
-        }
-    }
-}
-
-impl WebShell {
-    /// For this frame: messages that waited are handled, then a live session's shared session is
-    /// lent to the app (a stopped one hands back its unshared session first) with its link.
-    fn lend_live(&mut self) {
-        let Some(live) = &self.live else { return };
-        live.drain();
-        let link = live.lend(&mut self.app.session);
-        if self.app.live.is_none() {
-            self.app.live = link;
         }
     }
 }

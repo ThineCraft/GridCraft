@@ -330,6 +330,8 @@ pub struct SheetApp {
     /// The live seat while the workbook is edited together ([`live`]); `None` otherwise, and
     /// then nothing about the screen changes.
     pub live: Option<Box<dyn live::LiveLink>>,
+    /// Undo steps a click on the Undo list still asks for while editing together.
+    pub(crate) live_undo_steps: usize,
     /// The update check, the startup prompt and a running self-update (desktop only).
     #[cfg(not(target_arch = "wasm32"))]
     updates_rt: updates_ui::Runtime,

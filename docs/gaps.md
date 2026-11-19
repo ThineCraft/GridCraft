@@ -1,6 +1,6 @@
 # Gaps
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-11-19 · **Change:** minor (§16: G3 review carries for G4 and G5; earlier: §16: first live command set and in-process co-author adapter complete; no user-facing co-authoring yet; earlier: §17: equations; earlier: §13: Solver Sensitivity report; earlier: §4: chart resizing is no longer a gap) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-11-19 · **Change:** minor (§16: gestures refused while editing together; earlier: §16: G3 review carries for G4 and G5; earlier: §16: first live command set and in-process co-author adapter complete; no user-facing co-authoring yet; earlier: §17: equations; earlier: §13: Solver Sensitivity report; earlier: §4: chart resizing is no longer a gap) · **Target:** Microsoft Excel (Microsoft 365)
 
 Every known shortfall against Excel, one entry each, ranked by user impact (what blocks someone
 using GridCraft for real work first). This is the work list: pick from the top, check the open
@@ -160,6 +160,14 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
   final full recalculation. One row insert took 129.1 / 143.0 ms to clone and apply, or 203.9 /
   220.8 ms including full recalculation. The heavier report was not run on wasm or another
   desktop platform, so these figures are not cross-platform claims.
+- **G5 limits while editing together (web, in a ShareCraft room):** only the shared command
+  set changes the workbook. Screen gestures whose commands are not shared are refused with
+  "Not available while editing together": dragging a row height or column width, moving or
+  resizing a floating object, setting a form control's value, the Watch Window list, editing a
+  Python cell, and File › Save a Copy. Sort, cut and paste, fill, merge, objects, charts,
+  pivots, macros and scripts stay refused too. Save hands over no file (checkpoints are
+  automatic); Export as PDF still works. Other people's selections are drawn only once the
+  live wire carries presence (ShareCraft G5 task 1).
 - **Still missing:** G4 checkpoints and retained-room state; G5 sockets, the host bridge,
   presence, notices and the screen integration. There is no user-facing co-authoring until G4
   and G5 land. Known before a real room (G3 final review):

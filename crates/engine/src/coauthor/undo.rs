@@ -319,6 +319,16 @@ impl PersonalHistory {
         }
     }
 
+    /// The labels of the actions Undo would reverse, the most recent first.
+    pub fn undo_labels(&self) -> Vec<String> {
+        self.undo.iter().rev().map(|action| action.label.clone()).collect()
+    }
+
+    /// Whether an Undo or Redo waits for the server; the next one must wait for it.
+    pub fn is_pending(&self) -> bool {
+        self.pending.is_some()
+    }
+
     pub fn prepare_undo(&mut self) -> Result<GuardedPatch, HistoryError> {
         if self.pending.is_some() {
             return Err(HistoryError::Pending);

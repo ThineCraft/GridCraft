@@ -12,7 +12,7 @@ use std::collections::BTreeMap;
 pub use collab_core::ids::Seq;
 use collab_live::client::{AgreedSnapshot, Effect, LiveClient, Mode};
 /// The live client's types a host names, so it needs no dependency of its own on ShareCraft's crates.
-pub use collab_live::client::{ClientError, Event, LiveConfig, LocalError, Phase, Stamp, Step};
+pub use collab_live::client::{ClientError, Event, LiveConfig, LocalError, MAX_ENTRIES_PER_WINDOW, Phase, Stamp, Step};
 use collab_live::ids::IdError;
 use protocol::live::{LiveBuild, MAX_PAYLOAD_BYTES, RefusedReason};
 use serde_json::Value as Json;
@@ -281,6 +281,16 @@ impl GridCoauthor {
 
     pub fn history(&self) -> &PersonalHistory {
         &self.history
+    }
+
+    /// The lasting identity of a cell in the shown workbook, for a draft to follow.
+    pub fn cell_id(&self, sheet: usize, cell: gridcraft_core::CellRef) -> Option<CellId> {
+        self.editor.ids().cell_id(sheet, cell).ok()
+    }
+
+    /// Where a cell is now; `None` once its sheet, row or column is gone.
+    pub fn find_cell(&self, id: CellId) -> Option<(usize, gridcraft_core::CellRef)> {
+        self.editor.ids().resolve_cell(id).ok()
     }
 
     pub fn last_undo_report(&self) -> Option<&UndoReport> {

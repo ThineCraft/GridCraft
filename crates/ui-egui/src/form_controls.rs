@@ -232,7 +232,7 @@ pub(crate) fn trim_control_undo(app: &mut SheetApp, start: usize) {
 impl SheetApp {
     /// Sets a slider or spin button's value; inside a gesture, keeps it one undo step.
     fn control_set(&mut self, id: u32, value: f64) -> bool {
-        match self.session.run("control.setValue", json!({"id": id, "value": value})) {
+        match self.run_gesture("control.setValue", json!({"id": id, "value": value})) {
             Ok(_) => {
                 if let Some(start) = self.grid.control.as_ref().map(|g| g.undo_start) {
                     trim_control_undo(self, start);
@@ -241,7 +241,10 @@ impl SheetApp {
             }
             Err(e) => {
                 self.grid.control = None;
-                self.message = Some(("Form Control".into(), crate::clean_error(&e)));
+                // A refusal while editing together is already a toast.
+                if e != gridcraft_engine::coauthor::UNSHARED_REASON {
+                    self.message = Some(("Form Control".into(), crate::clean_error(&e)));
+                }
                 false
             }
         }

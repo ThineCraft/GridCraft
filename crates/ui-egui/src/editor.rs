@@ -8,6 +8,9 @@ pub const REF_COLOR_COUNT: usize = 8;
 
 #[derive(Clone, Debug)]
 pub struct EditState {
+    /// The cell's lasting identity while editing together: Enter goes to that cell wherever
+    /// others' inserts and deletes move it.
+    pub live_cell: Option<gridcraft_engine::coauthor::CellId>,
     /// The workbook (`DocState::uid`) the draft belongs to: it is drawn and committed only there.
     pub doc: u64,
     /// The window it was typed in: switching to another window, even on the same workbook,
@@ -75,6 +78,7 @@ impl EditState {
         let caret = text.chars().count();
         let original = (!enter_mode).then(|| text.clone());
         EditState {
+            live_cell: None,
             doc,
             window: None,
             sheet,

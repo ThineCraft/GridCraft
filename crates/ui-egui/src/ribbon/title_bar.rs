@@ -72,8 +72,10 @@ pub fn title_bar(app: &mut SheetApp, ui: &mut Ui) {
             }
             // The commands' own availability: there must be a step, and no undo group may be open on
             // the document (an action that spans several calls is still running).
-            let can_undo = gridcraft_engine::cmd::can_undo(&app.session).is_ok();
-            let can_redo = gridcraft_engine::cmd::can_redo(&app.session).is_ok();
+            // Editing together, Undo is the person's own history.
+            let can_undo = if app.is_live() { !app.undo_labels().is_empty() } else { gridcraft_engine::cmd::can_undo(&app.session).is_ok() };
+            // Editing together, the person's own history answers a Redo (and says when there is none).
+            let can_redo = app.is_live() || gridcraft_engine::cmd::can_redo(&app.session).is_ok();
             // Named and marked enabled or not for assistive technology (and the UI tests).
             let undo = icon_button(ui, Icon::Undo, if can_undo { t.text_dim } else { t.text_disabled }, "Undo", vec2(26.0, ch));
             undo.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, can_undo, "Undo"));
@@ -82,11 +84,7 @@ pub fn title_bar(app: &mut SheetApp, ui: &mut Ui) {
             }
             let undo_list = icon_button(ui, Icon::Chevron, t.text_dim, "Undo list", vec2(14.0, ch));
             egui::Popup::menu(&undo_list).show(|ui| {
-                let labels: Vec<String> = if can_undo {
-                    app.session.active().map(|d| d.undo.iter().rev().take(20).map(|e| e.label.clone()).collect()).unwrap_or_default()
-                } else {
-                    Vec::new()
-                };
+                let labels: Vec<String> = if can_undo { app.undo_labels().into_iter().take(20).collect() } else { Vec::new() };
                 if labels.is_empty() {
                     ui.label("Can't Undo");
                 }

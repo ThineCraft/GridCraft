@@ -41,8 +41,8 @@ use std::sync::Arc;
 
 use gridcraft_engine::Session;
 use gridcraft_engine::coauthor::{
-    ClientError, Event, GRIDCRAFT_LIVE_FORMAT, GridCoauthor, GridLiveEditor, GridLiveError, LiveBase, LiveConfig, LocalError, MAX_SESSION_DATA_BYTES,
-    Phase, Seq, Stamp, Step, TicketAnswer,
+    CellId, ClientError, Event, GRIDCRAFT_LIVE_FORMAT, GridCoauthor, GridLiveEditor, GridLiveError, LiveBase, LiveConfig, LocalError,
+    MAX_SESSION_DATA_BYTES, Phase, Seq, Stamp, Step, TicketAnswer,
 };
 use gridcraft_ui_egui::live::OtherPlace;
 use serde_json::{Value as Json, json};
@@ -411,21 +411,21 @@ impl LiveSeat {
 
     /// Sends one shared change made on the screen. Refused, with nothing shown, when the page
     /// said this tab may only view, as well as when the room does.
-    pub fn submit(&mut self, id: &str, params: Json, origin_year: i32, now_ms: u64) -> Result<Vec<LiveEditorMsg>, GridLiveError> {
-        let coauthor = self.editable()?;
+    pub fn submit(&mut self, id: &str, params: Json, origin_year: i32, now_ms: u64) -> Result<Vec<LiveEditorMsg>, Refused> {
+        let coauthor = self.editable().map_err(Refused::alone)?;
         let result = coauthor.submit(id, params, origin_year, now_ms);
         self.finish_local(result, now_ms)
     }
 
     /// The person's own Undo while editing together.
-    pub fn undo(&mut self, now_ms: u64) -> Result<Vec<LiveEditorMsg>, GridLiveError> {
-        let result = self.editable()?.undo(now_ms);
+    pub fn undo(&mut self, now_ms: u64) -> Result<Vec<LiveEditorMsg>, Refused> {
+        let result = self.editable().map_err(Refused::alone)?.undo(now_ms);
         self.finish_local(result, now_ms)
     }
 
     /// The person's own Redo while editing together.
-    pub fn redo(&mut self, now_ms: u64) -> Result<Vec<LiveEditorMsg>, GridLiveError> {
-        let result = self.editable()?.redo(now_ms);
+    pub fn redo(&mut self, now_ms: u64) -> Result<Vec<LiveEditorMsg>, Refused> {
+        let result = self.editable().map_err(Refused::alone)?.redo(now_ms);
         self.finish_local(result, now_ms)
     }
 
@@ -444,8 +444,10 @@ impl LiveSeat {
         Ok(coauthor)
     }
 
-    /// What a local change produced, plus the notices it raised (a refusal included).
-    fn finish_local(&mut self, result: Result<Step, GridLiveError>, now_ms: u64) -> Result<Vec<LiveEditorMsg>, GridLiveError> {
+    /// What a local change produced, plus the frames and notices the flush took from the client.
+    /// A refusal carries them too: a held entry the flush sent counts as sent, so it must reach
+    /// the page whatever happened to this change.
+    fn finish_local(&mut self, result: Result<Step, GridLiveError>, now_ms: u64) -> Result<Vec<LiveEditorMsg>, Refused> {
         let mut out = Vec::new();
         let outcome = match result {
             Ok(step) => {
@@ -455,7 +457,30 @@ impl LiveSeat {
             Err(error) => Err(error),
         };
         self.flush(now_ms, &mut out);
-        outcome.map(|()| out)
+        match outcome {
+            Ok(()) => Ok(out),
+            Err(error) => Err(Refused { error, out }),
+        }
+    }
+
+    /// The person's own Undo list, the most recent first.
+    pub fn undo_labels(&self) -> Vec<String> {
+        self.coauthor.as_ref().map(|coauthor| coauthor.history().undo_labels()).unwrap_or_default()
+    }
+
+    /// Whether an Undo or Redo still waits for the server.
+    pub fn history_waiting(&self) -> bool {
+        self.coauthor.as_ref().is_some_and(|coauthor| coauthor.history().is_pending())
+    }
+
+    /// A cell's lasting identity in the shown workbook.
+    pub fn cell_identity(&self, sheet: usize, cell: gridcraft_engine::core::CellRef) -> Option<CellId> {
+        self.coauthor.as_ref()?.cell_id(sheet, cell)
+    }
+
+    /// Where a cell is now.
+    pub fn find_cell(&self, id: CellId) -> Option<(usize, gridcraft_engine::core::CellRef)> {
+        self.coauthor.as_ref()?.find_cell(id)
     }
 
     /// Handles one page message at `now_ms` (a monotonic clock) and returns what to post.
@@ -696,6 +721,20 @@ impl LiveSeat {
     }
 }
 
+/// A local change that was refused, with what the client's flush produced meanwhile (to post
+/// all the same).
+#[derive(Debug)]
+pub struct Refused {
+    pub error: GridLiveError,
+    pub out: Vec<LiveEditorMsg>,
+}
+
+impl Refused {
+    fn alone(error: GridLiveError) -> Self {
+        Self { error, out: Vec::new() }
+    }
+}
+
 /// A page colour (`#rrggbb`) as an egui colour; grey for anything else.
 fn colour(text: &str) -> egui::Color32 {
     let hex = text.strip_prefix('#').filter(|hex| hex.len() == 6 && hex.is_ascii());
@@ -714,6 +753,9 @@ pub struct PageQueue {
     items: VecDeque<LivePageMsg>,
     bytes: usize,
     has_base: bool,
+    /// An overflow reset the connection: frames, ticks, people and bases are dropped quietly
+    /// until the socket's `closed`, so one overflow gives one reset.
+    overflowed: bool,
 }
 
 /// The queue overflowed; the connection must be reset.
@@ -722,21 +764,43 @@ pub struct Overloaded;
 
 impl PageQueue {
     pub fn push(&mut self, message: LivePageMsg) -> Result<(), Overloaded> {
-        let lifecycle = matches!(message, LivePageMsg::Start { .. } | LivePageMsg::Open | LivePageMsg::Closed | LivePageMsg::Stop);
+        if is_lifecycle(&message) {
+            self.push_lifecycle(message);
+            return Ok(());
+        }
+        if self.overflowed {
+            return Ok(());
+        }
         let base = matches!(message, LivePageMsg::Base(_));
         let cost = cost(&message);
         let fits = self.items.len() < MAX_QUEUED && if base { !self.has_base } else { self.bytes.saturating_add(cost) <= MAX_QUEUED_BYTES };
-        if fits || (lifecycle && self.items.len() < MAX_QUEUED) {
+        if fits {
             self.has_base |= base;
             self.bytes = self.bytes.saturating_add(cost);
             self.items.push_back(message);
             return Ok(());
         }
         self.shed();
-        if lifecycle {
-            self.items.push_back(message);
-        }
+        self.overflowed = true;
         Err(Overloaded)
+    }
+
+    /// Lifecycle messages are kept, bounded: an `open` or `closed` right after another replaces
+    /// it (only the socket's last state matters), and past [`MAX_QUEUED`] one is dropped with a
+    /// warning. A `closed` ends an overflow.
+    fn push_lifecycle(&mut self, message: LivePageMsg) {
+        let socket = matches!(message, LivePageMsg::Open | LivePageMsg::Closed);
+        if matches!(message, LivePageMsg::Closed) {
+            self.overflowed = false;
+        }
+        if socket && matches!(self.items.back(), Some(LivePageMsg::Open | LivePageMsg::Closed)) {
+            self.items.pop_back();
+        }
+        if self.items.len() >= MAX_QUEUED {
+            log::warn!("live: too many page messages waiting; one was dropped");
+            return;
+        }
+        self.items.push_back(message);
     }
 
     pub fn pop(&mut self) -> Option<LivePageMsg> {
@@ -754,11 +818,15 @@ impl PageQueue {
     }
 
     fn shed(&mut self) {
-        self.items.retain(|message| matches!(message, LivePageMsg::Start { .. } | LivePageMsg::Open | LivePageMsg::Closed | LivePageMsg::Stop));
+        self.items.retain(is_lifecycle);
         // Lifecycle messages cost nothing against the byte bound.
         self.bytes = 0;
         self.has_base = false;
     }
+}
+
+fn is_lifecycle(message: &LivePageMsg) -> bool {
+    matches!(message, LivePageMsg::Start { .. } | LivePageMsg::Open | LivePageMsg::Closed | LivePageMsg::Stop)
 }
 
 /// What a waiting message costs against [`MAX_QUEUED_BYTES`]; a base is bounded on its own.
@@ -859,6 +927,19 @@ impl LiveCore {
         self.lent.set(false);
     }
 
+    /// Lends the shared session for one call into the app and takes it back, whatever the call:
+    /// eframe skips `ui` for a hidden tab, so no lend may outlive the call it was made for, or the
+    /// seat would stop applying frames and answering ticks. Returns what was handled before and
+    /// after the call, with the call's own result.
+    pub fn during<T>(&self, session: &mut Session, now_ms: u64, call: impl FnOnce(&mut Session) -> T) -> (Vec<LiveEditorMsg>, T) {
+        let mut out = self.drain(now_ms);
+        self.lend(session);
+        let result = call(session);
+        self.give_back(session);
+        out.extend(self.drain(now_ms));
+        (out, result)
+    }
+
     /// Whether the shared session is lent to the screen now.
     pub fn is_lent(&self) -> bool {
         self.lent.get()
@@ -950,6 +1031,9 @@ pub mod web {
     use std::sync::Arc;
 
     use gridcraft_engine::Session;
+    use gridcraft_engine::coauthor::CellId;
+    use gridcraft_engine::core::CellRef;
+    use gridcraft_ui_egui::SheetApp;
     use gridcraft_ui_egui::live::{LiveLink, OtherPlace};
     use serde_json::{Map, Value as Json};
     use wasm_bindgen::closure::Closure;
@@ -1040,24 +1124,24 @@ pub mod web {
             self.shared.core.seat()
         }
 
-        /// Lends the shared session to the screen for this frame (see [`LiveCore::lend`]) and
-        /// gives the app its live link while a session runs.
-        pub fn lend(&self, session: &mut Session) -> Option<Box<dyn LiveLink>> {
-            self.shared.core.lend(session);
-            self.shared.core.is_lent().then(|| Box::new(WebLink(self.clone())) as Box<dyn LiveLink>)
-        }
-
-        /// Takes the shared session back at the end of the frame and handles what waited.
-        pub fn give_back(&self, session: &mut Session) {
-            self.shared.core.give_back(session);
-            self.drain();
-        }
-
-        /// Handles messages queued while the app held the seat; called at the start of a frame.
-        pub fn drain(&self) {
-            for out in self.shared.core.drain(now_ms()) {
-                self.post(&out);
-            }
+        /// Runs one call into the app (`raw_input_hook`, `logic` or `ui`) with the shared session
+        /// lent to it and the app's live link set, and takes the session back after the call,
+        /// as [`LiveCore::during`] does: eframe runs a hidden tab without `ui`, and the seat
+        /// must keep the session between calls to apply frames.
+        pub fn during<T>(&self, app: &mut SheetApp, call: impl FnOnce(&mut SheetApp) -> T) -> T {
+            let now = now_ms();
+            let mut shown = std::mem::replace(&mut app.session, Session::new());
+            let (before, result) = self.shared.core.during(&mut shown, now, |session| {
+                std::mem::swap(session, &mut app.session);
+                app.live = self.shared.core.is_lent().then(|| Box::new(WebLink(self.clone())) as Box<dyn LiveLink>);
+                let result = call(app);
+                app.live = None;
+                std::mem::swap(session, &mut app.session);
+                result
+            });
+            app.session = shown;
+            self.post_all(&before);
+            result
         }
 
         /// Posts what the screen's own change produced.
@@ -1097,14 +1181,23 @@ pub mod web {
         fn local(
             &self,
             session: &mut Session,
-            call: impl FnOnce(&mut LiveSeat, u64) -> Result<Vec<LiveEditorMsg>, super::GridLiveError>,
+            call: impl FnOnce(&mut LiveSeat, u64) -> Result<Vec<LiveEditorMsg>, super::Refused>,
         ) -> Result<(), String> {
-            let out = {
+            let result = {
                 let mut seat = self.0.seat().try_borrow_mut().map_err(|_| "the live session is busy".to_string())?;
-                seat.with_session(session, |seat| call(seat, now_ms())).map_err(|error| error.to_string())?
+                seat.with_session(session, |seat| call(seat, now_ms()))
             };
-            self.0.post_all(&out);
-            Ok(())
+            match result {
+                Ok(out) => {
+                    self.0.post_all(&out);
+                    Ok(())
+                }
+                Err(refused) => {
+                    // Frames the client's flush took go out with the refusal.
+                    self.0.post_all(&refused.out);
+                    Err(refused.error.to_string())
+                }
+            }
         }
     }
 
@@ -1133,6 +1226,22 @@ pub mod web {
 
         fn others(&self) -> Vec<OtherPlace> {
             self.0.seat().try_borrow().map(|seat| seat.others()).unwrap_or_default()
+        }
+
+        fn undo_labels(&self) -> Vec<String> {
+            self.0.seat().try_borrow().map(|seat| seat.undo_labels()).unwrap_or_default()
+        }
+
+        fn history_waiting(&self) -> bool {
+            self.0.seat().try_borrow().map_or(true, |seat| seat.history_waiting())
+        }
+
+        fn cell_identity(&self, sheet: usize, cell: CellRef) -> Option<CellId> {
+            self.0.seat().try_borrow().ok()?.cell_identity(sheet, cell)
+        }
+
+        fn find_cell(&self, id: CellId) -> Option<(usize, CellRef)> {
+            self.0.seat().try_borrow().ok()?.find_cell(id)
         }
     }
 
@@ -1246,7 +1355,7 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     use gridcraft_engine::Session;
-    use gridcraft_engine::coauthor::{GRIDCRAFT_LIVE_FORMAT, Seq};
+    use gridcraft_engine::coauthor::{GRIDCRAFT_LIVE_FORMAT, MAX_ENTRIES_PER_WINDOW, Seq};
     use gridcraft_engine::core::CellRef;
     use gridcraft_engine::core::Value;
     use gridcraft_engine::model::Workbook;
@@ -1653,7 +1762,7 @@ mod tests {
         assert!(!seat.page_may_edit() && editor.page_may_edit());
         assert!(seat.undo(30).is_err() && seat.redo(31).is_err(), "nor its own Undo or Redo");
         assert!(
-            !matches!(editor.undo(30), Err(GridLiveError::Local(LocalError::ReadOnly))),
+            !matches!(editor.undo(30), Err(Refused { error: GridLiveError::Local(LocalError::ReadOnly), .. })),
             "an editing tab's Undo is not refused as read only (it waits for the change to be stored)"
         );
     }
@@ -1684,6 +1793,8 @@ mod tests {
             assert!(pushed <= MAX_QUEUED_BYTES / MAX_FRAME_BYTES, "frames are bounded by their bytes");
         }
         assert_eq!(queue.len(), 0, "an overflow sheds what a reconnect sends again");
+        assert!(queue.push(LivePageMsg::Closed).is_ok(), "the socket closes after the reset");
+        assert!(matches!(queue.pop(), Some(LivePageMsg::Closed)));
         let base = || LivePageMsg::Base(PageBase { revision: None, at: 0, bytes: vec![0; 16], session_data: None, stamp: None });
         assert!(queue.push(base()).is_ok());
         assert!(queue.push(base()).is_err(), "a second base while one waits is an overflow, not a silent drop");
@@ -1770,5 +1881,76 @@ mod tests {
         assert!(bob.others().is_empty(), "a dropped connection takes the place away at once");
         assert_eq!(colour("blue"), egui::Color32::GRAY);
         assert!(bob.take_finished().is_none());
+    }
+
+    /// eframe runs `raw_input_hook` and `logic` for a hidden tab, and never `ui`. Each call lends
+    /// the shared session only for itself, so the seat keeps applying frames and answering ticks.
+    #[test]
+    fn a_hidden_tab_keeps_applying_frames_and_answering_ticks() {
+        let entry = alices_entry(10);
+        let core = LiveCore::new(Arc::new(MemoryNotes::default()));
+        core.hear(start_msg(true), 10);
+        core.hear(LivePageMsg::Open, 11);
+        join_live(&mut core.seat().borrow_mut(), 3, 12);
+        let mut shown = Session::new();
+        for _ in 0..3 {
+            // A hidden frame: the input hook, then logic, no ui.
+            let (_, hook) = core.during(&mut shown, 20, |session| session.doc().is_ok());
+            let (_, logic) = core.during(&mut shown, 21, |session| session.doc().is_ok());
+            assert!(hook && logic, "each call sees the shared session");
+        }
+        assert!(!core.is_lent(), "nothing stays lent after a call");
+        let out = core.hear(LivePageMsg::Tick, 60_100);
+        assert!(out.iter().any(|message| matches!(message, LiveEditorMsg::State { phase: "live", .. })), "the tick is answered: {out:?}");
+        assert!(sends(&out).iter().any(|frame| frame["type"] == "heartbeat"), "and the heartbeat goes");
+        core.hear(LivePageMsg::Frame(entry), 60_200);
+        let (_, a1) = core.during(&mut shown, 60_300, |session| session.doc().unwrap().wb.sheet(0).unwrap().value(CellRef::parse("A1").unwrap()));
+        assert_eq!(a1, Value::Number(41.0), "the frame was applied while hidden");
+    }
+
+    #[test]
+    fn a_refused_undo_keeps_frames_already_taken() {
+        let (mut seat, _) = opened(Arc::default(), 10);
+        join_live(&mut seat, 3, 10);
+        let mut entries = 0;
+        for n in 0..=MAX_ENTRIES_PER_WINDOW {
+            let out = seat.submit("cell.set", json!({"sheet":0,"cell":format!("A{}", n + 1),"input":"1"}), 2026, 100).unwrap();
+            entries += sends(&out).iter().filter(|frame| frame["type"] == "entry").count();
+        }
+        assert_eq!(entries, MAX_ENTRIES_PER_WINDOW, "the last change waits for the pace window");
+        let refused = seat.undo(1_200).unwrap_err();
+        assert!(matches!(refused.error, GridLiveError::Coauthor(_)), "nothing to undo yet: the changes are not stored");
+        assert!(sends(&refused.out).iter().any(|frame| frame["type"] == "entry"), "the held change goes out with the refusal: {:?}", refused.out);
+    }
+
+    #[test]
+    fn lifecycle_messages_are_bounded_and_one_reset_per_overflow() {
+        let mut queue = PageQueue::default();
+        while queue.push(LivePageMsg::Frame("x".repeat(MAX_FRAME_BYTES))).is_ok() {}
+        for _ in 0..10_000 {
+            let _ = queue.push(LivePageMsg::Open);
+            let _ = queue.push(LivePageMsg::Closed);
+        }
+        assert!(queue.len() <= 4, "only the last of each lifecycle message is kept: {}", queue.len());
+
+        let core = LiveCore::new(Arc::new(MemoryNotes::default()));
+        let held = core.seat().borrow_mut();
+        let mut resets = 0;
+        for _ in 0..40 {
+            resets +=
+                core.hear(LivePageMsg::Frame("x".repeat(MAX_FRAME_BYTES)), 10).iter().filter(|m| matches!(m, LiveEditorMsg::Reset { .. })).count();
+        }
+        assert_eq!(resets, 1, "frames after an overflow are dropped quietly until the socket closes");
+        core.hear(LivePageMsg::Closed, 11);
+        drop(held);
+    }
+
+    #[test]
+    fn the_seat_answers_the_screens_questions() {
+        let (mut seat, _) = opened(Arc::default(), 10);
+        join_live(&mut seat, 3, 10);
+        assert!(seat.undo_labels().is_empty() && !seat.history_waiting());
+        let id = seat.cell_identity(0, CellRef::parse("B5").unwrap()).unwrap();
+        assert_eq!(seat.find_cell(id), Some((0, CellRef::parse("B5").unwrap())));
     }
 }
