@@ -322,12 +322,13 @@ fn parse_date(t: &str, sys: DateSystem, year: &mut dyn FnMut() -> i64) -> Option
         // m/d is ambiguous without a year. We accept d-mmm / mmm-d only with month names, and
         // use the caller's year for m/d and d-mmm.
         if let (Some(m), Some(d)) = (num(a), num(b)) {
+            // The year is asked for only here, when the second part is a day.
+            if (1..=12).contains(&m) && (1..=31).contains(&d) {
+                return valid_ymd(sys, year(), m, d).map(|s| (s, "d-mmm"));
+            }
             // m/yyyy
             if (1..=12).contains(&m) && b.len() == 4 {
                 return valid_ymd(sys, d, m, 1).map(|s| (s, "mmm-yy"));
-            }
-            if (1..=12).contains(&m) && (1..=31).contains(&d) {
-                return valid_ymd(sys, year(), m, d).map(|s| (s, "d-mmm"));
             }
         }
         if let (Some(d), Some(m)) = (num(a), month_from_name(b)) {
@@ -414,6 +415,25 @@ mod tests {
 
     fn p(s: &str) -> Parsed {
         parse_input(s, DateSystem::D1900)
+    }
+
+    /// A month and a zero-padded day (`1/0015`) is that day in the year without one, as it always
+    /// was; only a four-digit year that is not a day (`3/2026`) is a month and year.
+    #[test]
+    fn month_and_padded_day_is_a_date_in_the_given_year() {
+        let in_2026 = |s: &str| parse_input_in_year(s, DateSystem::D1900, 2026);
+        assert_eq!(in_2026("1/0015"), Parsed { value: Value::number(46_037.0), format: Some("d-mmm") });
+        assert_eq!(in_2026("12/0031"), Parsed { value: Value::number(46_387.0), format: Some("d-mmm") });
+        assert_eq!(in_2026("3/2026"), Parsed { value: Value::number(46_082.0), format: Some("mmm-yy") });
+        let mut asked = false;
+        assert_eq!(
+            parse_number_text_in_with_year("3/2026", DateSystem::D1900, || {
+                asked = true;
+                2026
+            }),
+            Some(46_082.0)
+        );
+        assert!(!asked, "a month and year does not need the current year");
     }
 
     /// #2163: digits too many for a finite number don't make one (∞/∞ was NaN).
