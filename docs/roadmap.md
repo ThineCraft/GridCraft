@@ -1,6 +1,6 @@
 # Roadmap detail
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-23 · **Change:** minor (test command) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-11-19 · **Change:** minor (first live GridCraft command set and in-process co-author adapter complete; user-facing co-authoring remains G4/G5 work) · **Target:** Microsoft Excel (Microsoft 365)
 
 Forward-looking plan. The one-page summary is [`ROADMAP.md`](../ROADMAP.md); the ranked work
 list is [`gaps.md`](gaps.md); numbers and method are in
@@ -80,6 +80,30 @@ to check our files, and Windows machines with the reported GPU drivers.
 | M15 | Localization infrastructure and the twelve languages | started: ribbon catalog in ja, zh, ko, pt-BR, ru (#31, #104, #82); German in PR #163 |
 | M16 | Get & Transform, data model | not started |
 
+## Co-authoring
+
+G3 completes the first fork-side engine slice. `gridcraft/1` has an allow-listed command set with
+identity targets for sheets, rows, columns, cells and formula references. The in-process adapter
+uses G2's ordered client to apply, roll back and re-run commands, preserves each person's active
+sheet and selection, compares entered content across platforms, and records guarded personal
+Undo/Redo. It is not user-facing: G4 still supplies checkpoints and retained-room state, and G5
+supplies sockets, the host bridge, presence, notices and the screen integration.
+
+Structural changes on workbooks with at least 100,000 stored cells wait for the server instead of
+being shown and re-run locally. Shared sheet insertion and deletion work, but Undo of a sheet add
+or delete is refused in a shared session; G3 deliberately does not send a whole sheet in an undo
+entry.
+
+The native Windows release-only `heavier_formula_rerun_report` measured this 100,000-cell rule:
+
+| Workload | Clone + apply p50 / p95 | With final full recalculation p50 / p95 |
+|---|---:|---:|
+| `heavier-content-only` (10 changes) | 242.0 / 299.9 ms | 315.8 / 383.7 ms |
+| `heavier-one-structural` (1 row insert) | 129.1 / 143.0 ms | 203.9 / 220.8 ms |
+
+Those heavier-formula figures were not run on wasm, macOS or Linux and are not claims about those
+platforms.
+
 ## After beta (ranked)
 
 | Work | Gap | Hours |
@@ -113,6 +137,7 @@ to check our files, and Windows machines with the reported GPU drivers.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-19 | minor | First identity-targeted live command set and in-process G2 adapter complete; checkpoints and user-facing G4/G5 integration remain |
 | 2026-10-23 | minor | Measuring: tests run through `cargo xtask test` |
 | 2026-10-11 | minor | PivotTable calculated fields landed |
 | 2026-10-10 | minor | Current focus and M15 updated for the 10-10 merges |
