@@ -18,10 +18,14 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use gridcraft_engine::core::{CellRef, Value};
-use gridcraft_engine::fingerprint::{DocId, fingerprint, workbook_fingerprint};
+use gridcraft_engine::fingerprint::{DocId, Fingerprint, fingerprint, workbook_fingerprint};
 use gridcraft_engine::model::{Cell, Formula, Sheet, Workbook};
 use gridcraft_engine::{DocState, Session, Trust};
 use serde_json::{Map, Value as Json, json};
+
+pub fn agreement_digest(fingerprint: &Fingerprint) -> [u8; 32] {
+    fingerprint.entered
+}
 
 /// The commands a sequence may contain: cell content, the formats a co-author can apply, row and
 /// column inserts and deletes, and sheet add, rename and delete. Each with explicit targets.

@@ -1,5 +1,5 @@
 use collab_core::ids::Seq;
-use collab_live::client::{Crash, EntryView, Event, LiveConfig, LiveEditor, Mode, Outcome, Stamp, Step};
+use collab_live::client::{Crash, Effect, EntryView, Event, LiveConfig, LiveEditor, Mode, Outcome, Stamp, Step};
 use collab_live::ids::{LiveId, Lookup};
 use gridcraft_core::{CellRef, Value};
 use gridcraft_engine::coauthor::{
@@ -466,4 +466,209 @@ fn rollback_rerun_keeps_pending_identity_allocations() {
     assert_eq!(rows.find(LiveId(0, 4)), Lookup::At(6));
     let value = local.editor().session().doc().expect("document exists").wb.sheet(0).expect("Struct exists").value(CellRef::new(0, 2));
     assert_eq!(value, Value::Number(40.0), "the pending formula still names the base row after both inserts");
+}
+
+fn convergence_base() -> Session {
+    let mut session = session_with_sheets(&["Data", "View"]);
+    for (cell, input) in [("A1", "Kind"), ("B1", "Amount"), ("A2", "base"), ("B2", "1"), ("A3", "tail"), ("B3", "2")] {
+        session.execute("cell.set", json!({"sheet":"Data","cell":cell,"input":input})).expect("base data is set");
+    }
+    session
+}
+
+fn convergence_client() -> GridCoauthor {
+    GridCoauthor::new(live_config(), GridLiveEditor::new(convergence_base()).expect("co-author editor builds"))
+}
+
+fn proposed(
+    server: &DeterministicServer,
+    client: &mut GridCoauthor,
+    place: &crate::live::ClientPlace,
+    id: &str,
+    params: serde_json::Value,
+    now_ms: u64,
+) -> ProposedEntry {
+    submit(client, server, place, id, params, now_ms)
+}
+
+fn order_for_both(
+    server: &mut DeterministicServer,
+    proposal: &ProposedEntry,
+    first: &mut GridCoauthor,
+    second: &mut GridCoauthor,
+    now_ms: u64,
+) -> (OrderedEntry, Step, Step) {
+    let ordered = server.order(proposal, 1_795_219_200_000 + now_ms as i64, 100 + server.head().0 as u32);
+    let (first_step, second_step) = server.deliver_both(first, second, &ordered, now_ms);
+    (ordered, first_step, second_step)
+}
+
+fn value_at(client: &GridCoauthor, cell: &str) -> Value {
+    let at = CellRef::parse(cell).expect("test cell parses");
+    client.editor().session().doc().expect("document exists").wb.sheet(0).expect("Data exists").value(at)
+}
+
+fn no_effect_reason(step: &Step, seq: Seq) -> &str {
+    step.events
+        .iter()
+        .find_map(|event| match event {
+            Event::Applied { seq: event_seq, effect: Effect::NoEffect { reason }, .. } if *event_seq == seq => Some(reason.as_str()),
+            _ => None,
+        })
+        .expect("the ordered entry reports why it had no effect")
+}
+
+fn assert_live_at(client: &mut GridCoauthor, server: &DeterministicServer, place: &crate::live::ClientPlace, head: Seq, now_ms: u64) {
+    let probe = proposed(server, client, place, "cell.set", json!({"sheet":"Data","cell":"A1","input":"Kind"}), now_ms);
+    assert_eq!(probe.seen, head, "a successful local submission proves Phase::Live and carries the agreed sequence");
+}
+
+#[test]
+fn two_clients_converge_through_simulated_server() {
+    let mut server = DeterministicServer::new();
+    let mut alice = convergence_client();
+    let mut bob = convergence_client();
+    let alice_place = server.join(&mut alice, 10);
+    let bob_place = server.join(&mut bob, 20);
+    select(alice.editor_mut().session_mut(), "View", "C3");
+    select(bob.editor_mut().session_mut(), "Data", "F6");
+
+    let alice_content = proposed(&server, &mut alice, &alice_place, "cell.set", json!({"sheet":"Data","cell":"A2","input":"alice"}), 30);
+    let bob_content = proposed(&server, &mut bob, &bob_place, "cell.set", json!({"sheet":"Data","cell":"B2","input":"=2+RAND()"}), 31);
+    order_for_both(&mut server, &bob_content, &mut alice, &mut bob, 40);
+    order_for_both(&mut server, &alice_content, &mut bob, &mut alice, 50);
+
+    let alice_bold = proposed(&server, &mut alice, &alice_place, "home.bold", json!({"sheet":"Data","range":"A2","on":true}), 60);
+    order_for_both(&mut server, &alice_bold, &mut alice, &mut bob, 70);
+    let bob_fill = proposed(&server, &mut bob, &bob_place, "home.fillColor", json!({"sheet":"Data","range":"A2","color":"#123456"}), 80);
+    order_for_both(&mut server, &bob_fill, &mut bob, &mut alice, 90);
+    let filter = proposed(&server, &mut alice, &alice_place, "data.filterSet", json!({"sheet":"Data","range":"A1:B3"}), 100);
+    order_for_both(&mut server, &filter, &mut bob, &mut alice, 110);
+    let insert = proposed(&server, &mut bob, &bob_place, "home.insertRows", json!({"sheet":"Data","rows":"2:2"}), 120);
+    order_for_both(&mut server, &insert, &mut alice, &mut bob, 130);
+    let undo_step = alice.undo(140).expect("Alice's Undo submits");
+    let undo = server.one_proposal(&alice_place, &undo_step);
+    order_for_both(&mut server, &undo, &mut bob, &mut alice, 150);
+
+    assert_eq!(alice.editor().ids(), bob.editor().ids());
+    assert_eq!(alice.editor().agreement_digest(), bob.editor().agreement_digest());
+    assert_eq!(
+        fingerprint(alice.editor().session(), DocId(0)).computed,
+        fingerprint(bob.editor().session(), DocId(0)).computed,
+        "same-platform computed fingerprints also agree"
+    );
+    assert_eq!(active_view(alice.editor()), ("View".into(), CellRef::new(2, 2)));
+    assert_eq!(active_view(bob.editor()), ("Data".into(), CellRef::new(5, 5)));
+    let head = server.head();
+    assert_live_at(&mut alice, &server, &alice_place, head, 160);
+    assert_live_at(&mut bob, &server, &bob_place, head, 161);
+}
+
+#[test]
+fn late_edit_to_deleted_target_reports_no_effect() {
+    for (target_kind, edit, deletion_id, deletion_params) in [
+        ("row", json!({"sheet":"Data","cell":"A2","input":"secret text"}), "home.deleteRows", json!({"sheet":"Data","rows":"2:2"})),
+        ("column", json!({"sheet":"Data","cell":"B1","input":"secret text"}), "home.deleteColumns", json!({"sheet":"Data","cols":"B:B"})),
+        ("sheet", json!({"sheet":"Data","cell":"A1","input":"secret text"}), "home.deleteSheet", json!({"sheet":"Data"})),
+    ] {
+        let mut server = DeterministicServer::new();
+        let mut alice = convergence_client();
+        let mut bob = convergence_client();
+        let alice_place = server.join(&mut alice, 10);
+        let bob_place = server.join(&mut bob, 20);
+
+        let late = proposed(&server, &mut alice, &alice_place, "cell.set", edit, 30);
+        let deletion = proposed(&server, &mut bob, &bob_place, deletion_id, deletion_params, 31);
+        order_for_both(&mut server, &deletion, &mut alice, &mut bob, 40);
+        let alice_after_deletion = alice.editor().agreement_digest();
+        let bob_after_deletion = bob.editor().agreement_digest();
+        let (ordered, alice_step, bob_step) = order_for_both(&mut server, &late, &mut bob, &mut alice, 50);
+
+        for step in [&alice_step, &bob_step] {
+            let reason = no_effect_reason(step, ordered.seq);
+            assert!(reason.contains("cell.set"), "the action is named: {reason}");
+            assert!(reason.to_ascii_lowercase().contains(target_kind), "the deleted target kind is named: {reason}");
+            assert!(!reason.contains("secret text"), "cell content is not exposed: {reason}");
+        }
+        assert_eq!(alice.editor().agreement_digest(), alice_after_deletion, "late edit to deleted {target_kind} changes no entered state");
+        assert_eq!(bob.editor().agreement_digest(), bob_after_deletion, "late edit to deleted {target_kind} changes no entered state");
+        assert_eq!(alice.editor().agreement_digest(), bob.editor().agreement_digest());
+    }
+}
+
+#[test]
+fn same_cell_later_log_entry_wins() {
+    let mut server = DeterministicServer::new();
+    let mut alice = convergence_client();
+    let mut bob = convergence_client();
+    let alice_place = server.join(&mut alice, 10);
+    let bob_place = server.join(&mut bob, 20);
+    let alice_edit = proposed(&server, &mut alice, &alice_place, "cell.set", json!({"sheet":"Data","cell":"A2","input":"alice"}), 30);
+    let bob_edit = proposed(&server, &mut bob, &bob_place, "cell.set", json!({"sheet":"Data","cell":"A2","input":"bob"}), 31);
+
+    order_for_both(&mut server, &alice_edit, &mut bob, &mut alice, 40);
+    order_for_both(&mut server, &bob_edit, &mut alice, &mut bob, 50);
+
+    assert_eq!(value_at(&alice, "A2"), Value::text("bob"));
+    assert_eq!(value_at(&bob, "A2"), Value::text("bob"));
+    assert_eq!(alice.editor().agreement_digest(), bob.editor().agreement_digest());
+}
+
+#[test]
+fn concurrent_inserts_before_one_row_keep_both_blocks() {
+    let mut server = DeterministicServer::new();
+    let mut alice = convergence_client();
+    let mut bob = convergence_client();
+    let alice_place = server.join(&mut alice, 10);
+    let bob_place = server.join(&mut bob, 20);
+    let alice_insert = proposed(&server, &mut alice, &alice_place, "home.insertRows", json!({"sheet":"Data","rows":"2:3"}), 30);
+    let bob_insert = proposed(&server, &mut bob, &bob_place, "home.insertRows", json!({"sheet":"Data","rows":"2:3"}), 31);
+    let alice_first = match decode_entry(&alice_insert.payload).expect("Alice's insert decodes").command {
+        SharedCommand::InsertRows { rows, .. } => rows.first,
+        other => panic!("expected row insert, got {other:?}"),
+    };
+    let bob_first = match decode_entry(&bob_insert.payload).expect("Bob's insert decodes").command {
+        SharedCommand::InsertRows { rows, .. } => rows.first,
+        other => panic!("expected row insert, got {other:?}"),
+    };
+
+    order_for_both(&mut server, &alice_insert, &mut bob, &mut alice, 40);
+    order_for_both(&mut server, &bob_insert, &mut alice, &mut bob, 50);
+
+    for client in [&alice, &bob] {
+        let ids = client.editor().ids();
+        let sheet = ids.sheet_id(0).expect("Data has an identity");
+        let rows = &ids.by_id.get(&sheet).expect("Data axes exist").rows;
+        assert_eq!(rows.find(alice_first), Lookup::At(1));
+        assert_eq!(rows.find(LiveId(alice_first.0, alice_first.1 + 1)), Lookup::At(2));
+        assert_eq!(rows.find(bob_first), Lookup::At(3));
+        assert_eq!(rows.find(LiveId(bob_first.0, bob_first.1 + 1)), Lookup::At(4));
+        assert_eq!(rows.find(LiveId(0, 1)), Lookup::At(5));
+    }
+    assert_eq!(alice.editor().agreement_digest(), bob.editor().agreement_digest());
+}
+
+#[test]
+fn undo_never_removes_the_other_participants_work() {
+    let mut server = DeterministicServer::new();
+    let mut alice = convergence_client();
+    let mut bob = convergence_client();
+    let alice_place = server.join(&mut alice, 10);
+    let bob_place = server.join(&mut bob, 20);
+    let alice_edit = proposed(&server, &mut alice, &alice_place, "cell.set", json!({"sheet":"Data","cell":"A2","input":"alice"}), 30);
+    order_for_both(&mut server, &alice_edit, &mut alice, &mut bob, 40);
+    let bob_edit = proposed(&server, &mut bob, &bob_place, "cell.set", json!({"sheet":"Data","cell":"A2","input":"bob"}), 50);
+    order_for_both(&mut server, &bob_edit, &mut bob, &mut alice, 60);
+    let undo_step = alice.undo(70).expect("Alice's Undo submits");
+    let undo = server.one_proposal(&alice_place, &undo_step);
+    let (ordered, alice_step, bob_step) = order_for_both(&mut server, &undo, &mut bob, &mut alice, 80);
+
+    for step in [&alice_step, &bob_step] {
+        let reason = no_effect_reason(step, ordered.seq);
+        assert!(reason.contains("Undo"), "the action is named: {reason}");
+        assert!(reason.to_ascii_lowercase().contains("cell"), "the guarded target kind is named: {reason}");
+        assert!(!reason.contains("alice") && !reason.contains("bob"), "cell content is not exposed: {reason}");
+    }
+    assert_eq!(value_at(&alice, "A2"), Value::text("bob"));
+    assert_eq!(value_at(&bob, "A2"), Value::text("bob"));
 }

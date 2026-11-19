@@ -209,4 +209,14 @@ impl DeterministicServer {
     pub fn deliver(&self, client: &mut GridCoauthor, entry: &OrderedEntry, now_ms: u64) -> Step {
         client.receive(&entry.frame, now_ms).expect("ordered entry is accepted")
     }
+
+    pub fn deliver_both(&self, first: &mut GridCoauthor, second: &mut GridCoauthor, entry: &OrderedEntry, now_ms: u64) -> (Step, Step) {
+        let first_step = self.deliver(first, entry, now_ms);
+        let second_step = self.deliver(second, entry, now_ms.saturating_add(1));
+        (first_step, second_step)
+    }
+
+    pub fn head(&self) -> Seq {
+        Seq(self.seq)
+    }
 }

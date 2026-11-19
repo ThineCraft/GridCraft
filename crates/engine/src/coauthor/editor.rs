@@ -9,8 +9,8 @@ use collab_live::ids::{IdError, LiveId};
 use serde_json::Value as Json;
 
 use super::{
-    CoauthorError, PreparedChange, SharedCommand, UndoAction, UndoReport, WorkbookIds, apply_guarded_patch, build_undo_action, decode_entry,
-    encode_command, mode_for, resolve_command,
+    CoauthorError, GuardedPatch, GuardedStructural, PreparedChange, SharedCommand, TargetGone, UndoAction, UndoReport, WorkbookIds,
+    apply_guarded_patch, build_undo_action, decode_entry, encode_command, mode_for, resolve_command,
 };
 use crate::fingerprint::{DocId, fingerprint};
 use crate::{Calc, EngineError, Selection, Session};
@@ -259,6 +259,38 @@ impl GridLiveEditor {
         Outcome { effect: Effect::NoEffect { reason: reason.to_string() }, read_stamp }
     }
 
+    fn target_no_effect(command: &SharedCommand, error: &TargetGone) -> Outcome {
+        let action = serde_json::to_value(command)
+            .ok()
+            .and_then(|value| value.get("id").and_then(Json::as_str).map(str::to_owned))
+            .unwrap_or_else(|| "shared change".to_string());
+        let kind = match error {
+            TargetGone::DeletedSheet(_) | TargetGone::UnknownSheet(_) => "sheet",
+            TargetGone::DeletedRow(_) | TargetGone::UnknownRow(_) => "row",
+            TargetGone::DeletedColumn(_) | TargetGone::UnknownColumn(_) => "column",
+            TargetGone::UnrepresentableReference => "formula reference",
+            TargetGone::Malformed(_) => "target",
+        };
+        let state = match error {
+            TargetGone::DeletedSheet(_) | TargetGone::DeletedRow(_) | TargetGone::DeletedColumn(_) => "was deleted",
+            _ => "is not available",
+        };
+        Self::no_effect(&format!("The `{action}` {kind} target {state}."), false)
+    }
+
+    fn guarded_target_kind(patch: &GuardedPatch) -> &'static str {
+        match patch {
+            GuardedPatch::Cells(_) => "cell content",
+            GuardedPatch::Styles(_) => "cell formatting",
+            GuardedPatch::Composite(parts) => parts.first().map_or("guarded fields", Self::guarded_target_kind),
+            GuardedPatch::Structural(structural) => match structural.as_ref() {
+                GuardedStructural::InsertRows { .. } | GuardedStructural::DeleteRows { .. } => "rows",
+                GuardedStructural::InsertColumns { .. } | GuardedStructural::DeleteColumns { .. } => "columns",
+                GuardedStructural::AddSheet { .. } | GuardedStructural::RenameSheet { .. } | GuardedStructural::WholeAction { .. } => "sheet",
+            },
+        }
+    }
+
     #[doc(hidden)]
     pub fn engine_error_outcome(error: EngineError, read_stamp: bool) -> Result<Outcome, Crash> {
         match error {
@@ -310,7 +342,9 @@ impl LiveEditor for GridLiveEditor {
                 self.restore_view(view);
             }
             let effect = if report.restored == 0 && report.left > 0 {
-                Effect::NoEffect { reason: report.reason.clone().unwrap_or_else(|| "The guarded fields changed after this action.".into()) }
+                Effect::NoEffect {
+                    reason: format!("Undo or Redo left the {} unchanged because it changed after this action.", Self::guarded_target_kind(patch)),
+                }
             } else {
                 Effect::Applied
             };
@@ -323,7 +357,7 @@ impl LiveEditor for GridLiveEditor {
         }
         let resolved = match resolve_command(&self.ids, &self.session, &decoded) {
             Ok(resolved) => resolved,
-            Err(_) => return Ok(Self::no_effect("The shared target is no longer available.", false)),
+            Err(error) => return Ok(Self::target_no_effect(&decoded.command, &error)),
         };
         let view = self.capture_view();
         let before = self.snapshot();

@@ -3,8 +3,8 @@
     {
       "name": "hand-1-arithmetic-across-sheets.json",
       "failed_steps": [],
-      "entered": "8ac2b29daf28d1ea0abd0ea20a02041a1be29f0eeb5671e5ac6d2a382a144cfc",
-      "computed": "9cd4de189a96de984e7d3634c4bed976f737ccc5d3868477889a18124200e826",
+      "agreement": "8ac2b29daf28d1ea0abd0ea20a02041a1be29f0eeb5671e5ac6d2a382a144cfc",
+      "diagnostic_computed": "9cd4de189a96de984e7d3634c4bed976f737ccc5d3868477889a18124200e826",
       "items": [
         {
           "stream": "entered",
@@ -71,8 +71,8 @@
     {
       "name": "hand-2-insert-rows-moves-references.json",
       "failed_steps": [],
-      "entered": "355eb330030c6bda65e9737268ab528145f11003d57f0aa68f31b31a89f7412c",
-      "computed": "c1a02b3c6c107f62f13b47790aeeb120f3aaa43726f12a09ab43b431e4310ae1",
+      "agreement": "355eb330030c6bda65e9737268ab528145f11003d57f0aa68f31b31a89f7412c",
+      "diagnostic_computed": "c1a02b3c6c107f62f13b47790aeeb120f3aaa43726f12a09ab43b431e4310ae1",
       "items": [
         {
           "stream": "entered",
@@ -119,8 +119,8 @@
     {
       "name": "hand-3-deleted-column-gives-ref-errors.json",
       "failed_steps": [],
-      "entered": "036cde636286c8d84c73a1bab5d12bc62bd8547fff69aa927657962536d3b15a",
-      "computed": "b8824b3c449157f539bae40c6cc9dc0afd6eea14785e14bd3164afc398817df4",
+      "agreement": "036cde636286c8d84c73a1bab5d12bc62bd8547fff69aa927657962536d3b15a",
+      "diagnostic_computed": "b8824b3c449157f539bae40c6cc9dc0afd6eea14785e14bd3164afc398817df4",
       "items": [
         {
           "stream": "entered",
@@ -157,8 +157,8 @@
     {
       "name": "hand-4-renamed-then-deleted-sheet.json",
       "failed_steps": [],
-      "entered": "663309022068a3254285abadf3941adced36663bb7c0e179ee6517cb88f5bc36",
-      "computed": "ac23f181b02dd51fdf1a612ff1f6a714b8864a4adac5a1fdeb2b3cb28432d3e6",
+      "agreement": "663309022068a3254285abadf3941adced36663bb7c0e179ee6517cb88f5bc36",
+      "diagnostic_computed": "ac23f181b02dd51fdf1a612ff1f6a714b8864a4adac5a1fdeb2b3cb28432d3e6",
       "items": [
         {
           "stream": "entered",
@@ -185,8 +185,8 @@
     {
       "name": "hand-5-formats-outlive-cleared-content.json",
       "failed_steps": [],
-      "entered": "069d21190e9a0b94da237c87d0d0c9e8e39cfee435f5c3d3ffd0950fbd5450f3",
-      "computed": "cca9825d25407651622104a86fd592016ed5650961a7a5fe706b4da82a628966",
+      "agreement": "069d21190e9a0b94da237c87d0d0c9e8e39cfee435f5c3d3ffd0950fbd5450f3",
+      "diagnostic_computed": "cca9825d25407651622104a86fd592016ed5650961a7a5fe706b4da82a628966",
       "items": [
         {
           "stream": "entered",
@@ -223,8 +223,8 @@
     {
       "name": "hand-6-text-lookup-and-logic.json",
       "failed_steps": [],
-      "entered": "e1859d42db88d6f66e347cc4c2ec8aa8af4aab9ff275d63e129b56a68dd0ee6b",
-      "computed": "4cf3c6c11e30f0934319f6cc11544e903ea42b8e01cea2d19758161284b94a4c",
+      "agreement": "e1859d42db88d6f66e347cc4c2ec8aa8af4aab9ff275d63e129b56a68dd0ee6b",
+      "diagnostic_computed": "4cf3c6c11e30f0934319f6cc11544e903ea42b8e01cea2d19758161284b94a4c",
       "items": [
         {
           "stream": "entered",
@@ -331,8 +331,8 @@
     {
       "name": "random-001.json",
       "failed_steps": [],
-      "entered": "cc92a08aba10ed5adb6d2dbafeacbd58fb0d6bab8f781005f752cb771d0b3be7",
-      "computed": "d289d79465f8d724fe9f5338fab440da9619566a77a407f94f1b674bd476026e",
+      "agreement": "cc92a08aba10ed5adb6d2dbafeacbd58fb0d6bab8f781005f752cb771d0b3be7",
+      "diagnostic_computed": "d289d79465f8d724fe9f5338fab440da9619566a77a407f94f1b674bd476026e",
       "items": [
         {
           "stream": "entered",
@@ -689,8 +689,8 @@
     {
       "name": "random-002.json",
       "failed_steps": [],
-      "entered": "24cd1ddb886b5a036ae68aa9adf8303b2993fbb1480cae66d31e5778d64e1df3",
-      "computed": "54060f342d364efa5fd8df66ea7cfb2a447cf2598f6edb03eb217a2cf1a19ab5",
+      "agreement": "24cd1ddb886b5a036ae68aa9adf8303b2993fbb1480cae66d31e5778d64e1df3",
+      "diagnostic_computed": "54060f342d364efa5fd8df66ea7cfb2a447cf2598f6edb03eb217a2cf1a19ab5",
       "items": [
         {
           "stream": "entered",
@@ -2422,8 +2422,8 @@
     {
       "name": "random-003.json",
       "failed_steps": [],
-      "entered": "f51ba3140277913531ddd54e0e17299b30b96fa6c3ed3b93f43bde9b2480f444",
-      "computed": "fce578ce917cc4895afcf9d1fbe4b61b7e81fbd17b44567ae29e7010ceca6310",
+      "agreement": "f51ba3140277913531ddd54e0e17299b30b96fa6c3ed3b93f43bde9b2480f444",
+      "diagnostic_computed": "fce578ce917cc4895afcf9d1fbe4b61b7e81fbd17b44567ae29e7010ceca6310",
       "items": [
         {
           "stream": "entered",
@@ -3755,8 +3755,8 @@
     {
       "name": "random-004.json",
       "failed_steps": [],
-      "entered": "040f47d6bd007195a457f6c6f714ad6b32cf23f3568727396b8f7215489dcb26",
-      "computed": "06cb98d6545776d011c8cb974c9dac3421e04931563e0aaa13497d567941e9a4",
+      "agreement": "040f47d6bd007195a457f6c6f714ad6b32cf23f3568727396b8f7215489dcb26",
+      "diagnostic_computed": "06cb98d6545776d011c8cb974c9dac3421e04931563e0aaa13497d567941e9a4",
       "items": [
         {
           "stream": "entered",
@@ -6793,8 +6793,8 @@
     {
       "name": "random-005.json",
       "failed_steps": [],
-      "entered": "d732bc2900c83f3e422099d9533f08f52992eed4406457ff1b8aeb8d0d2341fb",
-      "computed": "9699a3205cdad4d000b89669ae2593842922c08d5fa63342f96e6187437658a1",
+      "agreement": "d732bc2900c83f3e422099d9533f08f52992eed4406457ff1b8aeb8d0d2341fb",
+      "diagnostic_computed": "9699a3205cdad4d000b89669ae2593842922c08d5fa63342f96e6187437658a1",
       "items": [
         {
           "stream": "entered",
@@ -8116,8 +8116,8 @@
     {
       "name": "random-006.json",
       "failed_steps": [],
-      "entered": "e1d8565715fe901e892fe57622014c42f883c1bb40868d9cd1e2f538951b18b0",
-      "computed": "3ac9b2ed33f091e1a3633eef45e42ca0a5dcf2723c67976d874e18c612c1a894",
+      "agreement": "e1d8565715fe901e892fe57622014c42f883c1bb40868d9cd1e2f538951b18b0",
+      "diagnostic_computed": "3ac9b2ed33f091e1a3633eef45e42ca0a5dcf2723c67976d874e18c612c1a894",
       "items": [
         {
           "stream": "entered",
@@ -9024,8 +9024,8 @@
     {
       "name": "random-007.json",
       "failed_steps": [],
-      "entered": "3a7174260313077de7c6f093374aa43870a3cc2579349839189779dc31c17d07",
-      "computed": "c801e131c4f3d5e31124c9282f306b5040bf13d6c9c1a5fa2fb2f2d437aae2d1",
+      "agreement": "3a7174260313077de7c6f093374aa43870a3cc2579349839189779dc31c17d07",
+      "diagnostic_computed": "c801e131c4f3d5e31124c9282f306b5040bf13d6c9c1a5fa2fb2f2d437aae2d1",
       "items": [
         {
           "stream": "entered",
@@ -9612,8 +9612,8 @@
     {
       "name": "random-008.json",
       "failed_steps": [],
-      "entered": "2b7ebc94a14651da7de82744d45d56a240d11490f139e50e2d733a9cb50e54b9",
-      "computed": "58602f1a6903a5cef329aad1c4501d43e81c5a7329581ffc486d82ddcc41f7ef",
+      "agreement": "2b7ebc94a14651da7de82744d45d56a240d11490f139e50e2d733a9cb50e54b9",
+      "diagnostic_computed": "58602f1a6903a5cef329aad1c4501d43e81c5a7329581ffc486d82ddcc41f7ef",
       "items": [
         {
           "stream": "entered",
@@ -10705,8 +10705,8 @@
     {
       "name": "random-009.json",
       "failed_steps": [],
-      "entered": "52927d020dab1e6c0ad53c8c2d75f258a8e26d84fad80b82fc333adffa82e024",
-      "computed": "168c6ede4e9b052b9f38e012af4e86c8bb8c9b2fd259c646ff4d231cb24384dd",
+      "agreement": "52927d020dab1e6c0ad53c8c2d75f258a8e26d84fad80b82fc333adffa82e024",
+      "diagnostic_computed": "168c6ede4e9b052b9f38e012af4e86c8bb8c9b2fd259c646ff4d231cb24384dd",
       "items": [
         {
           "stream": "entered",
@@ -11298,8 +11298,8 @@
     {
       "name": "random-010.json",
       "failed_steps": [],
-      "entered": "33888df272e21b34d3f6baaad7c8ceb2c0ebd83c26bd7162ddf85854925a7ce3",
-      "computed": "416a46bb85b5e31659f17ce7f88ab39424472fcf172c7196e392cf015356598b",
+      "agreement": "33888df272e21b34d3f6baaad7c8ceb2c0ebd83c26bd7162ddf85854925a7ce3",
+      "diagnostic_computed": "416a46bb85b5e31659f17ce7f88ab39424472fcf172c7196e392cf015356598b",
       "items": [
         {
           "stream": "entered",
@@ -12331,8 +12331,8 @@
     {
       "name": "random-011.json",
       "failed_steps": [],
-      "entered": "bccc9cb1644735199d4b114e9f29d7fc78dcf6469fe93a947cdad35a05749cc8",
-      "computed": "0b878ee6987f1e3db63ac2040b6bd1c595f031cb9031371b4d643110e93ab208",
+      "agreement": "bccc9cb1644735199d4b114e9f29d7fc78dcf6469fe93a947cdad35a05749cc8",
+      "diagnostic_computed": "0b878ee6987f1e3db63ac2040b6bd1c595f031cb9031371b4d643110e93ab208",
       "items": [
         {
           "stream": "entered",
@@ -13504,8 +13504,8 @@
     {
       "name": "random-012.json",
       "failed_steps": [],
-      "entered": "5b50a8ec32ad3cb568b5ebca9ba6618cb6a3ff590cc9be7a68c6289da4534ddc",
-      "computed": "511da2edf5fb8595b276b4a4e7b68d723189ce3bddfd67318991a770e8020c39",
+      "agreement": "5b50a8ec32ad3cb568b5ebca9ba6618cb6a3ff590cc9be7a68c6289da4534ddc",
+      "diagnostic_computed": "511da2edf5fb8595b276b4a4e7b68d723189ce3bddfd67318991a770e8020c39",
       "items": [
         {
           "stream": "entered",
@@ -14087,8 +14087,8 @@
     {
       "name": "random-013.json",
       "failed_steps": [],
-      "entered": "3a4ffcb354510b09add8bba0d47a855729f417ad064818c2496ab8e10ce18b80",
-      "computed": "8bf3ab0aa4405cd5ce8662a27b9dd88a42a2dd296648a28d8079fa0116990aae",
+      "agreement": "3a4ffcb354510b09add8bba0d47a855729f417ad064818c2496ab8e10ce18b80",
+      "diagnostic_computed": "8bf3ab0aa4405cd5ce8662a27b9dd88a42a2dd296648a28d8079fa0116990aae",
       "items": [
         {
           "stream": "entered",
@@ -14915,8 +14915,8 @@
     {
       "name": "random-014.json",
       "failed_steps": [],
-      "entered": "181b34e04c9217da2c40ea569e7066ba116cff031c0ed81452d5d3c67530ffb1",
-      "computed": "271a190bca4e229963be2aa0933f28a349c2438eaf6d13916541133c45a72d1b",
+      "agreement": "181b34e04c9217da2c40ea569e7066ba116cff031c0ed81452d5d3c67530ffb1",
+      "diagnostic_computed": "271a190bca4e229963be2aa0933f28a349c2438eaf6d13916541133c45a72d1b",
       "items": [
         {
           "stream": "entered",
@@ -15928,8 +15928,8 @@
     {
       "name": "random-015.json",
       "failed_steps": [],
-      "entered": "fc5570885e2aa009de9f5d95363016791dcfdb885b1cabc79f806abff365f4f3",
-      "computed": "ba2d4f0f8f6ef5440fe39b6e92aac21ebbf7d2d7e8aae70d2f348ce9e30fcafa",
+      "agreement": "fc5570885e2aa009de9f5d95363016791dcfdb885b1cabc79f806abff365f4f3",
+      "diagnostic_computed": "ba2d4f0f8f6ef5440fe39b6e92aac21ebbf7d2d7e8aae70d2f348ce9e30fcafa",
       "items": [
         {
           "stream": "entered",
@@ -18116,8 +18116,8 @@
     {
       "name": "random-016.json",
       "failed_steps": [],
-      "entered": "1ccd6bb5776edb358b7155f3c41053fd1b94d6f6df732298a3b72cefb793dcba",
-      "computed": "c7bc7318920b3a13ee1ed0aee4f1bc56b009ae83190023426a1a264d3561fb79",
+      "agreement": "1ccd6bb5776edb358b7155f3c41053fd1b94d6f6df732298a3b72cefb793dcba",
+      "diagnostic_computed": "c7bc7318920b3a13ee1ed0aee4f1bc56b009ae83190023426a1a264d3561fb79",
       "items": [
         {
           "stream": "entered",
@@ -18814,8 +18814,8 @@
     {
       "name": "random-017.json",
       "failed_steps": [],
-      "entered": "17d8be1f0140daba55c004a247f07324950ab8975033c5900d62940fd695106c",
-      "computed": "46835f5e068b9b6150b9aa7868396338a9b47d48524057461c2ccda438e65369",
+      "agreement": "17d8be1f0140daba55c004a247f07324950ab8975033c5900d62940fd695106c",
+      "diagnostic_computed": "46835f5e068b9b6150b9aa7868396338a9b47d48524057461c2ccda438e65369",
       "items": [
         {
           "stream": "entered",
@@ -20667,8 +20667,8 @@
     {
       "name": "random-018.json",
       "failed_steps": [],
-      "entered": "f9ef71341a9bc29286e9dd70a1a69de7d25e426a13f97722d8e3f6b5035cc92a",
-      "computed": "eeb19066cc8449852e1ec5dfde187173a504684de56015bbea42c14678ea9b69",
+      "agreement": "f9ef71341a9bc29286e9dd70a1a69de7d25e426a13f97722d8e3f6b5035cc92a",
+      "diagnostic_computed": "eeb19066cc8449852e1ec5dfde187173a504684de56015bbea42c14678ea9b69",
       "items": [
         {
           "stream": "entered",
@@ -22750,8 +22750,8 @@
     {
       "name": "random-019.json",
       "failed_steps": [],
-      "entered": "a9445351887be55a74828852ec75bf994d1c0429a976763f4f2765f189b8a91c",
-      "computed": "c68b24dfbd24bb8336e5f0cdd6112851c2d1226ad07c48766f36dc842641bd4b",
+      "agreement": "a9445351887be55a74828852ec75bf994d1c0429a976763f4f2765f189b8a91c",
+      "diagnostic_computed": "c68b24dfbd24bb8336e5f0cdd6112851c2d1226ad07c48766f36dc842641bd4b",
       "items": [
         {
           "stream": "entered",
@@ -25548,8 +25548,8 @@
     {
       "name": "random-020.json",
       "failed_steps": [],
-      "entered": "f0c5bd40d00fe2ca0937eb2d08591d21dd01dc3d3b24fb84b76d6ada57b9aef7",
-      "computed": "70cdf0a54b87333cf81091c8c4f2b79c353637b797ee5dcfca271b6ff3412ba8",
+      "agreement": "f0c5bd40d00fe2ca0937eb2d08591d21dd01dc3d3b24fb84b76d6ada57b9aef7",
+      "diagnostic_computed": "70cdf0a54b87333cf81091c8c4f2b79c353637b797ee5dcfca271b6ff3412ba8",
       "items": [
         {
           "stream": "entered",
