@@ -301,6 +301,7 @@ impl<'h> Evaluator<'h> {
             return self.aggregate(kind, args);
         }
         let mut evaluated = Vec::with_capacity(args.len());
+        let year = self.host.coercion_year();
         // SUMIF/AVERAGEIF: the size of the criteria range (argument 1), which the sum range takes.
         let mut criteria_shape = None;
         // Database functions: the criteria range (argument 2), whose formulas are computed criteria.
@@ -352,7 +353,7 @@ impl<'h> Evaluator<'h> {
                 }
                 ev => self.deref(ev),
             };
-            evaluated.push(Arg { value, from_ref, coercion_year: None });
+            evaluated.push(Arg { value, from_ref, coercion_year: Some(year.clone()) });
         }
         let mut ctx = FnCtx { ev: self, criteria, lambda };
         gridcraft_functions::call(spec, &evaluated, &mut ctx).pipe(Ev::V)
@@ -415,7 +416,7 @@ impl<'h> Evaluator<'h> {
         let (Some(sum), Some(count)) = (gridcraft_functions::lookup("SUM"), gridcraft_functions::lookup("COUNT")) else {
             return Err(err(CellError::Name));
         };
-        let args = [Arg { value, from_ref, coercion_year: None }];
+        let args = [Arg { value, from_ref, coercion_year: Some(self.host.coercion_year()) }];
         if kind != Agg::Count {
             match gridcraft_functions::call(sum, &args, &mut FnCtx { ev: self, criteria: None, lambda: None }) {
                 Value::Number(n) => acc.sum += n,

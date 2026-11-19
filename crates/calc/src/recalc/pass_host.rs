@@ -35,6 +35,9 @@ pub(super) struct PassHost<'a> {
     rng: &'a mut u64,
     now: f64,
     pub(super) stamp_read: Rc<Cell<bool>>,
+    /// The year for date text without one, from `now`: one source per pass, worked out only if
+    /// a coercion needs it.
+    year: gridcraft_functions::CoercionYear,
     cycle: bool,
     pub(super) cycles: Vec<Key>,
     depth: usize,
@@ -92,6 +95,8 @@ pub(super) struct PassHost<'a> {
 
 impl<'a> PassHost<'a> {
     pub(super) fn new(wb: &'a Workbook, exprs: &'a HashMap<Key, std::sync::Arc<Expr>>, rng: &'a mut u64, now: f64) -> Self {
+        let stamp_read = Rc::new(Cell::new(false));
+        let year = gridcraft_functions::CoercionYear::from_clock(now, Rc::clone(&stamp_read));
         PassHost {
             wb,
             exprs,
@@ -103,7 +108,8 @@ impl<'a> PassHost<'a> {
             used: HashMap::default(),
             rng,
             now,
-            stamp_read: Rc::new(Cell::new(false)),
+            stamp_read,
+            year,
             cycle: false,
             cycles: vec![],
             depth: 0,
@@ -768,8 +774,7 @@ impl Host for PassHost<'_> {
         self.now
     }
     fn coercion_year(&self) -> gridcraft_functions::CoercionYear {
-        let year = gridcraft_core::date::datetime_from_serial(gridcraft_core::DateSystem::D1900, self.now).map_or(2026, |date| i64::from(date.year));
-        gridcraft_functions::CoercionYear::tracked(year, Rc::clone(&self.stamp_read))
+        self.year.clone()
     }
     fn random(&mut self) -> f64 {
         self.stamp_read.set(true);

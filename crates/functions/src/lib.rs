@@ -93,30 +93,46 @@ pub struct Arg {
 }
 
 /// The calendar year used only when numeric coercion reaches date text that omits one.
+///
+/// A clone shares one source, so an evaluator makes one per pass and hands out clones (a
+/// reference-count increment). A clock-backed year is worked out from the clock the first time
+/// [`CoercionYear::get`] asks for it, at most once per source; evaluation that never meets a
+/// year-less date never converts the clock.
 #[derive(Clone)]
-pub struct CoercionYear {
-    year: i64,
+pub struct CoercionYear(Rc<YearSource>);
+
+struct YearSource {
+    /// The clock (a date-time serial in the 1900 system) the year comes from, when not given.
+    clock: f64,
+    year: Cell<Option<i64>>,
     read: Rc<Cell<bool>>,
 }
 
 impl CoercionYear {
     pub fn new(year: i64) -> Self {
-        Self { year, read: Rc::new(Cell::new(false)) }
+        Self(Rc::new(YearSource { clock: 0.0, year: Cell::new(Some(year)), read: Rc::new(Cell::new(false)) }))
     }
 
-    pub fn tracked(year: i64, read: Rc<Cell<bool>>) -> Self {
-        Self { year, read }
+    /// The year of `clock` (a date-time serial), recording each use in `read`.
+    pub fn from_clock(clock: f64, read: Rc<Cell<bool>>) -> Self {
+        Self(Rc::new(YearSource { clock, year: Cell::new(None), read }))
     }
 
     pub fn get(&self) -> i64 {
-        self.read.set(true);
-        self.year
+        let source = &*self.0;
+        source.read.set(true);
+        if let Some(year) = source.year.get() {
+            return year;
+        }
+        let year = gridcraft_core::date::datetime_from_serial(DateSystem::D1900, source.clock).map_or(2026, |date| i64::from(date.year));
+        source.year.set(Some(year));
+        year
     }
 }
 
 impl std::fmt::Debug for CoercionYear {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.debug_struct("CoercionYear").field("year", &self.year).finish_non_exhaustive()
+        formatter.debug_struct("CoercionYear").field("year", &self.0.year.get()).finish_non_exhaustive()
     }
 }
 
@@ -295,10 +311,17 @@ pub fn call(spec: &FnSpec, args: &[Arg], ctx: &mut dyn Ctx) -> Value {
     if !spec.accepts(args.len()) {
         return Value::Error(CellError::Value);
     }
+    // The evaluator gives every argument its pass's year as it builds them; only a caller that
+    // left one out pays for a stamped copy.
+    if args.iter().all(|arg| arg.coercion_year.is_some()) {
+        return lift::call_lifted(spec, args, ctx);
+    }
     let year = ctx.coercion_year();
     let mut stamped = args.to_vec();
     for arg in &mut stamped {
-        arg.coercion_year = Some(year.clone());
+        if arg.coercion_year.is_none() {
+            arg.coercion_year = Some(year.clone());
+        }
     }
     lift::call_lifted(spec, &stamped, ctx)
 }
@@ -353,6 +376,53 @@ mod tests {
 
         assert_eq!(call(&spec, &[Arg::reference(array)], &mut ctx), Value::Number(1.0));
         assert_eq!(ctx.0.get(), 0, "an ignored array must not be walked or read the clock");
+    }
+
+    /// Counts the year tokens a call asks its host for.
+    struct YearRequests(std::cell::Cell<usize>);
+
+    impl Ctx for YearRequests {
+        fn date_system(&self) -> DateSystem {
+            DateSystem::D1900
+        }
+
+        fn now_serial(&self) -> f64 {
+            46_302.5
+        }
+
+        fn random(&mut self) -> f64 {
+            0.5
+        }
+
+        fn coercion_year(&self) -> CoercionYear {
+            self.0.set(self.0.get().saturating_add(1));
+            CoercionYear::new(2026)
+        }
+    }
+
+    #[test]
+    fn call_passes_arguments_that_carry_a_year_through_without_a_copy() {
+        let abs = lookup("ABS").expect("ABS is registered");
+        let mut ctx = YearRequests(std::cell::Cell::new(0));
+        let year = CoercionYear::new(2026);
+        let stamped = [Arg { value: Value::Number(-2.0), from_ref: false, coercion_year: Some(year) }];
+        assert_eq!(call(abs, &stamped, &mut ctx), Value::Number(2.0));
+        assert_eq!(ctx.0.get(), 0, "arguments the evaluator stamped are used as they are");
+
+        assert_eq!(call(abs, &[Arg::val(Value::text("-3"))], &mut ctx), Value::Number(3.0));
+        assert_eq!(ctx.0.get(), 1, "an argument without a year is stamped from the host");
+    }
+
+    #[test]
+    fn a_clock_year_is_worked_out_once_on_first_use_and_shared_by_clones() {
+        let read = Rc::new(Cell::new(false));
+        let year = CoercionYear::from_clock(46_302.5, Rc::clone(&read));
+        let clone = year.clone();
+        assert!(!read.get(), "making and cloning the token reads nothing");
+        assert_eq!(year.0.year.get(), None, "the year is not worked out before it is needed");
+        assert_eq!(clone.get(), 2026);
+        assert!(read.get(), "using the year records a clock read");
+        assert_eq!(year.0.year.get(), Some(2026), "every clone sees the year worked out once");
     }
 
     #[test]
