@@ -13,6 +13,7 @@ use super::{
     allocates_only_own_identities, apply_guarded_patch, build_undo_action, decode_entry, encode_command, mode_for, resolve_command,
     unrecorded_action,
 };
+use crate::calc::recalc::CalcStampState;
 use crate::fingerprint::{DocId, fingerprint};
 use crate::{Calc, EngineError, Selection, Session};
 
@@ -181,6 +182,29 @@ impl GridLiveEditor {
         self.undo_reports.clear();
     }
 
+    /// Starts tracking clock and random reads and, for an ordered entry, puts its stamp in
+    /// place. Returns the clock state to put back if the entry turns out not to read it.
+    fn begin_stamp(&mut self, stamp: Option<Stamp>) -> Option<CalcStampState> {
+        if let Ok(document) = self.session.doc_mut() {
+            document.calc.clear_stamp_read();
+        }
+        let prior = stamp.and_then(|_| self.session.doc().ok().map(|document| document.calc.stamp_state()));
+        if let Some(stamp) = stamp {
+            self.apply_stamp(stamp);
+        }
+        prior
+    }
+
+    /// An unread stamp leaves the clock and random state as they were.
+    fn finish_stamp(&mut self, prior: Option<CalcStampState>, stamp_was_read: bool) {
+        if !stamp_was_read
+            && let Some(prior) = prior
+            && let Ok(document) = self.session.doc_mut()
+        {
+            document.calc.restore_stamp_state(prior);
+        }
+    }
+
     fn apply_stamp(&mut self, stamp: Stamp) {
         if let Ok(document) = self.session.doc_mut() {
             document.calc.fixed_now = Some(gridcraft_core::date::serial_from_unix_ms(stamp.at_ms as f64));
@@ -337,13 +361,20 @@ impl LiveEditor for GridLiveEditor {
         if let SharedCommand::Guarded { patch } = &decoded.command {
             let view = self.capture_view();
             let before = self.snapshot();
-            let report = match execute_guarded_apply(&mut self.session, &mut self.ids, patch, entry.participant.0) {
+            // A guarded patch can bring back `=NOW()` or `=RAND()`: it calculates under the
+            // entry's stamp exactly as an ordinary command does.
+            let prior_stamp = self.begin_stamp(entry.stamp);
+            let result = execute_guarded_apply(&mut self.session, &mut self.ids, patch, entry.participant.0);
+            let stamp_was_read = self.session.doc().is_ok_and(|document| document.calc.stamp_was_read());
+            let read_stamp = entry.stamp.is_none() && stamp_was_read;
+            let report = match result {
                 Ok(report) => report,
                 Err(error) => {
                     self.restore_shared(&before, view.as_ref(), true);
-                    return Self::engine_error_outcome(error, false);
+                    return Self::engine_error_outcome(error, read_stamp);
                 }
             };
+            self.finish_stamp(prior_stamp, stamp_was_read);
             if entry.own {
                 self.undo_reports.insert(decoded.action, report.clone());
             }
@@ -361,7 +392,7 @@ impl LiveEditor for GridLiveEditor {
             } else {
                 Effect::Applied
             };
-            return Ok(Outcome { effect, read_stamp: false });
+            return Ok(Outcome { effect, read_stamp });
         }
         if entry.own {
             // Replays replace the first optimistic inverse. `None` is meaningful: the same
@@ -374,13 +405,7 @@ impl LiveEditor for GridLiveEditor {
         };
         let view = self.capture_view();
         let before = self.snapshot();
-        if let Ok(document) = self.session.doc_mut() {
-            document.calc.clear_stamp_read();
-        }
-        let prior_stamp = entry.stamp.and_then(|_| self.session.doc().ok().map(|document| document.calc.stamp_state()));
-        if let Some(stamp) = entry.stamp {
-            self.apply_stamp(stamp);
-        }
+        let prior_stamp = self.begin_stamp(entry.stamp);
         #[cfg(test)]
         let command_id = self.test_command_override.unwrap_or(resolved.id.as_str());
         #[cfg(not(test))]
@@ -397,12 +422,7 @@ impl LiveEditor for GridLiveEditor {
             self.restore_shared(&before, view.as_ref(), true);
             return Ok(Self::no_effect("The shared identities could not be updated.", entry.stamp.is_none() && stamp_was_read));
         }
-        if !stamp_was_read
-            && let Some(prior_stamp) = prior_stamp
-            && let Ok(document) = self.session.doc_mut()
-        {
-            document.calc.restore_stamp_state(prior_stamp);
-        }
+        self.finish_stamp(prior_stamp, stamp_was_read);
         let read_stamp = entry.stamp.is_none() && stamp_was_read;
         // G2 presents both the first optimistic application and later pending replays as
         // `own` entries without a sequence number. Action numbers increase for this person, so

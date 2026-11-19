@@ -1,9 +1,10 @@
 use collab_core::ids::Seq;
-use collab_live::client::{Effect, Event, LiveConfig};
+use collab_live::client::{Effect, EntryView, Event, LiveConfig, LiveEditor, Stamp};
 use gridcraft_core::{CellRef, MAX_ROWS, Value};
 use gridcraft_engine::coauthor::{
     GRIDCRAFT_LIVE_FORMAT, GridCoauthor, GridLiveEditor, GuardedPatch, PERSONAL_HISTORY_BYTES, PersonalHistory, UndoAction, decode_entry,
 };
+use gridcraft_engine::fingerprint::{DocId, fingerprint};
 use gridcraft_model::{Sheet, SheetProtection, Style};
 use protocol::live::MAX_PAYLOAD_BYTES;
 use serde_json::json;
@@ -1555,4 +1556,73 @@ fn redo_reuses_the_same_guards_in_reverse() {
     assert!(alice.editor().session().doc().expect("document exists").wb.sheet_index("Budget").is_none());
     let report = alice.last_undo_report().expect("redo guard refusal is reported");
     assert_eq!((report.restored, report.left), (0, 1));
+}
+
+fn clock_session(machine_clock: f64) -> gridcraft_engine::Session {
+    let mut session = session_with_sheets(&["Sheet1"]);
+    session.execute("cell.set", json!({"sheet":"Sheet1","cell":"A1","input":"=NOW()"})).expect("volatile formula is set");
+    // Each client's own clock, before any entry has read a server stamp.
+    session.doc_mut().expect("document exists").calc.fixed_now = Some(machine_clock);
+    session
+}
+
+fn clock_client(machine_clock: f64) -> GridCoauthor {
+    GridCoauthor::new(live_config(), GridLiveEditor::new(clock_session(machine_clock)).expect("editor builds"))
+}
+
+fn computed(client: &GridCoauthor) -> [u8; 32] {
+    fingerprint(client.editor().session(), DocId(0)).computed
+}
+
+#[test]
+fn guarded_undo_and_redo_calculate_under_the_entry_stamp() {
+    let mut server = DeterministicServer::new();
+    let mut alice = clock_client(40_000.0);
+    let mut bob = clock_client(50_000.0);
+    let alice_place = server.join(&mut alice, 10);
+    server.join(&mut bob, 20);
+
+    // Replacing the only volatile formula reads no stamp, so each client keeps its own clock.
+    let edit = propose(&server, &mut alice, &alice_place, "cell.set", json!({"sheet":"Sheet1","cell":"A1","input":"plain"}), 30);
+    order_and_deliver(&mut server, &edit, &mut alice, &mut bob, 40);
+    assert_eq!(computed(&alice), computed(&bob), "no volatile cell is left");
+
+    // Undo brings `=NOW()` back: it must calculate under the ordered entry's stamp.
+    let undo = alice.undo(50).expect("undo submits");
+    let proposal = server.one_proposal(&alice_place, &undo);
+    let ordered = order_and_deliver(&mut server, &proposal, &mut alice, &mut bob, 60);
+    let stamped = gridcraft_core::date::serial_from_unix_ms(ordered.at_ms as f64);
+    assert_eq!(value(&alice), Value::Number(stamped), "the restored formula reads the stamp on the sender");
+    assert_eq!(value(&bob), Value::Number(stamped), "the restored formula reads the stamp on the peer");
+    assert_eq!(computed(&alice), computed(&bob));
+
+    let redo = alice.redo(70).expect("redo submits");
+    let proposal = server.one_proposal(&alice_place, &redo);
+    order_and_deliver(&mut server, &proposal, &mut alice, &mut bob, 80);
+    assert_eq!(value(&alice), Value::text("plain"));
+    assert_eq!(computed(&alice), computed(&bob));
+}
+
+#[test]
+fn pending_guarded_undo_reports_that_it_read_the_stamp() {
+    let mut server = DeterministicServer::new();
+    let mut alice = clock_client(40_000.0);
+    let alice_place = server.join(&mut alice, 10);
+    let edit = propose(&server, &mut alice, &alice_place, "cell.set", json!({"sheet":"Sheet1","cell":"A1","input":"plain"}), 30);
+    let edit_entry = server.order(&edit, 1_795_219_200_000, 41);
+    server.deliver(&mut alice, &edit_entry, 40);
+    let undo = alice.undo(50).expect("undo submits");
+    let undo = server.one_proposal(&alice_place, &undo);
+
+    let mut editor = GridLiveEditor::new(clock_session(40_000.0)).expect("editor builds");
+    let stamp = Some(Stamp { at_ms: edit_entry.at_ms, seed: edit_entry.seed });
+    let edit_outcome = editor
+        .apply(&EntryView { seq: Some(edit_entry.seq), participant: edit_entry.participant, own: true, stamp, payload: &edit_entry.payload })
+        .expect("edit applies");
+    assert!(!edit_outcome.read_stamp);
+    let pending = editor
+        .apply(&EntryView { seq: None, participant: alice_place.participant, own: true, stamp: None, payload: &undo.payload })
+        .expect("pending undo applies");
+    assert_eq!(pending.effect, Effect::Applied);
+    assert!(pending.read_stamp, "a pending Undo that recalculates `=NOW()` must be re-run under its stamp");
 }

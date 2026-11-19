@@ -424,6 +424,16 @@ fn rollback_rerun_matches_straight_through() {
         ordered.push(next);
         assert_matches_straight_through(&local, &step, &ordered, &pending);
     }
+
+    // Guarded entries: Undo takes the volatile formula away, Redo brings it back.
+    for (offset, undo) in [true, false].into_iter().enumerate() {
+        let step = if undo { local.undo(400 + offset as u64) } else { local.redo(400 + offset as u64) }.expect("history move submits");
+        let proposed = server.one_proposal(&local_place, &step);
+        let entry = server.order(&proposed, 1_795_219_300_000 + offset as i64 * 1_000, 90 + offset as u32);
+        let step = server.deliver(&mut local, &entry, 410 + offset as u64);
+        ordered.push(entry);
+        assert_matches_straight_through(&local, &step, &ordered, &[]);
+    }
 }
 
 #[test]
