@@ -1,6 +1,6 @@
 # Gaps
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-11-19 · **Change:** minor (§16: first live command set and in-process co-author adapter complete; no user-facing co-authoring yet; earlier: §17: equations; earlier: §13: Solver Sensitivity report; earlier: §4: chart resizing is no longer a gap) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-11-19 · **Change:** minor (§16: G3 review carries for G4 and G5; earlier: §16: first live command set and in-process co-author adapter complete; no user-facing co-authoring yet; earlier: §17: equations; earlier: §13: Solver Sensitivity report; earlier: §4: chart resizing is no longer a gap) · **Target:** Microsoft Excel (Microsoft 365)
 
 Every known shortfall against Excel, one entry each, ranked by user impact (what blocks someone
 using GridCraft for real work first). This is the work list: pick from the top, check the open
@@ -162,7 +162,16 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
   desktop platform, so these figures are not cross-platform claims.
 - **Still missing:** G4 checkpoints and retained-room state; G5 sockets, the host bridge,
   presence, notices and the screen integration. There is no user-facing co-authoring until G4
-  and G5 land. Show Changes is also missing; cloud storage is requested (#86). Comment navigation
+  and G5 land. Known before a real room (G3 final review):
+  - **G4:** who deleted each row and column identity (`deleted_by`) is not saved with the
+    identity table, so a client that loads a checkpoint refuses an Undo that the others apply.
+    The checkpoint must carry or rebuild it, with a two-client test where one client starts
+    from a checkpoint.
+  - **G5 (P, S):** live identity tables are scanned in full per target, and every applied entry
+    clones the whole table, so a co-author who fragments an axis (one delete naming tens of
+    thousands of alternate rows) makes every later entry slow on every client. Index the
+    ordered identities in collab-live, share per-sheet tables, and cap distinct blocks per
+    structural entry, with a timing test on a fragmented axis. Show Changes is also missing; cloud storage is requested (#86). Comment navigation
   and notes ↔ comments conversion have landed. **Estimate:** 35–55 h.
 
 ### 17. Insert objects (F)
@@ -206,6 +215,7 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-19 | minor | §16: G3 final-review carries: deletion ownership in checkpoints (G4), identity-table cost under fragmentation (G5) |
 | 2026-11-19 | minor | §16: first identity-targeted live command set and in-process G2 adapter complete; checkpoints and user-facing G4/G5 integration remain |
 | 2026-11-02 | minor | §17: equations (Insert › Equation, LaTeX source, gallery, editor) |
 | 2026-11-02 | minor | §13: Solver Sensitivity report: shadow prices, reduced costs and allowable ranges for Simplex LP; Lagrange multipliers and reduced gradients for GRG Nonlinear |
