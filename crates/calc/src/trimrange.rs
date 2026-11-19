@@ -63,10 +63,14 @@ impl Evaluator<'_> {
     fn trim_mode(&mut self, args: &[Expr], i: usize) -> Result<(bool, bool), CellError> {
         match args.get(i) {
             None | Some(Expr::Missing) => Ok((true, true)),
-            Some(e) => match self.value(e).scalar() {
-                Value::Error(e) => Err(e),
-                v => mode(v.to_number()?),
-            },
+            Some(e) => {
+                let value = self.value(e).scalar();
+                let year = self.host.coercion_year();
+                match value {
+                    Value::Error(e) => Err(e),
+                    value => mode(value.to_number_in_with_year(gridcraft_core::DateSystem::D1900, &mut || year.get())?),
+                }
+            }
         }
     }
 

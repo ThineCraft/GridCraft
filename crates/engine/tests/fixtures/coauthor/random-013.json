@@ -38,53 +38,48 @@
       }
     },
     {
-      "id": "edit.clearContents",
+      "id": "home.bold",
       "params": {
-        "range": "H40:K41",
-        "sheet": "A B"
-      }
-    },
-    {
-      "id": "home.insertRows",
-      "params": {
-        "rows": "104:104",
-        "sheet": "A B"
-      }
-    },
-    {
-      "id": "home.insertColumns",
-      "params": {
-        "cols": "A:B",
-        "sheet": "Notes"
-      }
-    },
-    {
-      "id": "cell.set",
-      "params": {
-        "cell": "D141",
-        "input": "2026-03-04 08:15",
-        "sheet": "A B"
-      }
-    },
-    {
-      "id": "cell.set",
-      "params": {
-        "cell": "G22",
-        "input": "=IFERROR(POWER(H21,2),-1)",
-        "sheet": "Summary"
-      }
-    },
-    {
-      "id": "home.deleteColumns",
-      "params": {
-        "cols": "C:D",
+        "on": false,
+        "range": "AA96:AC102",
         "sheet": "Bob's"
       }
     },
     {
       "id": "cell.set",
       "params": {
-        "cell": "D140",
+        "cell": "I11",
+        "input": "#DIV/0!",
+        "sheet": "Übersicht"
+      }
+    },
+    {
+      "id": "data.filterSet",
+      "params": {
+        "range": "X191:Z200",
+        "sheet": "Übersicht"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "B34",
+        "input": "=SUMIF(C33:I63,\">5\")",
+        "sheet": "A B"
+      }
+    },
+    {
+      "id": "home.borders",
+      "params": {
+        "preset": "inside",
+        "range": "I36:J36",
+        "sheet": "A B"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "B33",
         "input": "59%",
         "sheet": "A B"
       }
@@ -98,355 +93,371 @@
       }
     },
     {
-      "id": "home.insertRows",
+      "id": "data.filterSet",
       "params": {
-        "rows": "131:131",
-        "sheet": "Bob's"
+        "range": "D191:G200",
+        "sheet": "Sheet1"
       }
     },
     {
       "id": "cell.set",
       "params": {
-        "cell": "C139",
-        "input": "a\"quote",
-        "sheet": "A B"
+        "cell": "G34",
+        "input": "=ABS(F32)",
+        "sheet": "Notes"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "E19",
+        "input": "-718",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "home.fontSize",
+      "params": {
+        "range": "AB70:AD75",
+        "sheet": "A B",
+        "size": 24
       }
     },
     {
       "id": "edit.clearContents",
       "params": {
-        "range": "U47:X53",
-        "sheet": "Übersicht"
+        "range": "A36:C37",
+        "sheet": "A B"
       }
     },
     {
-      "id": "cell.set",
+      "id": "home.decreaseFontSize",
       "params": {
-        "cell": "D9",
-        "input": "2026-05-13",
-        "sheet": "Übersicht"
+        "range": "A35:D38",
+        "sheet": "A B",
+        "size": 8
       }
     },
     {
-      "id": "home.insertRows",
+      "id": "home.formatCells",
       "params": {
-        "rows": "141:142",
+        "range": "B8:C9",
+        "sheet": "Summary",
+        "style": {
+          "font": {
+            "strike": true
+          }
+        }
+      }
+    },
+    {
+      "id": "home.fillColor",
+      "params": {
+        "color": "none",
+        "range": "J19:K25",
         "sheet": "A B"
       }
     },
     {
       "id": "cell.set",
       "params": {
-        "cell": "C142",
-        "input": "=AVERAGE(C141:F143,67)",
-        "sheet": "A B"
+        "cell": "L196",
+        "input": "'0012",
+        "sheet": "Summary"
+      }
+    },
+    {
+      "id": "home.numberFormat",
+      "params": {
+        "format": "Currency",
+        "range": "E18:H21",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "home.insertColumns",
+      "params": {
+        "cols": "D:E",
+        "sheet": "Bob's"
+      }
+    },
+    {
+      "id": "home.fontSize",
+      "params": {
+        "range": "D18:F19",
+        "sheet": "Sheet1",
+        "size": 10
       }
     },
     {
       "id": "home.borders",
       "params": {
         "color": "auto",
-        "preset": "diagonalDown",
-        "range": "F22:I22",
-        "sheet": "Sheet1",
-        "style": "medium"
-      }
-    },
-    {
-      "id": "home.insertRows",
-      "params": {
-        "rows": "10:10",
-        "sheet": "Notes"
-      }
-    },
-    {
-      "id": "cell.set",
-      "params": {
-        "cell": "AA182",
-        "input": "-625",
+        "preset": "doubleBottom",
+        "range": "G21:I22",
         "sheet": "Summary"
       }
     },
     {
-      "id": "cell.set",
+      "id": "home.formatCells",
       "params": {
-        "cell": "J9",
-        "input": "430",
-        "sheet": "Bob's"
-      }
-    },
-    {
-      "id": "home.deleteRows",
-      "params": {
-        "rows": "85:87",
-        "sheet": "Summary"
-      }
-    },
-    {
-      "id": "home.fontSize",
-      "params": {
-        "range": "I44:I47",
+        "range": "A33:D34",
         "sheet": "Summary",
-        "size": 18
-      }
-    },
-    {
-      "id": "cell.set",
-      "params": {
-        "cell": "AC50",
-        "input": "-185",
-        "sheet": "Bob's"
-      }
-    },
-    {
-      "id": "cell.set",
-      "params": {
-        "cell": "J8",
-        "input": "=MOD(69,4)+32",
-        "sheet": "Bob's"
-      }
-    },
-    {
-      "id": "cell.set",
-      "params": {
-        "cell": "J40",
-        "input": "TRUE",
-        "sheet": "A B"
-      }
-    },
-    {
-      "id": "cell.set",
-      "params": {
-        "cell": "G20",
-        "input": "FALSE",
-        "sheet": "Summary"
-      }
-    },
-    {
-      "id": "cell.set",
-      "params": {
-        "cell": "E2",
-        "input": "-28",
-        "sheet": "Übersicht"
-      }
-    },
-    {
-      "id": "home.fontSize",
-      "params": {
-        "range": "E2:G6",
-        "sheet": "Notes",
-        "size": 14
-      }
-    },
-    {
-      "id": "home.italic",
-      "params": {
-        "on": false,
-        "range": "G22:I24",
-        "sheet": "Summary"
-      }
-    },
-    {
-      "id": "home.insertRows",
-      "params": {
-        "rows": "39:39",
-        "sheet": "Notes"
-      }
-    },
-    {
-      "id": "cell.set",
-      "params": {
-        "cell": "Z181",
-        "input": "=POWER(D6,2)",
-        "sheet": "Summary"
-      }
-    },
-    {
-      "id": "home.wrapText",
-      "params": {
-        "on": true,
-        "range": "I34:K34",
-        "sheet": "Übersicht"
-      }
-    },
-    {
-      "id": "cell.set",
-      "params": {
-        "cell": "E1",
-        "input": "=IFERROR(1/E10,0)",
-        "sheet": "Übersicht"
-      }
-    },
-    {
-      "id": "cell.set",
-      "params": {
-        "cell": "AB182",
-        "input": "a\"quote",
-        "sheet": "Summary"
-      }
-    },
-    {
-      "id": "home.italic",
-      "params": {
-        "on": true,
-        "range": "F1:I4",
-        "sheet": "Übersicht"
-      }
-    },
-    {
-      "id": "home.fontSize",
-      "params": {
-        "range": "E:E",
-        "sheet": "Übersicht",
-        "size": 11
-      }
-    },
-    {
-      "id": "home.alignMiddle",
-      "params": {
-        "range": "E1:E4",
-        "sheet": "Übersicht"
-      }
-    },
-    {
-      "id": "cell.set",
-      "params": {
-        "cell": "D2",
-        "input": "169",
-        "sheet": "Übersicht"
-      }
-    },
-    {
-      "id": "cell.set",
-      "params": {
-        "cell": "I10",
-        "input": "630",
-        "sheet": "Bob's"
-      }
-    },
-    {
-      "id": "cell.set",
-      "params": {
-        "cell": "B137",
-        "input": "TRUE",
-        "sheet": "A B"
-      }
-    },
-    {
-      "id": "cell.set",
-      "params": {
-        "cell": "F19",
-        "input": "=XLOOKUP(A12,G16:G26,H16:H26,\"none\")",
-        "sheet": "Sheet1"
-      }
-    },
-    {
-      "id": "cell.set",
-      "params": {
-        "cell": "A32",
-        "input": "=MATCH(G20,F20:H21,0)",
-        "sheet": "Sheet1"
-      }
-    },
-    {
-      "id": "edit.clearContents",
-      "params": {
-        "range": "A32:B32",
-        "sheet": "Sheet1"
-      }
-    },
-    {
-      "id": "home.fillColor",
-      "params": {
-        "color": "#FFFF00",
-        "range": "F1:G8",
-        "sheet": "Übersicht"
-      }
-    },
-    {
-      "id": "home.borders",
-      "params": {
-        "preset": "all",
-        "range": "E19:G22",
-        "sheet": "Sheet1"
-      }
-    },
-    {
-      "id": "home.insertRows",
-      "params": {
-        "rows": "165:165",
-        "sheet": "Notes"
-      }
-    },
-    {
-      "id": "cell.set",
-      "params": {
-        "cell": "D10",
-        "input": "51.23",
-        "sheet": "Summary"
-      }
-    },
-    {
-      "id": "home.wrapText",
-      "params": {
-        "on": true,
-        "range": "AB126:AD129",
-        "sheet": "Notes"
-      }
-    },
-    {
-      "id": "cell.set",
-      "params": {
-        "cell": "AA181",
-        "input": "=INT('Übersicht'!D11)",
-        "sheet": "Summary"
-      }
-    },
-    {
-      "id": "cell.set",
-      "params": {
-        "cell": "F3",
-        "input": "114",
-        "sheet": "Übersicht"
+        "style": {
+          "font": {
+            "strike": false
+          }
+        }
       }
     },
     {
       "id": "cell.set",
       "params": {
         "cell": "H12",
-        "input": "TRUE",
+        "input": "apple",
+        "sheet": "Übersicht"
+      }
+    },
+    {
+      "id": "home.deleteSheet",
+      "params": {
+        "sheet": "A B"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "E2",
+        "input": "=SUM('Übersicht'!I11:I13)",
+        "sheet": "Summary"
+      }
+    },
+    {
+      "id": "home.borders",
+      "params": {
+        "preset": "all",
+        "range": "E37:G43",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "F33",
+        "input": "-991",
+        "sheet": "Notes"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "E32",
+        "input": "=POWER(D6,2)",
+        "sheet": "Notes"
+      }
+    },
+    {
+      "id": "data.clearFilter",
+      "params": {
+        "range": "D191:G200",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "I34",
+        "input": "=IFERROR(SUM(A10:B15),-1)",
+        "sheet": "Summary"
+      }
+    },
+    {
+      "id": "home.numberFormat",
+      "params": {
+        "code": "[Red]0;0",
+        "range": "G32:G37",
+        "sheet": "Notes"
+      }
+    },
+    {
+      "id": "data.clearFilter",
+      "params": {
+        "range": "D191:G200",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "home.borders",
+      "params": {
+        "color": "#FF0000",
+        "preset": "bottom",
+        "range": "F30:I33",
+        "sheet": "Notes"
+      }
+    },
+    {
+      "id": "home.borders",
+      "params": {
+        "color": "#00B050",
+        "preset": "right",
+        "range": "Q111:R116",
+        "sheet": "Sheet1",
+        "style": "thin"
+      }
+    },
+    {
+      "id": "data.filterSet",
+      "params": {
+        "range": "B191:D200",
+        "sheet": "Summary"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "L194",
+        "input": "=ROUND(RAND()*100,2)",
+        "sheet": "Summary"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "E22",
+        "input": "=ROUND(TODAY()*100,2)",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "P48",
+        "input": "87",
         "sheet": "Bob's"
       }
     },
     {
       "id": "cell.set",
       "params": {
-        "cell": "K8",
-        "input": "1E+300",
+        "cell": "F21",
+        "input": "-347.52",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "D20",
+        "input": "123456789012345",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "edit.clearContents",
+      "params": {
+        "range": "H13:H44",
+        "sheet": "Übersicht"
+      }
+    },
+    {
+      "id": "edit.clearContents",
+      "params": {
+        "range": "P47:P54",
+        "sheet": "Bob's"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "H13",
+        "input": "308",
+        "sheet": "Übersicht"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "Q47",
+        "input": "=VLOOKUP(P46,P50:Q55,1,FALSE)",
+        "sheet": "Bob's"
+      }
+    },
+    {
+      "id": "home.deleteSheet",
+      "params": {
+        "sheet": "Notes"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "A12",
+        "input": "#N/A",
+        "sheet": "Übersicht"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "F1",
+        "input": "=DATE(2026,12,39)",
+        "sheet": "Summary"
+      }
+    },
+    {
+      "id": "home.fontSize",
+      "params": {
+        "range": "F23:I30",
+        "sheet": "Sheet1",
+        "size": 14
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "C24",
+        "input": "676",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "H35",
+        "input": "2026-02-20",
+        "sheet": "Summary"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "R47",
+        "input": "0.1",
         "sheet": "Bob's"
       }
     },
     {
       "id": "home.borders",
       "params": {
-        "preset": "right",
-        "range": "A9:D31",
-        "sheet": "A B",
-        "style": "thick"
+        "color": "#00B050",
+        "preset": "insideHorizontal",
+        "range": "R101:S108",
+        "sheet": "Sheet1"
       }
     },
     {
-      "id": "edit.clearContents",
+      "id": "cell.set",
       "params": {
-        "range": "B33:E37",
-        "sheet": "Notes"
+        "cell": "D2",
+        "input": "386.48",
+        "sheet": "Summary"
       }
     },
     {
-      "id": "home.numberFormat",
+      "id": "cell.set",
       "params": {
-        "format": "General",
-        "range": "I7:I10",
+        "cell": "R45",
+        "input": "-255",
         "sheet": "Bob's"
       }
     },
@@ -454,54 +465,54 @@
       "id": "home.italic",
       "params": {
         "on": false,
-        "range": "J:K",
-        "sheet": "Notes"
-      }
-    },
-    {
-      "id": "home.deleteRows",
-      "params": {
-        "rows": "32:34",
+        "range": "F21:F24",
         "sheet": "Sheet1"
       }
     },
     {
-      "id": "home.alignMiddle",
+      "id": "home.fontSize",
       "params": {
-        "range": "H21:J21",
-        "sheet": "Summary"
+        "range": "O49",
+        "sheet": "Bob's",
+        "size": 11
       }
     },
     {
-      "id": "home.fillColor",
+      "id": "cell.set",
       "params": {
-        "color": "#FFFF00",
-        "range": "99:99",
+        "cell": "B10",
+        "input": "-174.36",
         "sheet": "Übersicht"
       }
     },
     {
-      "id": "home.borders",
-      "params": {
-        "preset": "top",
-        "range": "J10:K10",
-        "sheet": "Bob's"
-      }
-    },
-    {
       "id": "cell.set",
       "params": {
-        "cell": "AA180",
-        "input": "653",
+        "cell": "K66",
+        "input": "649",
         "sheet": "Summary"
       }
     },
     {
-      "id": "cell.set",
+      "id": "home.numberFormat",
       "params": {
-        "cell": "AB181",
-        "input": "-198.87",
-        "sheet": "Summary"
+        "format": "Text",
+        "range": "C19:E19",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "home.insertSheet",
+      "params": {
+        "before": 1,
+        "name": "A B"
+      }
+    },
+    {
+      "id": "data.filterSet",
+      "params": {
+        "range": "Y191:AB200",
+        "sheet": "A B"
       }
     }
   ]

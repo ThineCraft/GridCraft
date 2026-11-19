@@ -43,6 +43,70 @@ pub(super) fn toggle_filter(s: &mut Session, p: &Json) -> Result<Json> {
     install_filter(s, p)
 }
 
+pub(super) fn set_filter(s: &mut Session, p: &Json) -> Result<Json> {
+    let (sheet, range) = required_filter_target(s, p, "data.filterSet")?;
+    crate::cmd::refuse_unless_allowed(s, sheet, "Filtering", |protection| protection.autofilter)?;
+    if let Some(existing) = s.doc()?.wb.sheet(sheet).and_then(|target| target.autofilter.as_ref()) {
+        if existing.range == range {
+            return Ok(json!({"filter": true, "range": range.a1()}));
+        }
+        return Err(bad("data.filterSet", "the sheet already has a filter on a different range"));
+    }
+    edit(s, |cx| {
+        cx.sheet_mut(sheet)?.autofilter = Some(AutoFilter { range, criteria: vec![] });
+        cx.structural = true;
+        Ok(json!({"filter": true, "range": range.a1()}))
+    })
+}
+
+pub(super) fn remove_filter(s: &mut Session, p: &Json) -> Result<Json> {
+    let (sheet, range) = required_filter_target(s, p, "data.filterRemove")?;
+    crate::cmd::refuse_unless_allowed(s, sheet, "Filtering", |protection| protection.autofilter)?;
+    let Some(existing) = s.doc()?.wb.sheet(sheet).and_then(|target| target.autofilter.as_ref()) else {
+        return Ok(json!({"filter": false}));
+    };
+    if existing.range != range {
+        return Err(bad("data.filterRemove", "the sheet filter is on a different range"));
+    }
+    edit(s, |cx| {
+        let target = cx.sheet_mut(sheet)?;
+        let filtered: Vec<u32> = target.rows.keys().copied().filter(|row| target.is_row_filtered(*row)).collect();
+        target.autofilter = None;
+        for row in filtered {
+            if let Some(info) = target.rows.get_mut(&row) {
+                info.hidden = false;
+            }
+        }
+        cx.structural = true;
+        Ok(json!({"filter": false}))
+    })
+}
+
+fn required_filter_target(s: &Session, p: &Json, command: &str) -> Result<(usize, RangeRef)> {
+    if p.get("sheet").is_none() {
+        return Err(bad(command, "missing `sheet`"));
+    }
+    if p.get("range").is_none() {
+        return Err(bad(command, "missing `range`"));
+    }
+    data_target(s, p, command)
+}
+
+fn existing_filter_target(s: &Session, p: &Json, command: &str) -> Result<(usize, Option<AutoFilter>)> {
+    let explicit = p.get("range").is_some();
+    let (sheet, requested) = data_target(s, p, command)?;
+    let filter = s.doc()?.wb.sheet(sheet).and_then(|target| target.autofilter.clone());
+    if explicit {
+        let Some(filter) = filter else { return Err(bad(command, "the named filter does not exist")) };
+        if filter.range != requested {
+            return Err(bad(command, "the sheet filter is on a different range"));
+        }
+        Ok((sheet, Some(filter)))
+    } else {
+        Ok((sheet, filter))
+    }
+}
+
 /// Turn a sheet AutoFilter on over `p.range`, or over the data range of the selection.
 fn install_filter(s: &mut Session, p: &Json) -> Result<Json> {
     let (sheet, mut r) = data_target(s, p, "data.filter")?;
@@ -62,11 +126,10 @@ fn install_filter(s: &mut Session, p: &Json) -> Result<Json> {
 }
 
 pub(super) fn filter_by(s: &mut Session, p: &Json) -> Result<Json> {
-    let sheet = s.doc()?.wb.active_sheet();
+    let (sheet, filter) = existing_filter_target(s, p, "data.filterBy")?;
     crate::cmd::refuse_unless_allowed(s, sheet, "Filtering", |p| p.autofilter)?;
-    let Some(sh) = s.doc()?.wb.sheet(sheet) else { return Err(EngineError::NoDocument) };
-    let af = match &sh.autofilter {
-        Some(a) => a.clone(),
+    let af = match filter {
+        Some(filter) => filter,
         None => {
             install_filter(s, &json!({}))?;
             s.doc()?.wb.sheet(sheet).and_then(|sh| sh.autofilter.clone()).ok_or_else(|| EngineError::Other("no filter".into()))?
@@ -104,6 +167,7 @@ pub(super) fn filter_by(s: &mut Session, p: &Json) -> Result<Json> {
     } else {
         bool_param(p, "aboveAverage").map(FilterCriterion::AboveAverage)
     };
+    let mut year = CriteriaYear::of(s)?;
     edit(s, |cx| {
         let sh = cx.sheet_mut(sheet)?;
         if let Some(a) = sh.autofilter.as_mut() {
@@ -112,17 +176,18 @@ pub(super) fn filter_by(s: &mut Session, p: &Json) -> Result<Json> {
                 a.criteria.push((off, c));
             }
         }
-        apply_filter(&mut cx.wb, sheet);
+        apply_filter_in_year(&mut cx.wb, sheet, &mut year);
         cx.structural = true;
         Ok(Json::Null)
     })?;
+    year.finish(s)?;
     let hidden = s.doc()?.wb.sheet(sheet).map(|sh| sh.rows.values().filter(|r| r.hidden).count()).unwrap_or(0);
     Ok(json!({"hiddenRows": hidden}))
 }
 
 /// Does a value pass a custom comparison (`>`, `=*abc*`, `<>x`…)?
-fn custom_ok(v: &Value, text: &str, op: &str, crit: &str) -> bool {
-    let num = gridcraft_core::parse::parse_number_text(crit);
+fn custom_ok(v: &Value, text: &str, op: &str, crit: &str, year: &mut dyn FnMut() -> i64) -> bool {
+    let num = gridcraft_core::parse::parse_number_text_in_with_year(crit, gridcraft_core::DateSystem::D1900, year);
     let cmp = match (v.as_f64(), num) {
         (Some(a), Some(b)) => a.partial_cmp(&b),
         // A numeric ordering comparison only matches numbers; blanks and text never do.
@@ -180,8 +245,44 @@ pub(crate) fn grow_autofilter(sh: &mut Sheet, at: CellRef) {
     }
 }
 
+/// The year for criterion dates typed without one (`>3/4`): the calculation clock's year, which a
+/// live entry sets from its server stamp, else the current year. It is looked up only when a
+/// criterion needs it, and that use is recorded as a read of the stamp.
+struct CriteriaYear {
+    clock: Option<f64>,
+    read: bool,
+}
+
+impl CriteriaYear {
+    fn of(s: &Session) -> Result<Self> {
+        Ok(Self { clock: s.doc()?.calc.fixed_now, read: false })
+    }
+
+    fn get(&mut self) -> i64 {
+        self.read = true;
+        self.clock
+            .and_then(|serial| gridcraft_core::date::datetime_from_serial(gridcraft_core::DateSystem::D1900, serial))
+            .map_or_else(gridcraft_core::parse::current_year, |date| i64::from(date.year))
+    }
+
+    fn finish(self, s: &mut Session) -> Result<()> {
+        if self.read {
+            s.doc_mut()?.calc.note_stamp_read();
+        }
+        Ok(())
+    }
+}
+
 /// Hides rows of the autofilter range that fail any criterion.
 pub(crate) fn apply_filter(wb: &mut Workbook, sheet: usize) {
+    apply_filter_with_year(wb, sheet, &mut gridcraft_core::parse::current_year);
+}
+
+fn apply_filter_in_year(wb: &mut Workbook, sheet: usize, year: &mut CriteriaYear) {
+    apply_filter_with_year(wb, sheet, &mut || year.get());
+}
+
+fn apply_filter_with_year(wb: &mut Workbook, sheet: usize, year: &mut dyn FnMut() -> i64) {
     let Some(sh) = wb.sheet(sheet) else { return };
     let Some(af) = sh.autofilter.clone() else { return };
     let r = af.range;
@@ -220,10 +321,10 @@ pub(crate) fn apply_filter(wb: &mut Workbook, sheet: usize) {
                     }
                 }
                 FilterCriterion::Custom { a, b, and } => {
-                    let x = custom_ok(&v, &text, &a.0, &a.1);
+                    let x = custom_ok(&v, &text, &a.0, &a.1, &mut *year);
                     match b {
                         Some(b) => {
-                            let y = custom_ok(&v, &text, &b.0, &b.1);
+                            let y = custom_ok(&v, &text, &b.0, &b.1, &mut *year);
                             if *and { x && y } else { x || y }
                         }
                         None => x,
@@ -268,28 +369,34 @@ pub(crate) fn apply_filter(wb: &mut Workbook, sheet: usize) {
     }
 }
 
-pub(super) fn clear_filter(s: &mut Session, _: &Json) -> Result<Json> {
-    let sheet = s.doc()?.wb.active_sheet();
+pub(super) fn clear_filter(s: &mut Session, p: &Json) -> Result<Json> {
+    let (sheet, _) = existing_filter_target(s, p, "data.clearFilter")?;
     crate::cmd::refuse_unless_allowed(s, sheet, "Filtering", |p| p.autofilter)?;
-    edit(s, |cx| {
+    let mut year = CriteriaYear::of(s)?;
+    let result = edit(s, |cx| {
         let sh = cx.sheet_mut(sheet)?;
         if let Some(a) = sh.autofilter.as_mut() {
             a.criteria.clear();
         }
-        apply_filter(&mut cx.wb, sheet);
+        apply_filter_in_year(&mut cx.wb, sheet, &mut year);
         cx.structural = true;
         Ok(Json::Null)
-    })
+    })?;
+    year.finish(s)?;
+    Ok(result)
 }
 
-pub(super) fn reapply(s: &mut Session, _: &Json) -> Result<Json> {
-    let sheet = s.doc()?.wb.active_sheet();
+pub(super) fn reapply(s: &mut Session, p: &Json) -> Result<Json> {
+    let (sheet, _) = existing_filter_target(s, p, "data.reapply")?;
     crate::cmd::refuse_unless_allowed(s, sheet, "Filtering", |p| p.autofilter)?;
-    edit(s, |cx| {
-        apply_filter(&mut cx.wb, sheet);
+    let mut year = CriteriaYear::of(s)?;
+    let result = edit(s, |cx| {
+        apply_filter_in_year(&mut cx.wb, sheet, &mut year);
         cx.structural = true;
         Ok(Json::Null)
-    })
+    })?;
+    year.finish(s)?;
+    Ok(result)
 }
 
 /// Distinct display values of a filter column (for the dropdown list).

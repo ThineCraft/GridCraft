@@ -11,6 +11,7 @@ pub mod cf;
 mod chart_svg;
 mod clip_html;
 pub mod cmd;
+pub mod coauthor;
 pub mod display;
 pub mod fill;
 pub mod fingerprint;
@@ -504,6 +505,9 @@ pub struct Session {
     pub macro_approvals: std::collections::HashSet<(u64, String)>,
     /// The macro being debugged, between debugger actions.
     pub macro_debug: Option<macros::debug::Debugger>,
+    /// A live co-authoring editor owns this session's shared workbook. The macro debugger's lock
+    /// is personal state that the other people's clients cannot see, so it does not start then.
+    pub(crate) coauthoring: bool,
     /// Where the macro recorder started (beside `recorder`, its buffer).
     pub macro_recording: Option<macros::recorder::RecordingStart>,
     /// Draw tab tool: "" (select), "pen" or "eraser"; pen colour and width.

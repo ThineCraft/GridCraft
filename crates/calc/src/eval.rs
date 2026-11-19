@@ -94,6 +94,7 @@ pub trait Host {
     /// The current value of a cell (evaluating it first if it is dirty).
     fn cell_value(&mut self, sheet: usize, c: CellRef) -> Value;
     fn now_serial(&self) -> f64;
+    fn coercion_year(&self) -> gridcraft_functions::CoercionYear;
     fn random(&mut self) -> f64;
     /// Called when a volatile or dynamic-reference function is used.
     fn note_volatile(&mut self) {}
@@ -161,6 +162,9 @@ impl Ctx for FnCtx<'_, '_> {
     }
     fn now_serial(&self) -> f64 {
         self.ev.host.now_serial()
+    }
+    fn coercion_year(&self) -> gridcraft_functions::CoercionYear {
+        self.ev.host.coercion_year()
     }
     fn random(&mut self) -> f64 {
         self.ev.host.random()
@@ -519,6 +523,7 @@ impl<'h> Evaluator<'h> {
         }
         let v = self.value(x);
         let sys = self.host.workbook().date_system;
+        let year = self.host.coercion_year();
         Ev::V(map_unary(
             &v,
             &|n| match op {
@@ -529,6 +534,7 @@ impl<'h> Evaluator<'h> {
             },
             op == UnOp::Plus,
             sys,
+            &year,
         ))
     }
 
@@ -615,7 +621,8 @@ impl<'h> Evaluator<'h> {
                 let mut acc = self.value(left);
                 while let Some((o, r)) = rest.pop() {
                     let y = self.value(r);
-                    acc = binary_values(o, &acc, &y, self.host.workbook().date_system);
+                    let year = self.host.coercion_year();
+                    acc = array::binary_values_with_year(o, &acc, &y, self.host.workbook().date_system, &year);
                 }
                 Ev::V(acc)
             }
@@ -635,7 +642,8 @@ impl<'h> Evaluator<'h> {
             None | Some(Expr::Missing) => Ok(default),
             Some(e) => {
                 let v = self.value(e);
-                v.scalar().to_number()
+                let year = self.host.coercion_year();
+                v.scalar().to_number_in_with_year(gridcraft_core::DateSystem::D1900, &mut || year.get())
             }
         }
     }
@@ -665,6 +673,9 @@ mod fuel_tests {
         }
         fn now_serial(&self) -> f64 {
             0.0
+        }
+        fn coercion_year(&self) -> gridcraft_functions::CoercionYear {
+            gridcraft_functions::CoercionYear::new(2026)
         }
         fn random(&mut self) -> f64 {
             0.0

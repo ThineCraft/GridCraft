@@ -3,7 +3,8 @@
 //! Two records, both written natively by ignored tests and compared by wasm32 tests under Node:
 //!
 //! - `fixtures/coauthor/native-digests.json`: the 26 command-sequence fixtures, embedded
-//!   byte-for-byte, with each step's outcome, both fingerprints and the canonical walk.
+//!   byte-for-byte, with each step's outcome, the entered digest used for room agreement,
+//!   the native computed diagnostic and the canonical walk.
 //! - `fixtures/coauthor-maths/native-maths.json`: a grid of maths and number-display formulas
 //!   over awkward inputs (the platform maths library differs: the C runtime natively, Rust's
 //!   libm port on wasm32). Every computed difference there must be listed, with its ULP
@@ -24,7 +25,7 @@ use std::collections::BTreeMap;
 
 use gridcraft_engine::Session;
 use gridcraft_engine::core::{CellRef, RangeRef, Value};
-use gridcraft_engine::fingerprint::{DocId, FingerprintItem, fingerprint, fingerprint_items};
+use gridcraft_engine::fingerprint::{DocId, Fingerprint, FingerprintItem, fingerprint, fingerprint_items};
 use gridcraft_engine::formula::{Expr, SheetSel};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -69,6 +70,7 @@ const FIXTURES: [(&str, &str); 26] = [
 ];
 
 /// Most computed differences printed per fixture (all of them are still counted).
+#[cfg(not(target_arch = "wasm32"))]
 const SHOWN_DIFFERENCES: usize = 20;
 
 #[derive(Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -81,8 +83,8 @@ struct NativeFixture {
     name: String,
     /// The steps the engine rejected, so a command refused on one platform only is named.
     failed_steps: Vec<StepFailure>,
-    entered: String,
-    computed: String,
+    agreement: String,
+    diagnostic_computed: String,
     items: Vec<NativeItem>,
 }
 
@@ -371,6 +373,7 @@ fn entered_difference(expected: &[NativeItem], actual: &[NativeItem], session: &
 
 /// Everything that differs: the first entered item, then every computed difference (the first
 /// [`SHOWN_DIFFERENCES`], roots first).
+#[cfg(not(target_arch = "wasm32"))]
 fn report(expected: &[NativeItem], actual: &[NativeItem], session: &Session) -> String {
     let mut lines = Vec::new();
     if let Some(entered) = entered_difference(expected, actual, session) {
@@ -461,9 +464,11 @@ fn current_native_digests() -> Result<NativeDigests, String> {
     let mut fixtures = Vec::with_capacity(FIXTURES.len());
     for (name, text) in FIXTURES {
         let replayed = replay(name, text)?;
-        let (entered, computed) = fingerprint(&replayed.session, DocId(0)).hex();
+        let fingerprint = fingerprint(&replayed.session, DocId(0));
+        let agreement = sequences::agreement_digest(&fingerprint).iter().map(|byte| format!("{byte:02x}")).collect();
+        let diagnostic_computed = fingerprint.hex().1;
         let items = recorded_items(&replayed.session);
-        fixtures.push(NativeFixture { name: name.to_string(), failed_steps: replayed.failed_steps, entered, computed, items });
+        fixtures.push(NativeFixture { name: name.to_string(), failed_steps: replayed.failed_steps, agreement, diagnostic_computed, items });
     }
     Ok(NativeDigests { fixtures })
 }
@@ -508,10 +513,21 @@ fn native_digests_are_current() {
             s.name,
             changed.unwrap_or_else(|| "the item count changed".into())
         );
-        assert_eq!((&s.entered, &s.computed), (&c.entered, &c.computed), "{}: digests changed; {HINT}", s.name);
+        assert_eq!((&s.agreement, &s.diagnostic_computed), (&c.agreement, &c.diagnostic_computed), "{}: digests changed; {HINT}", s.name);
     }
     // The file's exact text too, so a hand edit or reformat is caught.
     assert!(NATIVE_DIGESTS.replace("\r\n", "\n") == pretty(&current), "native-digests.json is not as the writer writes it; {HINT}");
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+fn cross_platform_agreement_uses_entered_digest() {
+    let native = Fingerprint { entered: [7; 32], computed: [11; 32] };
+    let mut other_platform = native;
+    other_platform.computed[17] ^= 1;
+
+    assert_eq!(sequences::agreement_digest(&native), sequences::agreement_digest(&other_platform));
+    assert_ne!(native.computed, other_platform.computed, "the computed diagnostic deliberately differs");
 }
 
 /// The embedded list must name every sequence in the fixtures folder, so a fixture added there
@@ -548,9 +564,13 @@ fn wasm_matches_native_fixtures() {
             }
         };
         let mut lines = step_differences(&native.failed_steps, &replayed.failed_steps);
-        let (entered, computed) = fingerprint(&replayed.session, DocId(0)).hex();
-        if entered != native.entered || computed != native.computed {
-            lines.push(report(&native.items, &recorded_items(&replayed.session), &replayed.session));
+        let fingerprint = fingerprint(&replayed.session, DocId(0));
+        let agreement = sequences::agreement_digest(&fingerprint).iter().map(|byte| format!("{byte:02x}")).collect::<String>();
+        if agreement != native.agreement {
+            lines.push(
+                entered_difference(&native.items, &recorded_items(&replayed.session), &replayed.session)
+                    .unwrap_or_else(|| "entered agreement differs though every entered item agrees".to_string()),
+            );
         }
         if !lines.is_empty() {
             failures.push(format!("{name}:\n    {}", lines.join("\n    ")));

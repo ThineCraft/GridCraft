@@ -1,6 +1,6 @@
 # Gaps
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-11-02 · **Change:** minor (§17: equations; earlier: §13: Solver Sensitivity report; earlier: §4: chart resizing is no longer a gap; earlier: §13: Analysis ToolPak has all 19 tools; earlier: §4: chart data tables implemented with XLSX round-trip and print/PDF; earlier: §13: Solver Options; earlier: §13: Solver Load/Save Model and Reset All) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-11-19 · **Change:** minor (§16: G3 review carries for G4 and G5; earlier: §16: first live command set and in-process co-author adapter complete; no user-facing co-authoring yet; earlier: §17: equations; earlier: §13: Solver Sensitivity report; earlier: §4: chart resizing is no longer a gap) · **Target:** Microsoft Excel (Microsoft 365)
 
 Every known shortfall against Excel, one entry each, ranked by user impact (what blocks someone
 using GridCraft for real work first). This is the work list: pick from the top, check the open
@@ -149,8 +149,30 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
   [function-parity.md](function-parity.md)
 
 ### 16. Collaboration and review (F)
-- No co-authoring, Show Changes, comment navigation, notes ↔ comments
-  conversion; cloud storage requested (#86). **Estimate:** 35–55 h (co-authoring scope needs the owner).
+- **Added in the engine:** the first `gridcraft/1` shared command set names sheets, rows and
+  columns by live identity; its in-process adapter applies the ordered G2 log, preserves each
+  person's view, rolls back and re-runs pending work, and keeps guarded personal Undo/Redo.
+  Structural changes on workbooks with at least 100,000 stored cells wait for the server.
+  Sheet add and delete can be shared, but their Undo is refused in shared sessions because G3
+  does not send a whole sheet as an undo payload.
+- **Measured on native Windows only:** on the 100,000-cell heavier-formula report, ten content
+  changes took 242.0 ms p50 / 299.9 ms p95 to clone and apply, or 315.8 / 383.7 ms including a
+  final full recalculation. One row insert took 129.1 / 143.0 ms to clone and apply, or 203.9 /
+  220.8 ms including full recalculation. The heavier report was not run on wasm or another
+  desktop platform, so these figures are not cross-platform claims.
+- **Still missing:** G4 checkpoints and retained-room state; G5 sockets, the host bridge,
+  presence, notices and the screen integration. There is no user-facing co-authoring until G4
+  and G5 land. Known before a real room (G3 final review):
+  - **G4:** who deleted each row and column identity (`deleted_by`) is not saved with the
+    identity table, so a client that loads a checkpoint refuses an Undo that the others apply.
+    The checkpoint must carry or rebuild it, with a two-client test where one client starts
+    from a checkpoint.
+  - **G5 (P, S):** live identity tables are scanned in full per target, and every applied entry
+    clones the whole table, so a co-author who fragments an axis (one delete naming tens of
+    thousands of alternate rows) makes every later entry slow on every client. Index the
+    ordered identities in collab-live, share per-sheet tables, and cap distinct blocks per
+    structural entry, with a timing test on a fragmented axis. Show Changes is also missing; cloud storage is requested (#86). Comment navigation
+  and notes ↔ comments conversion have landed. **Estimate:** 35–55 h.
 
 ### 17. Insert objects (F)
 - Ink strokes now survive XLSX save/reopen as editable polylines. Inserted icons still lose their
@@ -193,6 +215,8 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-19 | minor | §16: G3 final-review carries: deletion ownership in checkpoints (G4), identity-table cost under fragmentation (G5) |
+| 2026-11-19 | minor | §16: first identity-targeted live command set and in-process G2 adapter complete; checkpoints and user-facing G4/G5 integration remain |
 | 2026-11-02 | minor | §17: equations (Insert › Equation, LaTeX source, gallery, editor) |
 | 2026-11-02 | minor | §13: Solver Sensitivity report: shadow prices, reduced costs and allowable ranges for Simplex LP; Lagrange multipliers and reduced gradients for GRG Nonlinear |
 | 2026-11-02 | minor | §4: charts, like every floating object, move and resize from eight handles (#190), so resizing is no longer listed as missing; the evidence is one paragraph again, without the stale "PRs #158, #161 open" |

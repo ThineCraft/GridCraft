@@ -16,9 +16,10 @@
 use std::time::Instant;
 
 use crate::sequences::{
-    TIMING_REPETITIONS, check_rerun, headline_p95, is_structural, kind_table, rerun_pending, time_all_workloads, time_command_kinds,
-    timing_command_kinds, timing_document, timing_stats, timing_table, timing_workbook, timing_workloads,
+    Step, TIMING_REPETITIONS, check_rerun, headline_p95, heavier_timing_document, is_structural, kind_table, rerun_pending, time_all_workloads,
+    time_command_kinds, time_workload, timing_command_kinds, timing_document, timing_stats, timing_table, timing_workbook, timing_workloads,
 };
+use serde_json::json;
 
 #[test]
 fn timing_workbook_has_the_requested_shape() {
@@ -98,5 +99,27 @@ fn rollback_and_rerun_timings_native() -> Result<(), String> {
     if measured > 50.0 {
         return Err(format!("native 100,000-cell/10-command clone+apply p95 {measured:.3} ms exceeds 50 ms"));
     }
+    Ok(())
+}
+
+#[test]
+#[ignore = "release-only heavier-formula rollback and re-run report"]
+fn heavier_formula_rerun_report() -> Result<(), String> {
+    if cfg!(debug_assertions) {
+        return Err("timings must be run with cargo test --release".into());
+    }
+    let clock = native_clock();
+    let agreed = heavier_timing_document(100_000)?;
+    let content =
+        (2..12).map(|row| Step::new("cell.set", json!({"sheet":"Sheet1","cell":format!("B{row}"),"input":row.to_string()}))).collect::<Vec<_>>();
+    let structural = vec![Step::new("home.insertRows", json!({"sheet":"Sheet1","rows":"10:10"}))];
+    let rows = vec![
+        time_workload(&clock, &agreed, 100_000, "heavier-content-only", &content)?,
+        time_workload(&clock, &agreed, 100_000, "heavier-one-structural", &structural)?,
+    ];
+    for line in timing_table("native", &rows) {
+        println!("{line}");
+    }
+    println!("repetitions {TIMING_REPETITIONS} after one excluded warm-up; report only, no wall-clock gate");
     Ok(())
 }

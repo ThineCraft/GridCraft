@@ -790,6 +790,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "collab-core"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "thiserror 2.0.21",
+ "uuid",
+]
+
+[[package]]
+name = "collab-live"
+version = "0.1.0"
+dependencies = [
+ "collab-core",
+ "protocol",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "uuid",
+]
+
+[[package]]
 name = "color"
 version = "0.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2103,6 +2124,8 @@ dependencies = [
 name = "gridcraft-engine"
 version = "0.16.0"
 dependencies = [
+ "collab-core",
+ "collab-live",
  "gridcraft-calc",
  "gridcraft-chart",
  "gridcraft-core",
@@ -2115,6 +2138,7 @@ dependencies = [
  "gridcraft-xlsx",
  "image",
  "log",
+ "protocol",
  "serde",
  "serde_json",
  "sha2 0.11.1",
@@ -3970,6 +3994,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3d595e54a326bc53c1c197b32d295e14b169e3cfeaa8dc82b529f947fba6bcf5"
 
 [[package]]
+name = "protocol"
+version = "0.1.0"
+dependencies = [
+ "collab-core",
+ "serde",
+ "uuid",
+]
+
+[[package]]
 name = "pxfm"
 version = "0.1.30"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5740,10 +5773,11 @@ checksum = "b6c140620e7ffbb22c2dee59cafe6084a59b5ffc27a8859a5f0d494b5d52b6be"
 
 [[package]]
 name = "uuid"
-version = "1.27.0"
+version = "1.29.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "97277d36b9c3ace13e58fa6e753f8b0bbbf302a18dd193240d70f9e29681059a"
+checksum = "bed99139f7dac9b5cfe5f17be4d66dc7079a34dee1d74bcc77217119240e267c"
 dependencies = [
+ "getrandom 0.4.3",
  "js-sys",
  "serde_core",
  "wasm-bindgen",

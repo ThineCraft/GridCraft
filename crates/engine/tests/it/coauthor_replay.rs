@@ -501,6 +501,19 @@ fn expected_fixtures() -> Vec<(String, Sequence)> {
 #[test]
 fn fixtures_round_trip_as_json() {
     let expected = expected_fixtures();
+    let newly_shared = [
+        "home.underline",
+        "home.doubleUnderline",
+        "home.increaseFontSize",
+        "home.decreaseFontSize",
+        "home.formatCells",
+        "data.filterSet",
+        "data.filterRemove",
+        "data.filterBy",
+        "data.clearFilter",
+        "data.reapply",
+    ];
+    let mut random_commands = std::collections::BTreeSet::new();
     if std::env::var_os("GRIDCRAFT_COAUTHOR_WRITE_FIXTURES").is_some() {
         for (name, seq) in &expected {
             std::fs::write(fixtures_dir().join(name), seq.to_text()).expect("fixture written");
@@ -524,7 +537,13 @@ fn fixtures_round_trip_as_json() {
         }
         for step in &seq.steps {
             assert!(SHARED_COMMANDS.contains(&step.id.as_str()), "{name}: `{}` is not a shared command", step.id);
+            if name.starts_with("random-") {
+                random_commands.insert(step.id.clone());
+            }
         }
+    }
+    for command in newly_shared {
+        assert!(random_commands.contains(command), "the random fixtures never exercise `{command}`");
     }
     // The JSON form rejects what it doesn't know, so a typo can't pass as an empty sequence.
     for bad in [
@@ -642,6 +661,16 @@ fn explicit_targets_leave_the_active_sheet_alone() {
         on("home.alignMiddle", json!({"range": "A1:B2"})),
         on("home.alignBottom", json!({"range": "A1:B2"})),
         on("home.wrapText", json!({"range": "A1:B2", "on": true})),
+        on("home.underline", json!({"range": "A1:B2", "on": true, "style": "single"})),
+        on("home.doubleUnderline", json!({"range": "A1:B2", "on": true, "style": "double"})),
+        on("home.increaseFontSize", json!({"range": "A1:B2", "size": 14})),
+        on("home.decreaseFontSize", json!({"range": "A1:B2", "size": 10})),
+        on("home.formatCells", json!({"range": "A1:B2", "style": {"font": {"strike": true}}})),
+        on("data.filterSet", json!({"range": "A1:B2"})),
+        on("data.filterBy", json!({"range": "A1:B2", "column": "A", "values": ["1"]})),
+        on("data.clearFilter", json!({"range": "A1:B2"})),
+        on("data.reapply", json!({"range": "A1:B2"})),
+        on("data.filterRemove", json!({"range": "A1:B2"})),
         on("home.insertRows", json!({"rows": "1:2"})),
         on("home.deleteRows", json!({"rows": "1:1"})),
         on("home.insertColumns", json!({"cols": "A:A"})),
@@ -675,6 +704,21 @@ fn explicit_targets_leave_the_active_sheet_alone() {
     let mut failures = Vec::new();
     for step in &steps {
         let mut s = base();
+        match step.id.as_str() {
+            "data.filterBy" | "data.filterRemove" => {
+                apply(&mut s, &on("data.filterSet", json!({"range": "A1:B2"}))).unwrap();
+            }
+            "data.clearFilter" => {
+                apply(&mut s, &on("data.filterSet", json!({"range": "A1:B2"}))).unwrap();
+                apply(&mut s, &on("data.filterBy", json!({"range": "A1:B2", "column": "A", "values": ["1"]}))).unwrap();
+            }
+            "data.reapply" => {
+                apply(&mut s, &on("data.filterSet", json!({"range": "A1:B2"}))).unwrap();
+                apply(&mut s, &on("data.filterBy", json!({"range": "A1:B2", "column": "A", "values": ["1"]}))).unwrap();
+                apply(&mut s, &on("cell.set", json!({"cell": "A2", "input": "1"}))).unwrap();
+            }
+            _ => {}
+        }
         let (fp, cells) = (fingerprint(&s, DocId(0)), sheet1(&s));
         if let Err(e) = apply(&mut s, step) {
             failures.push(format!("`{}` failed: {e}", step.id));
@@ -693,7 +737,11 @@ fn explicit_targets_leave_the_active_sheet_alone() {
         if keeps_selection && (d.selection.a1() != "B2:C3" || d.selection.active.a1() != "C3") {
             failures.push(format!("`{}` on Other moved the selection to {} (active {})", step.id, d.selection.a1(), d.selection.active.a1()));
         }
-        if fingerprint(&s, DocId(0)).entered == fp.entered {
+        // Re-applying a filter changes which rows it hides, and those follow from the values: they
+        // are computed content, not entered content.
+        let now = fingerprint(&s, DocId(0));
+        let changed = if step.id == "data.reapply" { now != fp } else { now.entered != fp.entered };
+        if !changed {
             failures.push(format!("`{}` changed nothing", step.id));
         }
         // Sheet1 changes only where its formula follows Other (a deleted sheet gives #REF!).

@@ -38,481 +38,477 @@
       }
     },
     {
-      "id": "home.borders",
+      "id": "home.doubleUnderline",
       "params": {
-        "color": "#00B050",
-        "preset": "top",
-        "range": "S26:T32",
-        "sheet": "Bob's"
-      }
-    },
-    {
-      "id": "home.deleteSheet",
-      "params": {
-        "sheet": "Bob's"
-      }
-    },
-    {
-      "id": "home.alignRight",
-      "params": {
-        "on": true,
-        "range": "J27:L27",
-        "sheet": "Sheet1"
-      }
-    },
-    {
-      "id": "home.borders",
-      "params": {
-        "preset": "insideHorizontal",
-        "range": "C10:D16",
-        "sheet": "Sheet1",
+        "on": false,
+        "range": "C22:D24",
+        "sheet": "Bob's",
         "style": "double"
       }
     },
     {
       "id": "cell.set",
       "params": {
-        "cell": "G14",
-        "input": "=NOT(H13=0)",
-        "sheet": "Sales-2"
-      }
-    },
-    {
-      "id": "cell.set",
-      "params": {
-        "cell": "AB115",
-        "input": "=RIGHT($AC$117,4)",
+        "cell": "AB105",
+        "input": "136%",
         "sheet": "Ref"
       }
     },
     {
-      "id": "sheet.rename",
+      "id": "cell.set",
       "params": {
-        "name": "Totals",
-        "sheet": "Sales-2"
+        "cell": "AA104",
+        "input": "TRUE",
+        "sheet": "Ref"
       }
     },
     {
       "id": "cell.set",
       "params": {
-        "cell": "N40",
-        "input": "12:30",
-        "sheet": "Notes"
+        "cell": "AB106",
+        "input": "=UPPER($Z$102)",
+        "sheet": "Ref"
       }
     },
     {
-      "id": "cell.set",
+      "id": "home.alignTop",
       "params": {
-        "cell": "C11",
-        "input": "=ROUNDUP(75/7,0)",
+        "range": "O9:O10",
         "sheet": "AB12"
-      }
-    },
-    {
-      "id": "cell.set",
-      "params": {
-        "cell": "D10",
-        "input": "TRUE story",
-        "sheet": "AB12"
-      }
-    },
-    {
-      "id": "cell.set",
-      "params": {
-        "cell": "M42",
-        "input": "=SQRT(86)+M41",
-        "sheet": "Notes"
-      }
-    },
-    {
-      "id": "home.italic",
-      "params": {
-        "on": false,
-        "range": "D9:E13",
-        "sheet": "AB12"
-      }
-    },
-    {
-      "id": "home.insertRows",
-      "params": {
-        "rows": "117:119",
-        "sheet": "Ref"
-      }
-    },
-    {
-      "id": "cell.set",
-      "params": {
-        "cell": "AB114",
-        "input": "=IFERROR(AVERAGE(AA116:AD116,70),-1)",
-        "sheet": "Ref"
-      }
-    },
-    {
-      "id": "cell.set",
-      "params": {
-        "cell": "A34",
-        "input": "-668",
-        "sheet": "Totals"
-      }
-    },
-    {
-      "id": "cell.set",
-      "params": {
-        "cell": "H14",
-        "input": "=MEDIAN(Ref!AA116:AA116)",
-        "sheet": "Totals"
-      }
-    },
-    {
-      "id": "sheet.rename",
-      "params": {
-        "name": "Bob's",
-        "sheet": "Sheet1"
-      }
-    },
-    {
-      "id": "home.borders",
-      "params": {
-        "preset": "top",
-        "range": "E7:E10",
-        "sheet": "Ref"
-      }
-    },
-    {
-      "id": "edit.clearContents",
-      "params": {
-        "range": "G12:H19",
-        "sheet": "Totals"
       }
     },
     {
       "id": "home.numberFormat",
       "params": {
-        "code": "\"x\"@",
-        "range": "H12:K15",
-        "sheet": "Totals"
+        "format": "Short Date",
+        "range": "H14",
+        "sheet": "Sales-2"
+      }
+    },
+    {
+      "id": "home.deleteSheet",
+      "params": {
+        "sheet": "Sales-2"
       }
     },
     {
       "id": "cell.set",
       "params": {
-        "cell": "D39",
-        "input": "x y z",
-        "sheet": "Bob's"
-      }
-    },
-    {
-      "id": "cell.set",
-      "params": {
-        "cell": "D38",
-        "input": "=TRIM(W20)+35",
-        "sheet": "Bob's"
-      }
-    },
-    {
-      "id": "cell.set",
-      "params": {
-        "cell": "C12",
-        "input": "771",
-        "sheet": "AB12"
-      }
-    },
-    {
-      "id": "home.deleteRows",
-      "params": {
-        "rows": "41:42",
-        "sheet": "Bob's"
-      }
-    },
-    {
-      "id": "home.deleteColumns",
-      "params": {
-        "cols": "AA:AA",
+        "cell": "AA107",
+        "input": "592",
         "sheet": "Ref"
       }
     },
     {
-      "id": "cell.set",
+      "id": "home.fontSize",
       "params": {
-        "cell": "H16",
-        "input": "=COUNTA(A36:C41)",
-        "sheet": "Totals"
+        "range": "F3:F5",
+        "sheet": "Sheet1",
+        "size": 24
       }
     },
     {
-      "id": "cell.set",
+      "id": "home.decreaseFontSize",
       "params": {
-        "cell": "I8",
-        "input": "-166.27",
-        "sheet": "Notes"
+        "range": "H3:K7",
+        "sheet": "Notes",
+        "size": 14
       }
     },
     {
-      "id": "cell.set",
+      "id": "home.decreaseFontSize",
       "params": {
-        "cell": "F18",
-        "input": "=SUMIF(G17:H22,\">5\")+64",
-        "sheet": "AB12"
-      }
-    },
-    {
-      "id": "cell.set",
-      "params": {
-        "cell": "D40",
-        "input": "apple",
-        "sheet": "Ref"
-      }
-    },
-    {
-      "id": "home.borders",
-      "params": {
-        "preset": "left",
-        "range": "G23:J28",
-        "sheet": "Ref"
-      }
-    },
-    {
-      "id": "cell.set",
-      "params": {
-        "cell": "F12",
-        "input": "=ROUNDDOWN(H14/7,1)",
-        "sheet": "Totals"
-      }
-    },
-    {
-      "id": "home.fontColor",
-      "params": {
-        "color": "auto",
-        "range": "I9:I32",
-        "sheet": "Notes"
-      }
-    },
-    {
-      "id": "home.deleteColumns",
-      "params": {
-        "cols": "E:E",
-        "sheet": "AB12"
-      }
-    },
-    {
-      "id": "cell.set",
-      "params": {
-        "cell": "A34",
-        "input": "=IF($F$12>G1,$C$19,\"\")",
-        "sheet": "Totals"
-      }
-    },
-    {
-      "id": "cell.set",
-      "params": {
-        "cell": "F34",
-        "input": "381.58",
-        "sheet": "AB12"
+        "range": "Z103:AD117",
+        "sheet": "Ref",
+        "size": 12
       }
     },
     {
       "id": "home.bold",
       "params": {
         "on": false,
-        "range": "I30:K33",
+        "range": "D21:E28",
+        "sheet": "Notes"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "I41",
+        "input": "-143",
+        "sheet": "Notes"
+      }
+    },
+    {
+      "id": "home.fontColor",
+      "params": {
+        "color": "#C00000",
+        "range": "E198:E200",
         "sheet": "AB12"
       }
     },
     {
-      "id": "cell.set",
+      "id": "home.insertRows",
       "params": {
-        "cell": "D39",
-        "input": "x y z",
-        "sheet": "Bob's"
-      }
-    },
-    {
-      "id": "home.alignCenter",
-      "params": {
-        "on": true,
-        "range": "C40:F42",
-        "sheet": "Ref"
-      }
-    },
-    {
-      "id": "home.borders",
-      "params": {
-        "preset": "bottom",
-        "range": "E40:G45",
-        "sheet": "Bob's",
-        "style": "hair"
-      }
-    },
-    {
-      "id": "edit.clearContents",
-      "params": {
-        "range": "H33:H39",
-        "sheet": "Ref"
-      }
-    },
-    {
-      "id": "edit.clearContents",
-      "params": {
-        "range": "D41:F42",
-        "sheet": "Bob's"
-      }
-    },
-    {
-      "id": "cell.set",
-      "params": {
-        "cell": "D38",
-        "input": "-739",
-        "sheet": "Bob's"
-      }
-    },
-    {
-      "id": "cell.set",
-      "params": {
-        "cell": "C38",
-        "input": "87%",
-        "sheet": "Ref"
-      }
-    },
-    {
-      "id": "home.fillColor",
-      "params": {
-        "color": {
-          "theme": 5,
-          "tint": 0.4
-        },
-        "range": "A33",
-        "sheet": "Totals"
-      }
-    },
-    {
-      "id": "home.deleteColumns",
-      "params": {
-        "cols": "D:D",
-        "sheet": "Bob's"
-      }
-    },
-    {
-      "id": "home.fontName",
-      "params": {
-        "name": "Arial",
-        "range": "I200:L200",
+        "rows": "42:43",
         "sheet": "Notes"
       }
     },
     {
       "id": "cell.set",
       "params": {
-        "cell": "O40",
-        "input": "395",
+        "cell": "H39",
+        "input": "266.22",
         "sheet": "Notes"
-      }
-    },
-    {
-      "id": "cell.set",
-      "params": {
-        "cell": "R184",
-        "input": "369",
-        "sheet": "Bob's"
-      }
-    },
-    {
-      "id": "cell.set",
-      "params": {
-        "cell": "D40",
-        "input": "=IFERROR(1/E38,0)",
-        "sheet": "Bob's"
-      }
-    },
-    {
-      "id": "home.borders",
-      "params": {
-        "preset": "left",
-        "range": "N40:O40",
-        "sheet": "Notes",
-        "style": "hair"
-      }
-    },
-    {
-      "id": "cell.set",
-      "params": {
-        "cell": "F15",
-        "input": "1st",
-        "sheet": "Totals"
-      }
-    },
-    {
-      "id": "cell.set",
-      "params": {
-        "cell": "G16",
-        "input": "-143",
-        "sheet": "Totals"
       }
     },
     {
       "id": "home.borders",
       "params": {
         "color": "#00B050",
-        "preset": "thickOutside",
-        "range": "A14:D19",
-        "sheet": "Ref",
-        "style": "hair"
+        "preset": "top",
+        "range": "W94:Y98",
+        "sheet": "AB12"
       }
     },
     {
-      "id": "cell.set",
+      "id": "home.italic",
       "params": {
-        "cell": "G16",
-        "input": "=TEXT(-8,\"0%\")",
-        "sheet": "Totals"
-      }
-    },
-    {
-      "id": "cell.set",
-      "params": {
-        "cell": "M44",
-        "input": "a\"quote",
+        "on": false,
+        "range": "I:J",
         "sheet": "Notes"
       }
     },
     {
-      "id": "home.deleteRows",
+      "id": "home.borders",
       "params": {
-        "rows": "131:131",
+        "preset": "top",
+        "range": "H39:J42",
+        "sheet": "Notes"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "J35",
+        "input": "=RIGHT(\"  Mixed Case \",4)",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "AB108",
+        "input": "=RANDBETWEEN(1,6)",
+        "sheet": "Ref"
+      }
+    },
+    {
+      "id": "home.underline",
+      "params": {
+        "on": true,
+        "range": "J41:L48",
+        "sheet": "Notes",
+        "style": "singleAccounting"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "AA120",
+        "input": "2026-03-04 08:15",
         "sheet": "AB12"
       }
     },
     {
       "id": "sheet.rename",
       "params": {
-        "name": "Summary",
-        "sheet": "Totals"
+        "name": "Q1 Plan",
+        "sheet": "AB12"
+      }
+    },
+    {
+      "id": "home.alignTop",
+      "params": {
+        "range": "I41:L43",
+        "sheet": "Notes"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "C195",
+        "input": "FALSE",
+        "sheet": "Notes"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "I37",
+        "input": "=IFERROR(1/I37,0)",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "AA110",
+        "input": "2026-02-22",
+        "sheet": "Ref"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "I41",
+        "input": "167.34",
+        "sheet": "Notes"
+      }
+    },
+    {
+      "id": "home.insertColumns",
+      "params": {
+        "cols": "AB:AB",
+        "sheet": "Ref"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "J25",
+        "input": "155",
+        "sheet": "Bob's"
+      }
+    },
+    {
+      "id": "home.increaseFontSize",
+      "params": {
+        "range": "I23:J30",
+        "sheet": "Bob's",
+        "size": 11
+      }
+    },
+    {
+      "id": "home.borders",
+      "params": {
+        "preset": "insideVertical",
+        "range": "D196:F200",
+        "sheet": "Notes"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "K35",
+        "input": "=AVERAGEIF(G23:J28,10)",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "I33",
+        "input": "-196",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "edit.clearContents",
+      "params": {
+        "range": "J26:S33",
+        "sheet": "Bob's"
       }
     },
     {
       "id": "home.alignLeft",
       "params": {
         "on": true,
-        "range": "G10:G31",
-        "sheet": "Summary"
+        "range": "L36:N36",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "home.insertColumns",
+      "params": {
+        "cols": "AB:AB",
+        "sheet": "Ref"
+      }
+    },
+    {
+      "id": "home.italic",
+      "params": {
+        "on": true,
+        "range": "Z120",
+        "sheet": "Q1 Plan"
       }
     },
     {
       "id": "cell.set",
       "params": {
-        "cell": "E34",
-        "input": "822",
+        "cell": "G1",
+        "input": "=NOT(56=0)+'Sheet1'!I35",
+        "sheet": "Ref"
+      }
+    },
+    {
+      "id": "home.deleteRows",
+      "params": {
+        "rows": "33:34",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "home.insertSheet",
+      "params": {
+        "before": 3,
+        "name": "A B"
+      }
+    },
+    {
+      "id": "home.formatCells",
+      "params": {
+        "range": "J35:K37",
+        "sheet": "Bob's",
+        "style": {
+          "font": {
+            "strike": true
+          }
+        }
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "H39",
+        "input": "North",
+        "sheet": "Notes"
+      }
+    },
+    {
+      "id": "home.alignBottom",
+      "params": {
+        "range": "AB103:AD122",
+        "sheet": "Ref"
+      }
+    },
+    {
+      "id": "home.alignRight",
+      "params": {
+        "on": true,
+        "range": "G6",
         "sheet": "Bob's"
       }
     },
     {
-      "id": "home.fontColor",
+      "id": "cell.set",
       "params": {
-        "color": {
-          "theme": 4,
-          "tint": -0.25
-        },
-        "range": "C7:C13",
-        "sheet": "AB12"
+        "cell": "A39",
+        "input": "1st",
+        "sheet": "Bob's"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "I21",
+        "input": "=ROUNDUP(I20/7,2)",
+        "sheet": "A B"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "J24",
+        "input": "48.79",
+        "sheet": "Bob's"
+      }
+    },
+    {
+      "id": "home.bold",
+      "params": {
+        "on": true,
+        "range": "K24",
+        "sheet": "Bob's"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "J19",
+        "input": "-537",
+        "sheet": "A B"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "H39",
+        "input": "=POWER(Ref!AC104,3)",
+        "sheet": "Notes"
+      }
+    },
+    {
+      "id": "home.insertColumns",
+      "params": {
+        "cols": "J:K",
+        "sheet": "A B"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "D148",
+        "input": "=ROUNDDOWN('Bob''s'!I24/7,1)",
+        "sheet": "Notes"
+      }
+    },
+    {
+      "id": "home.bold",
+      "params": {
+        "on": true,
+        "range": "H18:J25",
+        "sheet": "Notes"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "Z120",
+        "input": "=IFERROR(XLOOKUP(Ref!AB111,'A B'!J15:J25,'A B'!K15:K25,\"none\"),-1)",
+        "sheet": "Q1 Plan"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "AC108",
+        "input": "#N/A",
+        "sheet": "Ref"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "AC189",
+        "input": "-778",
+        "sheet": "Ref"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "AA119",
+        "input": "=COUNTIF(AA121:AD128,\"<=0\")",
+        "sheet": "Q1 Plan"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "J35",
+        "input": "=MIN(J35:M38)",
+        "sheet": "Sheet1"
       }
     }
   ]

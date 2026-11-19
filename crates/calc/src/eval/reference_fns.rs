@@ -100,7 +100,12 @@ impl<'h> Evaluator<'h> {
             Err(e) => return err(e),
         };
         let two = args.len() == 2;
-        let num = |v: &Option<Value>| v.as_ref().map_or(Ok(0.0), |v| v.to_number()).map(|n| n.trunc() as i64);
+        let index_year = self.host.coercion_year();
+        let num = |v: &Option<Value>| {
+            v.as_ref()
+                .map_or(Ok(0.0), |v| v.to_number_in_with_year(gridcraft_core::DateSystem::D1900, &mut || index_year.get()))
+                .map(|n| n.trunc() as i64)
+        };
         // Arrays of positions pick a value for each: INDEX(A1:C10,{1;2},{1,3}) is 2×2.
         if let (Some(Value::Array(_)), _) | (_, Some(Value::Array(_))) = (&rows, &cols) {
             let as_array = |v: &Option<Value>| match v {
@@ -203,7 +208,10 @@ impl<'h> Evaluator<'h> {
             let horizontal = l.range.height() == 1 && l.range.width() > 1;
             let same_len = if vertical { r.range.height() == l.range.height() } else { r.range.width() == l.range.width() };
             if !matches!(key, Value::Array(_)) && (vertical || horizontal) && same_len {
-                let mut xargs = vec![Arg { value: key, from_ref: false }, Arg { value: self.area_value(&l), from_ref: true }];
+                let mut xargs = vec![
+                    Arg { value: key, from_ref: false, coercion_year: None },
+                    Arg { value: self.area_value(&l), from_ref: true, coercion_year: None },
+                ];
                 // An empty match_mode before a given search_mode is the default (0), not the end.
                 let given = |i: usize| args.get(i).is_some_and(|e| !matches!(e, Expr::Missing));
                 let last = if given(5) {
@@ -215,10 +223,10 @@ impl<'h> Evaluator<'h> {
                 };
                 for i in 4..=last {
                     match args.get(i) {
-                        Some(Expr::Missing) | None => xargs.push(Arg { value: Value::Number(0.0), from_ref: false }),
+                        Some(Expr::Missing) | None => xargs.push(Arg { value: Value::Number(0.0), from_ref: false, coercion_year: None }),
                         Some(e) => {
                             let value = self.value(e);
-                            xargs.push(Arg { value, from_ref: false });
+                            xargs.push(Arg { value, from_ref: false, coercion_year: None });
                         }
                     }
                 }
@@ -402,7 +410,8 @@ impl<'h> Evaluator<'h> {
             }
         }
         if let Some(k) = k {
-            return Ev::V(gridcraft_functions::aggregate_values_k(func, &values, &k));
+            let year = self.host.coercion_year();
+            return Ev::V(gridcraft_functions::aggregate_values_k_with_year(func, &values, &k, &year));
         }
         Ev::V(gridcraft_functions::aggregate_values(func, &values))
     }

@@ -9,6 +9,8 @@ description = "GridCraft engine: sessions, commands, history, clipboard, fill, s
 workspace = true
 
 [dependencies]
+collab-core = { path = "../../../ShareCraft/crates/collab-core" }
+collab-live = { path = "../../../ShareCraft/crates/collab-live" }
 gridcraft-core = { workspace = true }
 gridcraft-numfmt = { workspace = true }
 gridcraft-formula = { workspace = true }
@@ -26,6 +28,7 @@ gridcraft-pdf = { workspace = true }
 gridcraft-math = { workspace = true }
 image = { workspace = true }
 sha2 = { workspace = true }
+protocol = { path = "../../../ShareCraft/crates/protocol" }
 
 [dev-dependencies]
 gridcraft-xlsx = { workspace = true, features = ["test-support"] }

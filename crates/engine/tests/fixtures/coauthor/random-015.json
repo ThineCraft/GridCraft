@@ -3,9 +3,9 @@
   "seed": 15,
   "steps": [
     {
-      "id": "home.fontName",
+      "id": "home.borders",
       "params": {
-        "name": "Georgia",
+        "preset": "insideHorizontal",
         "range": "D20:E27",
         "sheet": "Sheet1"
       }
@@ -19,33 +19,40 @@
       }
     },
     {
+      "id": "home.numberFormat",
+      "params": {
+        "format": "Percentage",
+        "range": "AC164:AD170",
+        "sheet": "Sheet1"
+      }
+    },
+    {
       "id": "edit.clearContents",
       "params": {
-        "range": "A2:D4",
-        "sheet": "Sheet1"
-      }
-    },
-    {
-      "id": "home.borders",
-      "params": {
-        "preset": "thickBottom",
-        "range": "J191:L198",
-        "sheet": "Sheet1",
-        "style": "medium"
-      }
-    },
-    {
-      "id": "cell.set",
-      "params": {
-        "cell": "AC166",
-        "input": "=INT(F74)",
+        "range": "AB167:AD171",
         "sheet": "Sheet1"
       }
     },
     {
       "id": "cell.set",
       "params": {
-        "cell": "AD166",
+        "cell": "AD167",
+        "input": "477",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "F74",
+        "input": "ÄÖÜ ß",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "G75",
         "input": "x y z",
         "sheet": "Sheet1"
       }
@@ -53,61 +60,55 @@
     {
       "id": "home.insertRows",
       "params": {
-        "rows": "166:167",
+        "rows": "75:76",
         "sheet": "Sheet1"
       }
     },
     {
-      "id": "home.fontSize",
+      "id": "home.fillColor",
       "params": {
-        "range": "G5:I10",
-        "sheet": "Sheet1",
-        "size": 12
-      }
-    },
-    {
-      "id": "home.insertColumns",
-      "params": {
-        "cols": "AD:AE",
-        "sheet": "Sheet1"
-      }
-    },
-    {
-      "id": "home.insertColumns",
-      "params": {
-        "cols": "AB:AC",
+        "color": "#C6EFCE",
+        "range": "G73:H80",
         "sheet": "Sheet1"
       }
     },
     {
       "id": "cell.set",
       "params": {
-        "cell": "AC165",
-        "input": "-237",
-        "sheet": "Sheet1"
-      }
-    },
-    {
-      "id": "edit.clearContents",
-      "params": {
-        "range": "AB167:AD170",
-        "sheet": "Sheet1"
-      }
-    },
-    {
-      "id": "home.borders",
-      "params": {
-        "color": "#00B050",
-        "preset": "insideHorizontal",
-        "range": "AB164:AD167",
+        "cell": "H36",
+        "input": "=LEN(D19)",
         "sheet": "Sheet1"
       }
     },
     {
       "id": "cell.set",
       "params": {
-        "cell": "G7",
-        "input": "-420.10",
+        "cell": "F76",
+        "input": "750",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "E77",
+        "input": "254.15",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "home.fontColor",
+      "params": {
+        "color": "#1F4E79",
+        "range": "AD166:AD172",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "home.numberFormat",
+      "params": {
+        "format": "Fraction",
+        "range": "G7:I11",
         "sheet": "Sheet1"
       }
     },
@@ -120,24 +121,46 @@
       }
     },
     {
-      "id": "home.alignTop",
+      "id": "data.filterSet",
       "params": {
-        "range": "AC163:AD169",
+        "range": "Y191:AA200",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "data.reapply",
+      "params": {
+        "range": "Y191:AA200",
         "sheet": "Sheet1"
       }
     },
     {
       "id": "cell.set",
       "params": {
-        "cell": "P18",
-        "input": "=CONCAT(AD167,\"-\",69)",
+        "cell": "J27",
+        "input": "North",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "home.increaseFontSize",
+      "params": {
+        "range": "B22:E24",
+        "sheet": "Sheet1",
+        "size": 14
+      }
+    },
+    {
+      "id": "data.filterRemove",
+      "params": {
+        "range": "Y191:AA200",
         "sheet": "Sheet1"
       }
     },
     {
       "id": "cell.set",
       "params": {
-        "cell": "AD164",
+        "cell": "G74",
         "input": "ÄÖÜ ß",
         "sheet": "Sheet1"
       }
@@ -145,318 +168,279 @@
     {
       "id": "cell.set",
       "params": {
-        "cell": "AC165",
-        "input": "TRUE",
+        "cell": "A4",
+        "input": "=IF(A35>F75,G76,$I$26)+D72",
         "sheet": "Sheet1"
       }
     },
     {
       "id": "cell.set",
       "params": {
-        "cell": "F5",
-        "input": "-829",
-        "sheet": "Sheet1"
-      }
-    },
-    {
-      "id": "cell.set",
-      "params": {
-        "cell": "A38",
-        "input": "=MAX(B5:D10)+D72",
-        "sheet": "Sheet1"
-      }
-    },
-    {
-      "id": "cell.set",
-      "params": {
-        "cell": "O17",
+        "cell": "D76",
         "input": "1st",
         "sheet": "Sheet1"
       }
     },
     {
-      "id": "home.borders",
+      "id": "home.decreaseFontSize",
       "params": {
-        "color": "#FF0000",
-        "preset": "thickBottom",
-        "range": "G5:G7",
+        "range": "F74:G80",
         "sheet": "Sheet1",
-        "style": "medium"
+        "size": 12
       }
     },
     {
-      "id": "cell.set",
+      "id": "home.insertColumns",
       "params": {
-        "cell": "F5",
-        "input": 7,
+        "cols": "AB:AC",
         "sheet": "Sheet1"
       }
     },
     {
       "id": "cell.set",
       "params": {
-        "cell": "AD165",
-        "input": "=TEXT($O$18,\"#,##0\")+-8",
+        "cell": "F76",
+        "input": "=MOD(91,3)",
         "sheet": "Sheet1"
       }
     },
     {
       "id": "cell.set",
       "params": {
-        "cell": "G7",
-        "input": "#N/A",
-        "sheet": "Sheet1"
-      }
-    },
-    {
-      "id": "home.italic",
-      "params": {
-        "on": true,
-        "range": "G3:J10",
-        "sheet": "Sheet1"
-      }
-    },
-    {
-      "id": "home.numberFormat",
-      "params": {
-        "format": "Fraction",
-        "range": "G37:J40",
+        "cell": "J26",
+        "input": "-87",
         "sheet": "Sheet1"
       }
     },
     {
       "id": "cell.set",
       "params": {
-        "cell": "B36",
-        "input": "apple",
-        "sheet": "Sheet1"
-      }
-    },
-    {
-      "id": "home.alignMiddle",
-      "params": {
-        "range": "G8:I14",
-        "sheet": "Sheet1"
-      }
-    },
-    {
-      "id": "cell.set",
-      "params": {
-        "cell": "B35",
-        "input": "-67.39",
+        "cell": "E33",
+        "input": "-447",
         "sheet": "Sheet1"
       }
     },
     {
       "id": "home.insertRows",
       "params": {
-        "rows": "22:24",
+        "rows": "36:36",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "home.underline",
+      "params": {
+        "on": true,
+        "range": "F74:H79",
+        "sheet": "Sheet1",
+        "style": "singleAccounting"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "I25",
+        "input": "602",
         "sheet": "Sheet1"
       }
     },
     {
       "id": "cell.set",
       "params": {
-        "cell": "H8",
-        "input": "south",
-        "sheet": "Sheet1"
-      }
-    },
-    {
-      "id": "home.numberFormat",
-      "params": {
-        "format": "Scientific",
-        "range": "O18:P23",
-        "sheet": "Sheet1"
-      }
-    },
-    {
-      "id": "cell.set",
-      "params": {
-        "cell": "A3",
-        "input": "TRUE",
-        "sheet": "Sheet1"
-      }
-    },
-    {
-      "id": "edit.clearContents",
-      "params": {
-        "range": "AB163:AB167",
-        "sheet": "Sheet1"
-      }
-    },
-    {
-      "id": "cell.set",
-      "params": {
-        "cell": "I27",
-        "input": "467.66",
-        "sheet": "Sheet1"
-      }
-    },
-    {
-      "id": "edit.clearContents",
-      "params": {
-        "range": "J26:M33",
-        "sheet": "Sheet1"
-      }
-    },
-    {
-      "id": "cell.set",
-      "params": {
-        "cell": "H36",
-        "input": "74",
-        "sheet": "Sheet1"
-      }
-    },
-    {
-      "id": "cell.set",
-      "params": {
-        "cell": "H36",
-        "input": "1st",
-        "sheet": "Sheet1"
-      }
-    },
-    {
-      "id": "edit.clearContents",
-      "params": {
-        "range": "C37:C43",
+        "cell": "A11",
+        "input": "131%",
         "sheet": "Sheet1"
       }
     },
     {
       "id": "home.borders",
       "params": {
-        "color": "#FF0000",
-        "preset": "insideHorizontal",
-        "range": "I35:L37",
+        "preset": "thickOutside",
+        "range": "H73:H78",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "home.bold",
+      "params": {
+        "on": false,
+        "range": "H23:I24",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "home.borders",
+      "params": {
+        "preset": "left",
+        "range": "D33:D39",
         "sheet": "Sheet1",
         "style": "thick"
       }
     },
     {
-      "id": "home.deleteColumns",
+      "id": "home.insertColumns",
       "params": {
-        "cols": "B:C",
+        "cols": "E:F",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "B142",
+        "input": "2026-11-27",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "home.fontColor",
+      "params": {
+        "color": "#1F4E79",
+        "range": "B12:G45",
         "sheet": "Sheet1"
       }
     },
     {
       "id": "home.numberFormat",
       "params": {
-        "format": "Long Date",
-        "range": "I9:Q35",
+        "format": "Currency",
+        "range": "B:C",
         "sheet": "Sheet1"
       }
     },
     {
       "id": "cell.set",
       "params": {
-        "cell": "A38",
-        "input": "TRUE",
+        "cell": "K25",
+        "input": "=CONCAT(H36,\"-\",89)",
         "sheet": "Sheet1"
       }
     },
     {
-      "id": "home.fontName",
-      "params": {
-        "name": "Calibri",
-        "range": "AD165:AD170",
-        "sheet": "Sheet1"
-      }
-    },
-    {
-      "id": "home.fontSize",
-      "params": {
-        "range": "E3:F10",
-        "sheet": "Sheet1",
-        "size": 10
-      }
-    },
-    {
-      "id": "home.wrapText",
+      "id": "home.underline",
       "params": {
         "on": true,
-        "range": "AD165:AD185",
+        "range": "J14:L15",
+        "sheet": "Sheet1",
+        "style": "singleAccounting"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "W173",
+        "input": "=LOWER(\"abc\")",
         "sheet": "Sheet1"
       }
     },
     {
       "id": "cell.set",
       "params": {
-        "cell": "I35",
-        "input": "=COUNTIF(AC163:AD164,10)",
+        "cell": "B27",
+        "input": "=SUMIF(H75:J78,\"<>\")",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "home.alignLeft",
+      "params": {
+        "on": true,
+        "range": "D32:G57",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "U173",
+        "input": "=SUM(AC163:AD168,E76)+86",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "home.numberFormat",
+      "params": {
+        "format": "Percentage",
+        "range": "H24:I27",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "B5",
+        "input": "=MID($D$79,3,0)",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "A22",
+        "input": "0.1",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "A6",
+        "input": "x y z",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "L27",
+        "input": "-213",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "home.fontColor",
+      "params": {
+        "color": "auto",
+        "range": "G77:O107",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "Y125",
+        "input": "470.02",
         "sheet": "Sheet1"
       }
     },
     {
       "id": "edit.clearContents",
       "params": {
-        "range": "H5:H12",
+        "range": "V174:X180",
         "sheet": "Sheet1"
       }
     },
     {
-      "id": "home.deleteRows",
+      "id": "home.fontColor",
       "params": {
-        "rows": "165:165",
-        "sheet": "Sheet1"
-      }
-    },
-    {
-      "id": "cell.set",
-      "params": {
-        "cell": "I38",
-        "input": "9.99999999999999E+307",
+        "color": "auto",
+        "range": "D29:D32",
         "sheet": "Sheet1"
       }
     },
     {
       "id": "cell.set",
       "params": {
-        "cell": "A1",
-        "input": "=OR(Y125>0,O18<50)",
-        "sheet": "Sheet1"
-      }
-    },
-    {
-      "id": "home.numberFormat",
-      "params": {
-        "code": "0.000E+00",
-        "range": "E26:E29",
-        "sheet": "Sheet1"
-      }
-    },
-    {
-      "id": "home.fillColor",
-      "params": {
-        "color": {
-          "theme": 5,
-          "tint": 0.4
-        },
-        "range": "AC167:AC172",
+        "cell": "K29",
+        "input": "=OR(80>0,B4<50)",
         "sheet": "Sheet1"
       }
     },
     {
       "id": "cell.set",
       "params": {
-        "cell": "AD166",
-        "input": "North",
-        "sheet": "Sheet1"
-      }
-    },
-    {
-      "id": "home.deleteRows",
-      "params": {
-        "rows": "16:16",
-        "sheet": "Sheet1"
-      }
-    },
-    {
-      "id": "cell.set",
-      "params": {
-        "cell": "H37",
-        "input": "63.36",
+        "cell": "C22",
+        "input": "=NOT($U$171=0)",
         "sheet": "Sheet1"
       }
     },
@@ -464,15 +448,33 @@
       "id": "cell.set",
       "params": {
         "cell": "Z140",
-        "input": "=PRODUCT(H7:J14,D27)",
+        "input": "=PRODUCT(I36:K43,D27)",
         "sheet": "Sheet1"
       }
     },
     {
-      "id": "edit.clearContents",
+      "id": "home.numberFormat",
       "params": {
-        "range": "I36:I41",
+        "format": "Time",
+        "range": "AA141:AD155",
         "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "cell.set",
+      "params": {
+        "cell": "V173",
+        "input": "ÄÖÜ ß",
+        "sheet": "Sheet1"
+      }
+    },
+    {
+      "id": "home.doubleUnderline",
+      "params": {
+        "on": true,
+        "range": "B20:C26",
+        "sheet": "Sheet1",
+        "style": "double"
       }
     }
   ]

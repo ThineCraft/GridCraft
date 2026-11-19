@@ -226,7 +226,7 @@ pub(super) fn quartile_exc(v: Vec<f64>, q: f64) -> R<f64> {
 }
 
 pub(super) fn arg_nums(a: &[Arg], i: usize) -> R<Vec<f64>> {
-    array_numbers(&arg(a, i)?.value)
+    array_numbers(arg(a, i)?)
 }
 
 /// Pairs of numbers at matching positions of two arrays (pairs with a non-number skipped).
@@ -325,7 +325,17 @@ pub(super) fn count_impl(a: &[Arg]) -> f64 {
             Value::Number(_) => c += 1,
             _ if x.from_ref => {}
             Value::Bool(_) => c += 1,
-            Value::Text(t) if gridcraft_core::parse::parse_number_text(t).is_some() => c += 1,
+            Value::Text(t)
+                if x.coercion_year
+                    .as_ref()
+                    .map_or_else(
+                        || gridcraft_core::parse::parse_number_text(t),
+                        |year| gridcraft_core::parse::parse_number_text_in_with_year(t, gridcraft_core::DateSystem::D1900, || year.get()),
+                    )
+                    .is_some() =>
+            {
+                c += 1;
+            }
             _ => {}
         }
     }
@@ -555,17 +565,27 @@ pub(super) fn standardize(a: &[Arg], _: C) -> R<Value> {
 /// [`aggregate_values_k`] (they give `#VALUE!` here). Values that are not numbers are ignored
 /// (COUNTA counts non-empty values); the first error value present is returned.
 pub fn aggregate_values(function_num: u32, values: &[Value]) -> Value {
-    crate::util::finish(aggregate_impl(function_num, values, None))
+    crate::util::finish(aggregate_impl(function_num, values, None, None))
 }
 
 /// AGGREGATE codes 14 = LARGE, 15 = SMALL, 16 = PERCENTILE.INC, 17 = QUARTILE.INC,
 /// 18 = PERCENTILE.EXC, 19 = QUARTILE.EXC with their `k` argument; codes 1–13 delegate to
 /// [`aggregate_values`].
 pub fn aggregate_values_k(function_num: u32, values: &[Value], k: &Value) -> Value {
-    crate::util::finish(aggregate_impl(function_num, values, Some(k)))
+    crate::util::finish(aggregate_impl(function_num, values, Some(k), None))
 }
 
-fn aggregate_impl(function_num: u32, values: &[Value], k: Option<&Value>) -> R<Value> {
+/// [`aggregate_values_k`] with an explicit year for yearless date text coercion.
+pub fn aggregate_values_k_in_year(function_num: u32, values: &[Value], k: &Value, year: i64) -> Value {
+    aggregate_values_k_with_year(function_num, values, k, &crate::CoercionYear::new(year))
+}
+
+/// [`aggregate_values_k`] with a lazy year provider for yearless date text coercion.
+pub fn aggregate_values_k_with_year(function_num: u32, values: &[Value], k: &Value, year: &crate::CoercionYear) -> Value {
+    crate::util::finish(aggregate_impl(function_num, values, Some(k), Some(year.clone())))
+}
+
+fn aggregate_impl(function_num: u32, values: &[Value], k: Option<&Value>, coercion_year: Option<crate::CoercionYear>) -> R<Value> {
     let code = if (101..=111).contains(&function_num) { function_num - 100 } else { function_num };
     let mut xs = Vec::new();
     let mut nonempty = 0usize;
@@ -587,7 +607,7 @@ fn aggregate_impl(function_num: u32, values: &[Value], k: Option<&Value>) -> R<V
         }
     }
     let k = match (code, k) {
-        (14..=19, Some(k)) => k.scalar().to_number()?,
+        (14..=19, Some(k)) => crate::util::number(&k.scalar(), coercion_year.as_ref())?,
         (14..=19, None) => return Err(CellError::Value),
         _ => 0.0,
     };

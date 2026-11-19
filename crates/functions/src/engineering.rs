@@ -125,7 +125,7 @@ fn dec_to(a: &[Arg], to: u32) -> R<Value> {
     if matches!(v, Value::Bool(_)) {
         return Err(CellError::Value);
     }
-    let n = v.to_number()?.trunc();
+    let n = crate::util::number(&v, a.first().and_then(|arg| arg.coercion_year.as_ref()))?.trunc();
     if n.abs() > 1e15 {
         return Err(CellError::Num);
     }

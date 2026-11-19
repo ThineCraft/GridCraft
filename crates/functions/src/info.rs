@@ -43,7 +43,7 @@ fn parity(a: &[Arg]) -> R<f64> {
     match first(a) {
         Value::Bool(_) => Err(CellError::Value),
         v => {
-            let n = v.to_number()?;
+            let n = crate::util::number(&v, a.first().and_then(|arg| arg.coercion_year.as_ref()))?;
             if n.abs() > 9.007_199_254_740_992e15 {
                 return Err(CellError::Num);
             }
@@ -91,7 +91,7 @@ fn na(_a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
 fn n_fn(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     // N(range) reads the range's first cell, but a computed array (N(A1:A3>0), N({...})) is
     // converted element by element, so N can stand in for `--` inside SUMPRODUCT.
-    if let Some(Arg { value: Value::Array(arr), from_ref: false }) = a.first() {
+    if let Some(Arg { value: Value::Array(arr), from_ref: false, .. }) = a.first() {
         let data = arr.data.iter().map(|v| n_of(v.clone()).unwrap_or_else(Value::Error)).collect();
         return Array::new(arr.rows, arr.cols, data).map(Value::from).ok_or(CellError::Calc);
     }
@@ -287,8 +287,9 @@ fn switch(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
 }
 
 fn choose(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
+    let year = a.first().and_then(|arg| arg.coercion_year.as_ref());
     drive(a, &|i| i == 0, &|v| {
-        let idx = v.first().cloned().unwrap_or(Value::Empty).to_number()?.trunc();
+        let idx = crate::util::number(&v.first().cloned().unwrap_or(Value::Empty), year)?.trunc();
         if idx < 1.0 || idx >= v.len() as f64 {
             return Err(CellError::Value);
         }

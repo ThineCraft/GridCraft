@@ -293,6 +293,10 @@ fn paths_param(v: &Json, paths: &BTreeSet<String>, name: &str) -> Result<BTreeSe
 }
 
 fn start(s: &mut Session, p: &Json, only_listed: bool) -> Result<Json> {
+    // Its lock would hold back the other people's live changes on this client only.
+    if s.coauthoring {
+        return Err(EngineError::Other("Macros can't be debugged while others are editing this workbook.".into()));
+    }
     if let Some(d) = &s.macro_debug {
         return Err(EngineError::Other(format!("Macro '{}' is being debugged. Stop it first.", d.name)));
     }

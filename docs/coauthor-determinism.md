@@ -8,18 +8,20 @@ is one of:
 
 - **Safe**: it cannot reach those outputs, with the reason.
 - **Fixed in G1**: fixed now, with a test and a `fix:` commit.
-- **Left for G3**: not fixed now, with the reason and what would make it bite. G3 is the plan that
-  makes the shared commands target-explicit and adds rollback and re-apply.
+- **Fixed in G3**: fixed for the first live command set, with the exact regression tests.
+- **Open after G3**: outside the first live command set or still requiring a common implementation
+  across platforms.
 
-"Shared commands" are the Stage 2 candidates the replay drives (`crates/engine/tests/support/sequences.rs`,
-`SHARED_COMMANDS`): cell content, number format, font, fill, borders, alignment, row and column
-insert and delete, and sheet add, rename and delete. Set and clear filter are candidates too, but
-the replay does not drive them: both read the active sheet or selection even with explicit
-parameters (`crates/engine/tests/fixtures/coauthor/selection_readers.md`), so nothing here
-proves agreement on filters.
+"Shared commands" are the first Stage 2 set in `gridcraft/1`: cell content, number format, font,
+fill, borders, alignment, filters, row and column insert and delete, and sheet add, rename and
+delete. They carry explicit identity targets before they enter the live log. The in-process G2
+adapter preserves each person's view and re-runs pending work from an agreed snapshot. This is
+engine infrastructure only; G4 and G5 still have to add checkpoints, the host bridge and the
+user-facing collaboration experience.
 
-Audited at branch `coauthor-proofs` after `43d635b0`, November 2026. The long run was re-run at
-`f92a4178` (see Long run), after later engine and fingerprint changes.
+Audited at branch `coauthor-proofs` after `43d635b0`, November 2026. G3 findings were updated on
+branch `coauthor-g3` on 19 November 2026. The G1 long run was re-run at `f92a4178` (see Long run),
+after later engine and fingerprint changes.
 
 ## Evidence
 
@@ -44,6 +46,25 @@ Audited at branch `coauthor-proofs` after `43d635b0`, November 2026. The long ru
 | Overlapping dynamic arrays in one calculation pass: a read of the shared cells took the first (one cell) or last (a range) array in the pass's spill map, in `FxHashMap` order. That order depends on the platform's table layout and on the map's insertion history. | `calc/src/recalc/pass_host.rs`, `cell_value` (`Cover::Many`) and `range_values` (the `ordered` path) | Both now take the anchor first in row-major order, so the read no longer depends on hash order. Which array is laid out is decided separately by write-back: it walks the dirty cells, and when the first anchor is blocked it shows `#SPILL!` there and lays out the other. So a read in the pass can see a value that a later round replaces. Test `recalc::tests::overlapping_spills_in_a_pass_read_the_first_anchor` (failed before the fix: pair 0 read 200, not 100). Commit `fix: overlapping spills in one pass read the first anchor, not hash order`. Before the fix the wrong value was normally replaced in a later round, because the readers of the blocked area are recalculated. But it could feed a dependent's spill size, and a chain of such rounds stops after 8. |
 
 The clock was already settable (`Calc::fixed_now`); the replay sets it from the sequence.
+
+## Fixed in G3
+
+| Source | G3 behaviour and exact tests |
+| --- | --- |
+| NOW and TODAY | An agreed entry applies its `Stamp.at_ms` to the calculation clock. A locally shown volatile formula asks G2 to re-apply it when the server stamp arrives. Tests: `entry_stamp_controls_now_and_rand`, `volatile_functions_agree_with_fixed_now_and_seed`, and `rollback_rerun_matches_straight_through`. |
+| RAND, RANDBETWEEN and RANDARRAY state | `GridSnapshot` copies the calculator, including its RNG cursor, and an entry's `Stamp.seed` starts the agreed stream. Tests: `entry_stamp_controls_now_and_rand`, `snapshot_restores_rand_state`, and `rollback_rerun_matches_straight_through`. |
+| Dates typed without a year | A live `cell.set` carries `originYear`; parsing uses that year rather than the receiver's wall clock. Filter criteria (`data.filterBy`, `data.clearFilter`, `data.reapply` re-applying a `>3/4` criterion) read the year of the calculation clock, which the entry stamp sets, and count as a stamp read. Tests: `yearless_date_uses_the_sent_year`, `filter_criteria_read_year_less_dates_in_the_stamped_year`, `filter_criteria_without_year_less_dates_read_no_stamp` and `rollback_rerun_matches_straight_through`. |
+| Clock and random state in personal Undo and Redo | A guarded Undo or Redo applies its entry stamp like any other command, so a restored `=NOW()` or `=RAND()` agrees. Tests: `guarded_undo_and_redo_calculate_under_the_entry_stamp`, `pending_guarded_undo_reports_that_it_read_the_stamp` and the Undo and Redo entries in `rollback_rerun_matches_straight_through`. |
+| Rows hidden by a filter | Which rows a filter hides follows from the cells' values, often calculated ones (Top 10 and Above Average average and sort floats), so a 1-ULP maths difference can hide a row on one platform only. Those rows are in the `computed` fingerprint stream, not the `entered` one used for room agreement; rows hidden by hand stay entered content. Test: `rows_hidden_by_a_filter_are_not_entered_content`. Cross-platform agreement on filter visibility itself waits for one maths library (or for the originator to send the hidden rows), G4. |
+| Personal gates | Edit ranges unlocked with a password and the macro debugger's lock are per-client state. Shared applies ignore personal unlocks (a shared change into a password range is refused everywhere), and the debugger does not start on a shared workbook. Tests: `a_locally_unlocked_edit_range_does_not_split_shared_content` and `the_macro_debugger_cannot_lock_a_shared_workbook`. |
+| Commands that read the active sheet, selection or active style | The live wire accepts only explicit targets and explicit resulting values. Filters have idempotent set/remove commands; underline, font-size steps and Format Cells no longer consult the receiver's view in their live form. Tests: `shared_commands_require_explicit_targets`, `filter_commands_ignore_the_receivers_view`, `filter_set_and_remove_are_idempotent`, `underline_with_on_ignores_active_cell`, `font_step_uses_the_sent_size`, `format_cells_validation_uses_each_target_not_active_cell`, and `remote_insert_and_delete_keep_the_local_view`. |
+| Per-person history depth | Shared snapshots and agreement fingerprints exclude personal history. Each person keeps at most 100 actions or 128 MiB, counted from content rather than pointer size or sharing, and no peer assumes the same retained depth. Tests: `snapshot_restores_shared_state_not_personal_view`, `undo_is_personal_and_is_a_new_entry`, and `personal_history_obeys_count_and_byte_budgets`. |
+
+The first shared set deliberately leaves non-shared machine-dependent commands open. Shared
+sheet insertion and deletion are supported, but undoing a sheet add or delete is refused locally
+in a shared session (`sheet_add_undo_is_refused_locally` and
+`sheet_delete_undo_is_refused_locally_without_falling_through_history`); G3 does not serialize a
+whole sheet into an undo entry.
 
 ## Hash maps and sets
 
@@ -119,7 +140,7 @@ already show in the replay.
 | `phonetics`, `seen` (twice) | `write.rs` | Safe | Lookup and first-seen tests. |
 | `used_names`, `used`, `next` (table names) | `sheet_write.rs`, `sheet_write/parts.rs` | Safe | Unique-name lookups in table order. Cells are written from the row-major store, or from a `BTreeSet` when extra cells merge in. |
 | Pivot writer `index`, `taken`, `next_suffix`, `hidden` | `pivot/write.rs` | Safe | Lookups. |
-| `PicturesOut::indices: HashMap<*const CellPicture, u32>` | `richdata.rs` | Left for G3 | Iteration order is safe: the map is keyed by address only to share one rich value between cells that share one picture, and the list is in first-use order. But which cells share an `Arc` depends on how the picture got there (copy versus reload), so the same content can give a different number of rich values in the written file. Cell pictures are not shared commands; if they become one, the writer must share rich values by content. |
+| `PicturesOut::indices: HashMap<*const CellPicture, u32>` | `richdata.rs` | Open after G3 | Iteration order is safe: the map is keyed by address only to share one rich value between cells that share one picture, and the list is in first-use order. But which cells share an `Arc` depends on how the picture got there (copy versus reload), so the same content can give a different number of rich values in the written file. Cell pictures are not shared commands; if they become one, the writer must share rich values by content. |
 | `cache` (picture reuse on read) | `richdata.rs` | Safe | Lookup. |
 | Passthrough `used`, `written`, `ids`, `NameMap`, `SheetIds`, `reachable`, `by_name`, `dropped_ids`, `gone` | `passthrough/write.rs`, `passthrough/rebase.rs` | Safe | Membership and renaming; kept parts are written in their `Vec` order, filtered by these sets. |
 | Passthrough reader `defaults`, `overrides` (content types), `seen`, `local`, `drop` (control shape ids) | `passthrough/read.rs` | Safe | Lookups and membership tests while reading kept parts in the file's own order. |
@@ -132,20 +153,20 @@ already show in the replay.
 
 | Source | Where | Class | Why, and what would make it bite |
 | --- | --- | --- | --- |
-| NOW and TODAY | `functions/src/date.rs` through `Calc::now` | Safe in G1 | `Calc::fixed_now` is set from the sequence. **G3** must give every client the same clock for a command (the originator's time in the command, or the agreed time). |
-| Dates typed without a year (`3/4`, `4-Mar`) | `core/src/parse.rs` `current_year` | Left for G3 | Reads the system clock, not `fixed_now`. Two clients either side of New Year store different dates. The generator avoids such input. Fix: the originator resolves the year and sends the full value, or input parsing takes the calculation clock. |
-| `evaluate` / `evaluate_expr`: system clock and a fixed RNG seed | `calc/src/recalc.rs` | Left for G3 | Used by conditional formats and data validation lists (display), chart series names, sparkline sources, Advanced Filter computed criteria and pivot calculated fields. The last two write cells, so NOW or RAND in them gives different results. No shared command reaches them. Fix: pass the session's `Calc` clock and seed. |
+| NOW and TODAY | `functions/src/date.rs` through `Calc::now` | Fixed in G3 | The entry stamp sets `Calc::fixed_now`; see Fixed in G3. |
+| Dates typed without a year (`3/4`, `4-Mar`) | `core/src/parse.rs` `current_year` | Fixed in G3 | Live `cell.set` uses its explicit `originYear`; live filter criteria use the stamped calculation clock's year; ordinary single-user parsing still uses the local year. Slicers still use the local year (not shared). |
+| `evaluate` / `evaluate_expr`: system clock and a fixed RNG seed | `calc/src/recalc.rs` | Open after G3 | Used by conditional formats and data validation lists (display), chart series names, sparkline sources, Advanced Filter computed criteria and pivot calculated fields. The last two write cells, so NOW or RAND in them gives different results. No G3 shared command reaches them. A future shared form must pass the session's calculation clock and seed. |
 | Conditional-format "today" rules and header and footer dates | `engine/src/cf.rs`, `engine/src/cmd/print/header_footer.rs` | Safe | Display and print only; not in a result, file or fingerprint. |
-| Password hash salt (sheet and workbook protection) | `engine/src/cmd/review.rs` `new_password_hash` | Left for G3 | Salt mixes a process counter, the document uid and the clock, and the hash is saved in the file. Protection is not a shared command. If it becomes one, the originator computes the hash and sends it. |
-| Random Number Generation tool without a seed | `engine/src/cmd/analysis.rs` | Left for G3 | Seeds from the clock. Not shared; the originator would send the seed. |
-| Macro time limit | `engine/src/macros/run.rs` | Left for G3 | A macro stops after a wall-clock limit, so a slow client could stop at a different step. Macros are not shared; G3 should share the commands a macro produces, not the macro. |
+| Password hash salt (sheet and workbook protection) | `engine/src/cmd/review.rs` `new_password_hash` | Open after G3 | Salt mixes a process counter, the document uid and the clock, and the hash is saved in the file. Protection is not a shared command. If it becomes one, the originator computes the hash and sends it. |
+| Random Number Generation tool without a seed | `engine/src/cmd/analysis.rs` | Open after G3 | Seeds from the clock. It is not shared; a future shared form must send the seed or the generated result. |
+| Macro time limit | `engine/src/macros/run.rs` | Open after G3 | A macro stops after a wall-clock limit, so a slow client could stop at a different step. Macros are not shared; a future design should share their resulting commands rather than the macro run. |
 | Profiling and test timers (`GRIDCRAFT_PROFILE`, `Instant` in tests) | `cmd.rs`, `recalc.rs`, tests | Safe | Timing output only. |
 
 ### Random numbers
 
 | Source | Class | Why |
 | --- | --- | --- |
-| RAND, RANDBETWEEN, RANDARRAY (`PassHost::random`) | Fixed in G1 for replay; **left for G3** for rollback | The stream is seeded per sequence and is drawn in row-major evaluation order, so identical replays agree. The draws depend on how many passes ran and which cells were dirty, and the state lives in `Calc`, not in the workbook. A client that rolls back and re-applies, or reloads, will draw other numbers. G3 must snapshot the RNG state with the agreed workbook, or treat volatile results as the server's. |
+| RAND, RANDBETWEEN, RANDARRAY (`PassHost::random`) | Fixed in G3 | `GridSnapshot` includes `Calc`, so rollback restores the RNG cursor; the agreed entry seed starts the same stream. See Fixed in G3. |
 | `std` `RandomState` hash seeds | Safe | Covered by the replay: two engines in one process have different seeds. |
 
 ### Pointers and addresses
@@ -153,8 +174,8 @@ already show in the replay.
 | Source | Class | Why |
 | --- | --- | --- |
 | `Arc::ptr_eq` shortcuts (unchanged sheets, bands and workbooks) | Safe | A pointer match means the content is the same; a miss falls back to comparing content. |
-| `PicturesOut` keyed by `*const CellPicture` | Left for G3 | See xlsx above: the order is safe, but `Arc` sharing can change how many rich values are written. |
-| Undo history bound (`CellStore::retained_bytes_against`) | Left for G3 | Uses `size_of` (different on wasm32) and `Arc` sharing, so how much undo history a client keeps differs between platforms. The undo history is outside the fingerprint. G3's per-person undo must not assume clients keep the same depth. |
+| `PicturesOut` keyed by `*const CellPicture` | Open after G3 | See xlsx above: the order is safe, but `Arc` sharing can change how many rich values are written. Pictures are not shared commands. |
+| Undo history bound (`CellStore::retained_bytes_against`) | Fixed in G3 for shared history | The existing single-user history remains platform-dependent. The G3 personal history instead uses content-based accounting, stays outside snapshots and fingerprints, and makes no cross-client depth assumption. |
 | Sheet, document and recording uids (`NEXT_SHEET_UID`, `NEXT_UID`, `NEXT_RECORDING`) | Safe | Process counters; never written to a file or the fingerprint. G3 gives sheets shared identities of its own. |
 
 ### Floating point and formatting
@@ -163,9 +184,9 @@ already show in the replay.
 | --- | --- | --- |
 | Rust float formatting (`{}`, `{:.*}`, `{:e}`) | Safe | Exact and platform-independent. The fingerprint hashes IEEE-754 bits, not text. |
 | Basic arithmetic, `floor`, `round`, `ceil`, `sqrt` | Safe | Correctly rounded IEEE-754 on every target. |
-| Transcendental functions (`exp`, `ln`, `log10`, `powf`, `sin`, …) in `functions` (distributions, financial, engineering, math) and `powi` in `numfmt` | Task 4, then G3 | They come from the platform's maths library on the desktop and from Rust's own on wasm32, and may differ in the last bit. `powi` is documented as unspecified precision. A last-bit difference reaches computed values and, through `core::number_to_text` (`log10().floor()`), possibly the shown text of a number, which formulas such as `&` and Remove Duplicates read. Task 4's maths grid (x86_64 Windows MSVC against wasm32 under Node): entered content always agrees. 64 of 1,584 maths cells differ by 1 ULP. In a default-width cell they look the same, but at 15-digit text (`&`, CONCAT, the formula bar) 3 of them differ: `SIN(pi/4)`, `POWER(2,-0.5)` and `1e5^0.37` (6 texts, with the 15-digit scientific TEXT format; `allowed-text-differences.json`). So the computed digest cannot be the cross-platform agreement check: G3 makes the server's computed values the agreed ones, or pins a maths library. |
+| Transcendental functions (`exp`, `ln`, `log10`, `powf`, `sin`, …) in `functions` (distributions, financial, engineering, math) and `powi` in `numfmt` | Open after G3 | They come from the platform's maths library on the desktop and from Rust's own on wasm32, and may differ in the last bit. `powi` is documented as unspecified precision. A last-bit difference reaches computed values and, through `core::number_to_text` (`log10().floor()`), possibly the shown text of a number, which formulas such as `&` and Remove Duplicates read. Task 4's maths grid (x86_64 Windows MSVC against wasm32 under Node): entered content always agrees. 64 of 1,584 maths cells differ by 1 ULP. In a default-width cell they look the same, but at 15-digit text (`&`, CONCAT, the formula bar) 3 of them differ: `SIN(pi/4)`, `POWER(2,-0.5)` and `1e5^0.37` (6 texts, with the 15-digit scientific TEXT format; `allowed-text-differences.json`). G3 therefore uses only the entered-content digest for cross-platform agreement. A common maths library remains required before desktop and browser computed values can be treated as identical. |
 | Row auto-fit after formatting | Safe | `auto_row_height` uses `approx_text_width` arithmetic, not the host's font measurement, so the row heights in the fingerprint are the same everywhere. |
-| AutoFit Column Width | Left for G3 | Uses the host's `Session::text_width` (font metrics) when set, so desktop and browser give different widths. Not a shared command; the originator would send the widths. |
+| AutoFit Column Width | Open after G3 | Uses the host's `Session::text_width` (font metrics) when set, so desktop and browser give different widths. It is not a shared command; a future shared form must send the resulting widths. |
 
 ### Threads and parallel iteration
 
@@ -178,8 +199,8 @@ per-workbook results.
 | Source | Class | Why |
 | --- | --- | --- |
 | Incremental versus full recalculation | Safe for normal calculation | `command_sequence_fuzz` checks that a full recalculation from scratch gives the incremental values. G3's rollback rebuilds calculation, so this is the property it needs. |
-| Iterative calculation and manual mode | Left for G3 | Iterative results depend on which formulas were dirty and on the evaluation order (Gauss-Seidel); manual mode leaves values stale. Both differ from a full recalculation by design (`command_sequence_fuzz` skips them). Calculation options are not shared commands. G3 should either share them with a full recalculation on every client or keep them per workbook and recalculate in full after each agreed step. |
-| More than 8 spill rounds in one recalculation | Left for G3 | `run` stops after 8 rounds. A pathological chain of spills could stop at different points after an incremental edit and after a rebuild. Not seen in the replay. |
+| Iterative calculation and manual mode | Open after G3 | Iterative results depend on which formulas were dirty and on the evaluation order (Gauss-Seidel); manual mode leaves values stale. Both differ from a full recalculation by design (`command_sequence_fuzz` skips them). Calculation options are not shared commands. A future shared design must either share them with a full recalculation on every client or keep them per workbook and recalculate in full after each agreed step. |
+| More than 8 spill rounds in one recalculation | Open after G3 | `run` stops after 8 rounds. A pathological chain of spills could stop at different points after an incremental edit and after a rebuild. Not seen in the replay. |
 
 ## Long run
 
@@ -191,11 +212,10 @@ seeds 100000 to 109999, 60 random steps each, on x86_64 Windows, at `f92a4178`:
   `computed` digest changed on 443,516 of 625,130 steps (70.9 %).
 - No seed failed. The two engines agreed on outcome and both digests after every step, with
   engine B's view moved before each step.
-- Scope: identical command histories from a new workbook, in one process on x86_64 Windows. Set
-  and clear filter are not driven (`selection_readers.md`). RAND agrees only because both engines
-  share the seed and the RNG state lives in `Calc`, not the workbook (see Random numbers). The
-  run proves nothing about rollback against straight application, or about a client that loaded
-  a checkpoint, and nothing across platforms (Task 4).
+- Scope: identical command histories from a new workbook, in one process on x86_64 Windows. This
+  G1 run did not drive filters or prove rollback against straight application. G3 adds focused
+  explicit-filter tests and `rollback_rerun_matches_straight_through`, including snapshot RNG
+  state. Checkpoint loading remains G4 work; the G1 run proves nothing across platforms.
 - A run at `d0f5983b` (248.4 s), before the row-height writer fix (`723f2f70`) and the fingerprint's
   blank-cell rule (`93951043`), gave exactly the same counts.
 - An earlier run at `965571a1` (241.8 s, the same counts except 463,022 `entered` changes)
