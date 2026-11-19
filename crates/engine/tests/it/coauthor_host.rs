@@ -129,22 +129,15 @@ fn every_shared_command_routes_shared_and_view_commands_route_local() {
         assert_eq!(route(id), Route::Refused(UNSHARED_REASON), "{id}");
     }
 
-    // Every registered command falls in exactly one class, and both lists name real commands.
-    let registered: Vec<&str> = command_specs().iter().map(|spec| spec.id).collect();
-    for id in &registered {
-        let shared = is_shared_command(id);
-        let local = is_local_command(id);
-        assert!(!(shared && local), "{id} is both shared and personal");
-        let expected = if shared {
-            Route::Shared
-        } else if local {
-            Route::Local
-        } else {
-            Route::Refused(UNSHARED_REASON)
-        };
-        assert_eq!(route(id), expected, "{id}");
+    // Writes kept in the workbook are never personal, even when the command is not journaled.
+    for id in ["formulas.watchWindow", "macro.check"] {
+        assert_eq!(route(id), Route::Refused(UNSHARED_REASON), "{id}");
     }
-    for id in gridcraft_engine::coauthor::LOCAL_COMMANDS {
+
+    // Both lists name real commands; what personal commands do is pinned by
+    // `local_commands_leave_the_shared_workbook_unchanged`.
+    let registered: Vec<&str> = command_specs().iter().map(|spec| spec.id).collect();
+    for id in gridcraft_engine::coauthor::LOCAL_COMMANDS.iter().chain(gridcraft_engine::coauthor::LOCAL_QUERIES) {
         assert!(registered.contains(id), "the personal list names `{id}`, which is not a command");
     }
     for id in registered.iter().filter(|id| is_shared_command(id)) {
@@ -409,4 +402,84 @@ fn room_events_become_notices() {
     client.receive(&json!({"type":"access","can_edit":false}).to_string(), 20).expect("access change is accepted");
     assert_eq!(client.take_notices(), vec![LiveNotice::ReadOnly(true)]);
     assert!(!client.can_edit());
+}
+
+/// Every command a live document runs as personal leaves the shared workbook exactly as it was,
+/// whatever parameters it is given, so a personal command (a viewer's too) can never change the
+/// document behind the log.
+#[test]
+fn local_commands_leave_the_shared_workbook_unchanged() {
+    let variants = [json!({}), json!({"add":"A1"}), json!({"remove":"A1"}), json!({"range":"A1:B2"}), json!({"cell":"A1"}), json!({"sheet":"View"})];
+    let mut checked = 0;
+    for spec in command_specs() {
+        if route(spec.id) != Route::Local {
+            continue;
+        }
+        for params in &variants {
+            let mut session = session_with_sheets(&["Data", "View"]);
+            session.execute("cell.set", json!({"sheet":"Data","cell":"A1","input":"7"})).expect("seed value");
+            session.execute("cell.set", json!({"sheet":"Data","cell":"B2","input":"=A1*2"})).expect("seed formula");
+            let before = fingerprint(&session, DocId(0)).entered;
+            let _ = session.execute(spec.id, params.clone());
+            assert_eq!(fingerprint(&session, DocId(0)).entered, before, "`{}` with {params} changed the shared workbook", spec.id);
+        }
+        checked += 1;
+    }
+    assert!(checked >= gridcraft_engine::coauthor::LOCAL_COMMANDS.len(), "every personal command was run");
+    assert_eq!(route("formulas.watchWindow"), Route::Refused(UNSHARED_REASON), "the watch list is kept in the workbook");
+}
+
+#[test]
+fn filter_commands_target_the_sheet_filter_not_the_selection() {
+    let mut session = session_with_sheets(&["Data", "View"]);
+    session.execute("data.filterSet", json!({"sheet":"View","range":"A1:C5"})).expect("filter installs");
+    select(&mut session, "View", "E9");
+    for id in ["data.clearFilter", "data.reapply", "data.filterRemove"] {
+        let params = explicit_params(&session, id, json!({})).expect("filter target");
+        assert_eq!(params, json!({"sheet":1,"range":"A1:C5"}), "{id}");
+    }
+    let by = explicit_params(&session, "data.filterBy", json!({"column":"B","values":["x"]})).expect("filter target");
+    assert_eq!(by, json!({"sheet":1,"range":"A1:C5","column":"B","values":["x"]}));
+
+    // Through the entry point, the explicit target is the filter itself, so the change applies.
+    let reapply = explicit_params(&session, "data.reapply", json!({})).expect("filter target");
+    let mut client = GridCoauthor::new(live_config(), GridLiveEditor::new(session).expect("editor builds"));
+    let mut server = DeterministicServer::new();
+    let place = server.join(&mut client, 10);
+    let proposal = submit(&mut client, &server, &place, "data.reapply", reapply, 20);
+    let ordered = server.order(&proposal, 1_795_219_200_000, 3);
+    let step = server.deliver(&mut client, &ordered, 30);
+    assert!(
+        step.events.iter().any(|event| matches!(event, Event::Applied { own: true, effect: collab_live::client::Effect::Applied, .. })),
+        "reapplying the filter takes effect: {step:?}"
+    );
+
+    let mut bare = session_with_sheets(&["Data"]);
+    select(&mut bare, "Data", "B2");
+    assert!(explicit_params(&bare, "data.clearFilter", json!({})).is_err(), "no filter, no target");
+}
+
+#[test]
+fn presence_is_sent_again_after_a_reconnect() {
+    let mut alice = coauthor(&["Data"]);
+    select(alice.editor_mut().session_mut(), "Data", "C3");
+    assert!(alice.presence(0).is_some(), "a first note is sent");
+    assert_eq!(alice.presence(500), None, "an unchanged note is not repeated");
+    alice.disconnected(600);
+    let _ = alice.connected(700);
+    assert!(alice.presence(800).is_some(), "the room dropped the note with the connection, so it goes again");
+}
+
+#[test]
+fn clicking_the_active_alignment_again_returns_to_general() {
+    let mut session = session_with_sheets(&["Data"]);
+    select(&mut session, "Data", "A1");
+    let first = explicit_params(&session, "home.alignCenter", json!({})).expect("alignment target");
+    assert_eq!(first["on"], json!(true));
+    session.execute("home.alignCenter", first).expect("centres");
+    let again = explicit_params(&session, "home.alignCenter", json!({})).expect("alignment target");
+    assert_eq!(again["on"], json!(false), "the sender computes the toggle");
+    session.execute("home.alignCenter", again).expect("returns to General");
+    let third = explicit_params(&session, "home.alignCenter", json!({})).expect("alignment target");
+    assert_eq!(third["on"], json!(true), "the cell is back to General, so the next click centres it");
 }

@@ -21,7 +21,9 @@ pub use command::{
     allocates_only_own_identities, decode_entry, encode_command, is_shared_command, resolve_command,
 };
 pub use editor::{GridLiveEditor, GridSnapshot, SharedDocumentSnapshot};
-pub use host::{LOCAL_COMMANDS, LiveBase, LiveNotice, NotAppliedReason, Route, UNSHARED_REASON, explicit_params, is_local_command, route};
+pub use host::{
+    LOCAL_COMMANDS, LOCAL_QUERIES, LiveBase, LiveNotice, NotAppliedReason, Route, UNSHARED_REASON, explicit_params, is_local_command, route,
+};
 pub use ids::{
     CellId, IdentityDelete, IdentityInsert, IdentityPosition, IdentityRange, IdentityRangeKind, IdentityRanges, IdentityRun, IdentitySheetInsert,
     IdentityStructural, MAX_SESSION_DATA_BYTES, SheetIds, TargetGone, WorkbookIds,
@@ -225,7 +227,8 @@ impl GridCoauthor {
         if self.presence_sent.as_deref() == Some(note.as_str()) {
             return None;
         }
-        if self.presence_sent_at.is_some_and(|sent| now_ms.saturating_sub(sent) < MIN_PRESENCE_INTERVAL_MS) {
+        // A clock that went back counts as the interval having passed, so presence never freezes.
+        if self.presence_sent_at.is_some_and(|sent| now_ms >= sent && now_ms - sent < MIN_PRESENCE_INTERVAL_MS) {
             return None;
         }
         self.presence_sent = Some(note.clone());
@@ -290,11 +293,20 @@ impl GridCoauthor {
     /// kept so a server-confirmed kept place can resume them.
     pub fn disconnected(&mut self, now_ms: u64) {
         self.client.disconnected(now_ms);
+        self.forget_presence();
     }
 
     /// The same in-memory client opened a replacement connection.
     pub fn connected(&mut self, now_ms: u64) -> Vec<String> {
+        self.forget_presence();
         self.client.connected(now_ms)
+    }
+
+    /// The room drops a person's note with their connection or place, so the next note goes
+    /// even when it is unchanged.
+    fn forget_presence(&mut self) {
+        self.presence_sent = None;
+        self.presence_sent_at = None;
     }
 
     pub fn submit(&mut self, id: &str, params: Json, origin_year: i32, now_ms: u64) -> Result<Step, GridLiveError> {
@@ -404,6 +416,7 @@ impl GridCoauthor {
             self.pending_history.clear();
             self.pending_texts.clear();
             self.last_undo_report = None;
+            self.forget_presence();
             self.editor.clear_history_results();
             self.editor.clear_own_no_effects();
         }

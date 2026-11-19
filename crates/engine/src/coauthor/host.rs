@@ -7,7 +7,7 @@ use std::fmt;
 use collab_core::ids::Seq;
 use collab_live::client::Stamp;
 use gridcraft_core::{RangeRef, col_to_letters};
-use gridcraft_model::Underline;
+use gridcraft_model::{HAlign, Underline};
 use protocol::live::{ParticipantNo, RefusedReason};
 use serde::Serialize;
 use serde_json::{Map, Value as Json};
@@ -29,8 +29,8 @@ pub enum Route {
     Refused(&'static str),
 }
 
-/// Commands that change only the person's own view (C11). Read-only queries are personal too;
-/// see [`is_local_command`].
+/// Commands that change only the person's own view (C11). Checked read-only queries are
+/// personal too; see [`LOCAL_QUERIES`].
 pub const LOCAL_COMMANDS: &[&str] = &[
     "selection.set",
     "selection.move",
@@ -56,13 +56,44 @@ pub const LOCAL_COMMANDS: &[&str] = &[
     "edit.find",
 ];
 
-/// Whether `id` is personal: a view command in [`LOCAL_COMMANDS`], or a registered query, which
-/// is neither journaled nor undoable because it does not write the workbook.
+/// Read-only queries a live document runs as personal. Each was checked to read the workbook
+/// without writing it; `local_commands_leave_the_shared_workbook_unchanged` runs them all and
+/// compares the entered fingerprint. A query is not personal just because it is not journaled:
+/// `formulas.watchWindow` keeps its list in a hidden defined name and `macro.check` dry-runs
+/// commands on the workbook, so both stay refused.
+pub const LOCAL_QUERIES: &[&str] = &[
+    "cell.get",
+    "sheet.read",
+    "selection.stats",
+    "document.inspect",
+    "window.list",
+    "app.commands",
+    "history.list",
+    "formulas.evaluate",
+    "formulas.evaluateFormula",
+    "formulas.tracePrecedents",
+    "formulas.traceDependents",
+    "formulas.nameManager",
+    "formulas.functions",
+    "formulas.recentlyUsed",
+    "review.spelling",
+    "review.thesaurus",
+    "review.workbookStatistics",
+    "review.showComments",
+    "review.showAllNotes",
+    "view.formulaBar",
+    "pivot.fields",
+    "pivot.fieldList",
+    "pivot.list",
+    "macro.list",
+    "macro.get",
+    "control.list",
+];
+
+/// Whether `id` is personal: a view command in [`LOCAL_COMMANDS`] or a checked read-only query
+/// in [`LOCAL_QUERIES`]. Everything else that is not shared is refused.
 pub fn is_local_command(id: &str) -> bool {
-    if is_shared_command(id) {
-        return false;
-    }
-    LOCAL_COMMANDS.contains(&id) || crate::cmd::find_command(id).is_some_and(|spec| !spec.journal && !spec.undoable)
+    !is_shared_command(id) && (LOCAL_COMMANDS.contains(&id) || LOCAL_QUERIES.contains(&id))
 }
 
 /// Routes one command in a live document. Shared is exactly [`is_shared_command`].
@@ -142,6 +173,17 @@ pub fn explicit_params(session: &Session, id: &str, params: Json) -> Result<Json
             }
             map.remove("range");
         }
+        // These name the sheet's existing filter: its range, never the selection, which the
+        // command would take as the name of a different filter.
+        "data.filterBy" | "data.clearFilter" | "data.reapply" | "data.filterRemove" => {
+            if !has(&map, "range") {
+                let filter = document.wb.sheet(sheet).and_then(|target| target.autofilter.as_ref());
+                let Some(filter) = filter else {
+                    return Err(CoauthorError::MissingTarget { command: id.to_string(), target: "range".into() });
+                };
+                map.insert("range".into(), Json::String(filter.range.a1()));
+            }
+        }
         _ => {
             if !has(&map, "range") && !has(&map, "cell") {
                 let ranges: Vec<String> = selection.ranges.iter().map(RangeRef::a1).collect();
@@ -166,9 +208,16 @@ fn style_defaults(session: &Session, id: &str, map: &mut Map<String, Json>) -> R
             };
             map.insert("on".into(), Json::Bool(!current));
         }
-        // An alignment named while editing together always sets that alignment.
+        // Clicking the active alignment again returns the cell to General: the sender decides,
+        // and `on: false` carries it.
         "home.alignLeft" | "home.alignCenter" | "home.alignRight" if missing(map, "on") => {
-            map.insert("on".into(), Json::Bool(true));
+            let wanted = match id {
+                "home.alignLeft" => HAlign::Left,
+                "home.alignCenter" => HAlign::Center,
+                _ => HAlign::Right,
+            };
+            let current = crate::cmd::format::active_style(session)?.align.h;
+            map.insert("on".into(), Json::Bool(current != wanted));
         }
         "home.underline" | "home.doubleUnderline" => {
             let default = if id == "home.doubleUnderline" { "double" } else { "single" };
