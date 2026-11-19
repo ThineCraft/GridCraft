@@ -1,5 +1,7 @@
+use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::sync::Arc;
+use std::sync::Once;
 
 use collab_core::ids::Seq;
 use collab_live::client::{Crash, Effect, EntryView, LiveEditor, Outcome, Stamp};
@@ -12,6 +14,53 @@ use super::{
 };
 use crate::fingerprint::{DocId, fingerprint};
 use crate::{Calc, EngineError, Selection, Session};
+
+const GUARDED_APPLY_COMMAND: &str = "internal.coauthorGuardedPatch";
+
+#[derive(Clone)]
+struct GuardedApplyContext {
+    ids: WorkbookIds,
+    patch: super::GuardedPatch,
+}
+
+thread_local! {
+    static GUARDED_APPLY: RefCell<Option<GuardedApplyContext>> = const { RefCell::new(None) };
+}
+
+fn run_guarded_apply(session: &mut Session, _: &Json) -> crate::Result<Json> {
+    let context = GUARDED_APPLY.with(|slot| slot.borrow_mut().take());
+    let context = context.ok_or_else(|| EngineError::Other("the co-author guarded command is internal".into()))?;
+    let report = apply_guarded_patch(session, &context.ids, &context.patch)?;
+    serde_json::to_value(report).map_err(|error| EngineError::Other(error.to_string()))
+}
+
+fn execute_guarded_apply(session: &mut Session, ids: &WorkbookIds, patch: &super::GuardedPatch) -> Result<UndoReport, EngineError> {
+    static REGISTER: Once = Once::new();
+    REGISTER.call_once(|| crate::cmd::register_test_command(GUARDED_APPLY_COMMAND, run_guarded_apply));
+    let occupied = GUARDED_APPLY.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        if slot.is_some() {
+            true
+        } else {
+            *slot = Some(GuardedApplyContext { ids: ids.clone(), patch: patch.clone() });
+            false
+        }
+    });
+    if occupied {
+        return Err(EngineError::Other("a co-author guarded command is already running".into()));
+    }
+    let journal_paused = session.journal_paused;
+    let recorder = session.recorder.take();
+    session.journal_paused = session.journal_paused.saturating_add(1);
+    let result = session.execute(GUARDED_APPLY_COMMAND, Json::Null);
+    session.journal_paused = journal_paused;
+    session.recorder = recorder;
+    GUARDED_APPLY.with(|slot| {
+        slot.borrow_mut().take();
+    });
+    let value = result?;
+    serde_json::from_value(value).map_err(|error| EngineError::Other(error.to_string()))
+}
 
 /// The shared portion of one open document. Personal view and history state are deliberately
 /// excluded.
@@ -108,6 +157,11 @@ impl GridLiveEditor {
 
     pub(super) fn take_undo_report(&mut self, action: u64) -> Option<UndoReport> {
         self.undo_reports.remove(&action)
+    }
+
+    pub(super) fn clear_history_results(&mut self) {
+        self.history_updates.clear();
+        self.undo_reports.clear();
     }
 
     fn apply_stamp(&mut self, stamp: Stamp) {
@@ -228,7 +282,7 @@ impl LiveEditor for GridLiveEditor {
         if let SharedCommand::Guarded { patch } = &decoded.command {
             let view = self.capture_view();
             let before = self.snapshot();
-            let report = match apply_guarded_patch(&mut self.session, &self.ids, patch) {
+            let report = match execute_guarded_apply(&mut self.session, &self.ids, patch) {
                 Ok(report) => report,
                 Err(error) => {
                     self.restore_shared(&before, view.as_ref(), true);

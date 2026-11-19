@@ -14,8 +14,8 @@ use serde_json::Value as Json;
 use thiserror::Error;
 
 pub use command::{
-    IdentityAnchor, IdentityRefKind, IdentityReference, IdentitySheetSel, ResolvedCommand, SharedCommand, SharedEntry, decode_entry, encode_command,
-    is_shared_command, resolve_command,
+    IdentityAnchor, IdentityRefKind, IdentityReference, IdentitySheetSel, ResolvedCommand, SharedCommand, SharedEntry, StylePatch, decode_entry,
+    encode_command, is_shared_command, resolve_command,
 };
 pub use editor::{GridLiveEditor, GridSnapshot, SharedDocumentSnapshot};
 pub use ids::{
@@ -23,7 +23,7 @@ pub use ids::{
     IdentityStructural, SheetIds, TargetGone, WorkbookIds,
 };
 pub use undo::{
-    GuardedCellContent, GuardedPatch, GuardedStructural, GuardedStyleLeaf, GuardedValue, HistoryError, PERSONAL_HISTORY_ACTIONS,
+    GuardedCellContent, GuardedCellInput, GuardedPatch, GuardedStructural, GuardedStyleLeaf, GuardedValue, HistoryError, PERSONAL_HISTORY_ACTIONS,
     PERSONAL_HISTORY_BYTES, PersonalHistory, StyleTarget, UndoAction, UndoReport,
 };
 use undo::{apply_guarded_patch, build_undo_action};
@@ -103,6 +103,8 @@ pub struct GridCoauthor {
     outbox: Vec<String>,
     history: PersonalHistory,
     pending_history: BTreeMap<u64, PendingHistory>,
+    discarded_history_settlements: usize,
+    highest_applied_seq: u64,
     last_undo_report: Option<UndoReport>,
 }
 
@@ -117,7 +119,17 @@ impl GridCoauthor {
     pub fn new(config: LiveConfig, editor: GridLiveEditor) -> Self {
         let mut client = LiveClient::new(config);
         let outbox = client.connected(0);
-        Self { client, editor, next_action: 1, outbox, history: PersonalHistory::default(), pending_history: BTreeMap::new(), last_undo_report: None }
+        Self {
+            client,
+            editor,
+            next_action: 1,
+            outbox,
+            history: PersonalHistory::default(),
+            pending_history: BTreeMap::new(),
+            discarded_history_settlements: 0,
+            highest_applied_seq: 0,
+            last_undo_report: None,
+        }
     }
 
     pub fn editor(&self) -> &GridLiveEditor {
@@ -136,6 +148,17 @@ impl GridCoauthor {
 
     pub fn last_undo_report(&self) -> Option<&UndoReport> {
         self.last_undo_report.as_ref()
+    }
+
+    /// The existing live connection dropped. The in-memory client and its personal history are
+    /// kept so a server-confirmed kept place can resume them.
+    pub fn disconnected(&mut self, now_ms: u64) {
+        self.client.disconnected(now_ms);
+    }
+
+    /// The same in-memory client opened a replacement connection.
+    pub fn connected(&mut self, now_ms: u64) -> Vec<String> {
+        self.client.connected(now_ms)
     }
 
     pub fn submit(&mut self, id: &str, params: Json, origin_year: i32, now_ms: u64) -> Result<Step, GridLiveError> {
@@ -218,6 +241,16 @@ impl GridCoauthor {
     }
 
     fn reconcile_history(&mut self, step: &Step) {
+        if step.events.iter().any(|event| matches!(event, Event::LoadBase { .. } | Event::Returned { .. })) {
+            self.history.clear();
+            // LiveClient intentionally keeps and re-runs its queued entries across these
+            // lifecycle events. Keep one inert FIFO slot per discarded history move so an old
+            // acknowledgement cannot settle a newer action submitted after the reconnect.
+            self.discarded_history_settlements = self.discarded_history_settlements.saturating_add(self.pending_history.len());
+            self.pending_history.clear();
+            self.last_undo_report = None;
+            self.editor.clear_history_results();
+        }
         let actions: Vec<u64> = self.pending_history.keys().copied().collect();
         for action in actions {
             if let Some(update) = self.editor.take_history_update(action)
@@ -231,16 +264,33 @@ impl GridCoauthor {
         }
         for event in &step.events {
             match event {
-                Event::Applied { own: true, .. } => self.settle_first_history(true),
-                Event::Refused { .. } => self.settle_first_history(false),
+                Event::Applied { seq, own, .. } => {
+                    let is_new = seq.0 > self.highest_applied_seq;
+                    self.highest_applied_seq = self.highest_applied_seq.max(seq.0);
+                    if *own && is_new {
+                        self.settle_next_history(true);
+                    }
+                }
+                Event::Refused { .. } => self.settle_next_history(false),
                 Event::DroppedPending { count } => {
                     for _ in 0..*count {
-                        self.settle_first_history(false);
+                        self.settle_next_history(false);
                     }
                 }
                 _ => {}
             }
         }
+        // Rollback/re-run and catch-up can produce results for actions whose personal history
+        // was discarded at a lifecycle boundary. Every active action was drained above.
+        self.editor.clear_history_results();
+    }
+
+    fn settle_next_history(&mut self, accepted: bool) {
+        if self.discarded_history_settlements > 0 {
+            self.discarded_history_settlements -= 1;
+            return;
+        }
+        self.settle_first_history(accepted);
     }
 
     fn settle_first_history(&mut self, accepted: bool) {

@@ -938,23 +938,9 @@ pub fn resolve_command(ids: &WorkbookIds, session: &crate::Session, entry: &Shar
             if *declared_sheet != cell.sheet {
                 return Err(TargetGone::Malformed("cell target names a different sheet".into()));
             }
-            let (sheet, cell) = ids.resolve_cell(*cell)?;
+            let (sheet, cell, resolved_input) = resolve_cell_input(ids, session, *cell, input, *formula, references)?;
             object.insert("sheet".into(), Json::from(sheet));
             object.insert("cell".into(), Json::String(cell.a1()));
-            let resolved_input = if *formula {
-                resolve_formula(ids, session, *declared_sheet, input, references)?
-            } else {
-                if !references.is_empty() {
-                    return Err(TargetGone::Malformed("literal input carries formula references".into()));
-                }
-                let document = session.doc().map_err(|error| TargetGone::Malformed(error.to_string()))?;
-                let text_formatted =
-                    document.wb.sheet(sheet).is_some_and(|target_sheet| document.wb.styles.get(target_sheet.style_id(cell)).num_fmt.as_str() == "@");
-                if crate::cmd::edit::is_formula_input(input) && !text_formatted {
-                    return Err(TargetGone::Malformed("formula-like input is marked as a literal outside a text-formatted cell".into()));
-                }
-                input.clone()
-            };
             object.insert("input".into(), Json::String(resolved_input));
             object.remove("formula");
             object.remove("references");
@@ -1012,6 +998,32 @@ pub fn resolve_command(ids: &WorkbookIds, session: &crate::Session, entry: &Shar
         ids.validate_structural(change).map_err(|error| TargetGone::Malformed(format!("invalid structural identity change: {error}")))?;
     }
     Ok(ResolvedCommand { id, params: Json::Object(object.clone()), structural })
+}
+
+pub(crate) fn resolve_cell_input(
+    ids: &WorkbookIds,
+    session: &crate::Session,
+    target: CellId,
+    input: &str,
+    formula: bool,
+    references: &[IdentityReference],
+) -> Result<(usize, CellRef, String), TargetGone> {
+    let (sheet, cell) = ids.resolve_cell(target)?;
+    let resolved = if formula {
+        resolve_formula(ids, session, target.sheet, input, references)?
+    } else {
+        if !references.is_empty() {
+            return Err(TargetGone::Malformed("literal input carries formula references".into()));
+        }
+        let document = session.doc().map_err(|error| TargetGone::Malformed(error.to_string()))?;
+        let text_formatted =
+            document.wb.sheet(sheet).is_some_and(|target_sheet| document.wb.styles.get(target_sheet.style_id(cell)).num_fmt.as_str() == "@");
+        if crate::cmd::edit::is_formula_input(input) && !text_formatted {
+            return Err(TargetGone::Malformed("formula-like input is marked as a literal outside a text-formatted cell".into()));
+        }
+        input.to_string()
+    };
+    Ok((sheet, cell, resolved))
 }
 
 fn resolve_common_targets(ids: &WorkbookIds, object: &mut serde_json::Map<String, Json>) -> Result<(), TargetGone> {
@@ -1196,27 +1208,36 @@ fn encode_formula(
     target: CellRef,
     input: &str,
 ) -> Result<(String, bool, Vec<IdentityReference>), CoauthorError> {
-    let document = session.doc()?;
-    let text_formatted = document.wb.sheet(host_sheet).is_some_and(|sheet| document.wb.styles.get(sheet.style_id(target)).num_fmt.as_str() == "@");
-    if text_formatted || !crate::cmd::edit::is_formula_input(input) {
+    encode_formula_in_workbook(ids, &session.doc()?.wb, host_sheet, target, input, false)
+}
+
+pub(crate) fn encode_formula_in_workbook(
+    ids: &WorkbookIds,
+    workbook: &gridcraft_model::Workbook,
+    host_sheet: usize,
+    target: CellRef,
+    input: &str,
+    stored_formula: bool,
+) -> Result<(String, bool, Vec<IdentityReference>), CoauthorError> {
+    let text_formatted = workbook.sheet(host_sheet).is_some_and(|sheet| workbook.styles.get(sheet.style_id(target)).num_fmt.as_str() == "@");
+    if (!stored_formula && text_formatted) || !crate::cmd::edit::is_formula_input(input) {
         return Ok((input.to_string(), false, Vec::new()));
     }
     let body = input.strip_prefix('=').unwrap_or(input);
     let expr = gridcraft_formula::parse(body).map_err(|error| CoauthorError::MalformedPayload(format!("invalid formula: {error}")))?;
     let mut references = Vec::new();
     for reference in expr.references() {
-        references.push(identity_reference(ids, session, host_sheet, reference)?);
+        references.push(identity_reference(ids, workbook, host_sheet, reference)?);
     }
     Ok((format!("={}", gridcraft_formula::print(&expr)), true, references))
 }
 
 fn identity_reference(
     ids: &WorkbookIds,
-    session: &crate::Session,
+    workbook: &gridcraft_model::Workbook,
     host_sheet: usize,
     reference: &Reference,
 ) -> Result<IdentityReference, CoauthorError> {
-    let workbook = &session.doc()?.wb;
     let (sheet, target_index, span_bounds) = match &reference.sheet {
         SheetSel::Current => (IdentitySheetSel::Current { sheet: ids.sheet_id(host_sheet)? }, host_sheet, None),
         SheetSel::Named(name) => {
