@@ -213,8 +213,13 @@ pub(super) struct PersonalView {
     exact_sheet_selections: Vec<Selection>,
 }
 
+/// Where a host keeps the crash note: the position of the entry being applied, or `None` once
+/// it is applied. It must survive the editor stopping (the browser frame's session storage).
+pub type CrashNote = Box<dyn FnMut(Option<Seq>) + Send>;
+
 /// GridCraft's document adapter for the shared live-client apply loop.
 pub struct GridLiveEditor {
+    crash_note: Option<CrashNote>,
     session: Session,
     ids: WorkbookIds,
     stored_view: StoredFileView,
@@ -315,6 +320,7 @@ impl GridLiveEditor {
         let stored_view = StoredFileView::capture(&session.doc()?.wb, &ids)?;
         session.coauthoring = true;
         Ok(Self {
+            crash_note: None,
             session,
             ids,
             stored_view,
@@ -326,6 +332,23 @@ impl GridLiveEditor {
             #[cfg(test)]
             test_command_override: None,
         })
+    }
+
+    /// An editor on a new blank workbook (one empty sheet), alike on every machine: the base of
+    /// a log with no stored revision, and what a host holds before its base arrives.
+    pub fn blank() -> Result<Self, super::CoauthorError> {
+        let mut session = Session::new();
+        session.add_document(DocState::new(gridcraft_model::Workbook::new(), None, "Workbook".into(), Trust::Local));
+        Self::new(session)
+    }
+
+    pub(super) fn set_crash_note(&mut self, note: CrashNote) {
+        self.crash_note = Some(note);
+    }
+
+    /// Moves the host's crash note over from the editor this one replaces.
+    pub(super) fn take_crash_note_from(&mut self, previous: &mut Self) {
+        self.crash_note = previous.crash_note.take();
     }
 
     pub fn session(&self) -> &Session {
@@ -710,6 +733,9 @@ impl LiveEditor for GridLiveEditor {
     fn note_applying(&mut self, seq: Option<Seq>) {
         // G3 keeps this crash note in memory; the G5 host persists it across process reloads.
         self.applying_seq = seq;
+        if let Some(note) = self.crash_note.as_mut() {
+            note(seq);
+        }
     }
 }
 

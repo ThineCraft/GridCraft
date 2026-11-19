@@ -20,13 +20,18 @@
 //! - `gridcraft:dirty` whenever unsaved changes appear or go away, `gridcraft:failed` when the
 //!   app couldn't start.
 //!
+//! - In a live session (`gridcraft:live-*`, [`crate::live`], framed hosts only) GridCraft's own
+//!   Save of the workbook is not handed to the page, which keeps the document from the room's
+//!   checkpoints, and `gridcraft:dirty` stays `false`.
+//!
 //! In both host modes the page starts with an empty workbook instead of a sample, saves and PDF
 //! exports are handed to the page rather than downloaded, and `?author=` names the user for new
 //! notes and comments.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
+use craft_web_host::Mode;
 use craft_web_host::web::{FileData, Host, Message};
 use gridcraft_ui_egui::{Inbox, Services, SheetApp};
 
@@ -49,6 +54,8 @@ pub struct Bridge {
     host: Rc<Host>,
     /// Names of the files handed to the host since the last frame.
     saved: Rc<RefCell<Vec<String>>>,
+    /// A live session runs: the workbook is the room's, not a file the page stores on Save.
+    live: Rc<Cell<bool>>,
 }
 
 impl Bridge {
@@ -56,7 +63,7 @@ impl Bridge {
     /// `data-host="page"` on the canvas, an unframed `?host=parent` page (it stays the normal app
     /// with downloads), or a parent on another origin.
     pub fn detect(canvas: &web_sys::HtmlCanvasElement) -> Option<Self> {
-        Some(Self { host: Rc::new(Host::connect(APP, canvas)?), saved: Rc::default() })
+        Some(Self { host: Rc::new(Host::connect(APP, canvas)?), saved: Rc::default(), live: Rc::default() })
     }
 
     /// Send saved and exported files to the host instead of downloading them, and hear files
@@ -81,6 +88,11 @@ impl Bridge {
         }
     }
 
+    /// Whether the host is a framing parent page, the only one that runs live sessions.
+    pub fn is_framed(&self) -> bool {
+        matches!(self.host.mode(), Mode::Parent)
+    }
+
     pub fn post_ready(&self) {
         let _ = self.host.post_ready(env!("CARGO_PKG_VERSION"), false);
     }
@@ -92,7 +104,13 @@ impl Bridge {
     /// After each frame: a workbook handed to the host this frame counts as saved under the
     /// name it was saved as, and the host hears when unsaved changes appear or go away (the
     /// crate does not repeat a state it already reported).
-    pub fn sync(&self, app: &mut SheetApp) {
+    pub fn sync(&self, app: &mut SheetApp, live: bool) {
+        self.live.set(live);
+        if live {
+            self.saved.borrow_mut().clear();
+            self.host.post_dirty(false);
+            return;
+        }
         let saved = std::mem::take(&mut *self.saved.borrow_mut());
         if let Some(name) = saved.iter().rev().find(|name| is_workbook(name))
             && let Some(doc) = app.session.active_mut()
@@ -107,6 +125,10 @@ impl Bridge {
 
     fn post_save(&self, path: &str, bytes: &[u8]) -> Result<(), String> {
         let name = file_name(path);
+        if self.live.get() && is_workbook(&name) {
+            log::info!("live: the workbook's own Save is not handed to the page");
+            return Ok(());
+        }
         self.host.post_save(&name, bytes, None, false)?;
         self.saved.borrow_mut().push(name);
         Ok(())

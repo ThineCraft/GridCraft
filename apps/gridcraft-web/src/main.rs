@@ -28,6 +28,8 @@ mod host;
 #[cfg(any(target_arch = "wasm32", test))]
 mod hostmode;
 #[cfg(any(target_arch = "wasm32", test))]
+mod live;
+#[cfg(any(target_arch = "wasm32", test))]
 mod prefs;
 #[cfg(target_arch = "wasm32")]
 mod web;

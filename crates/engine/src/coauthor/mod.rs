@@ -9,7 +9,10 @@ mod undo;
 
 use std::collections::BTreeMap;
 
-use collab_live::client::{AgreedSnapshot, ClientError, Effect, Event, LiveClient, LiveConfig, LocalError, Mode, Phase, Step};
+pub use collab_core::ids::Seq;
+use collab_live::client::{AgreedSnapshot, Effect, LiveClient, LocalError, Mode};
+/// The live client's types a host names, so it needs no dependency of its own on ShareCraft's crates.
+pub use collab_live::client::{ClientError, Event, LiveConfig, Phase, Stamp, Step};
 use collab_live::ids::IdError;
 use protocol::live::{LiveBuild, MAX_PAYLOAD_BYTES, RefusedReason};
 use serde_json::Value as Json;
@@ -20,7 +23,7 @@ pub use command::{
     IdentityAnchor, IdentityRefKind, IdentityReference, IdentitySheetSel, ResolvedCommand, SharedCommand, SharedEntry, StylePatch,
     allocates_only_own_identities, decode_entry, encode_command, is_shared_command, resolve_command,
 };
-pub use editor::{GridLiveEditor, GridSnapshot, SharedDocumentSnapshot};
+pub use editor::{CrashNote, GridLiveEditor, GridSnapshot, SharedDocumentSnapshot};
 pub use host::{
     LOCAL_COMMANDS, LOCAL_QUERIES, LiveBase, LiveNotice, NotAppliedReason, Route, UNSHARED_REASON, explicit_params, is_local_command, route,
 };
@@ -115,6 +118,16 @@ pub enum CoauthorError {
     Identity(IdError),
 }
 
+/// What the host does for one checkpoint ticket.
+pub enum TicketAnswer {
+    /// Upload the checkpoint under the ticket; `send` carries the entered fingerprint frame.
+    Write { ticket: String, at: Seq, base: Option<String>, checkpoint: GridCheckpoint, send: Vec<String> },
+    /// Report the hash of the independently written checkpoint; `send` carries the fingerprint.
+    Verify { ticket: String, at: Seq, sha256: [u8; 32], send: Vec<String> },
+    /// The ticket cannot be honoured: send the `checkpoint_failed` frame, and post nothing.
+    Failed { send: Option<String> },
+}
+
 /// An error from preparing a GridCraft entry or advancing the shared live client.
 #[derive(Debug, Error)]
 pub enum GridLiveError {
@@ -190,6 +203,7 @@ impl GridCoauthor {
         let editor = match base {
             LiveBase::File { bytes } => GridLiveEditor::from_file_in(session, bytes)?,
             LiveBase::Checkpoint { bytes, session_data, stamp } => GridLiveEditor::from_checkpoint_in(session, bytes, session_data, stamp)?,
+            LiveBase::Empty => GridLiveEditor::new(session)?,
         };
         Ok(Self::new(config, editor))
     }
@@ -281,10 +295,64 @@ impl GridCoauthor {
         Ok(GridCheckpoint { bytes, session_data, sha256, entered })
     }
 
+    /// Answers a checkpoint or verify ticket from the exact agreed state at its position; `None`
+    /// for any other event. A failure is answered with the `checkpoint_failed` frame only.
+    pub fn answer_ticket(&self, event: &Event) -> Option<TicketAnswer> {
+        let (ticket, at, write, base) = match event {
+            Event::CheckpointRequested { ticket, at, base, .. } => (*ticket, *at, true, base.clone()),
+            Event::VerifyRequested { ticket, at, base } => (*ticket, *at, false, base.clone()),
+            _ => return None,
+        };
+        let written = self.checkpoint(at).and_then(|checkpoint| {
+            let fingerprint = self.client.fingerprint(at, checkpoint.entered)?;
+            Ok((checkpoint, fingerprint))
+        });
+        let Ok((checkpoint, fingerprint)) = written else {
+            return Some(TicketAnswer::Failed { send: serde_json::to_string(&protocol::live::LiveClientMsg::CheckpointFailed { ticket }).ok() });
+        };
+        let ticket = ticket.to_string();
+        Some(if write {
+            TicketAnswer::Write { ticket, at, base, checkpoint, send: vec![fingerprint] }
+        } else {
+            TicketAnswer::Verify { ticket, at, sha256: checkpoint.sha256, send: vec![fingerprint] }
+        })
+    }
+
+    /// Where the client is in its session.
+    pub fn phase(&self) -> Phase {
+        self.client.phase()
+    }
+
+    /// How many of the person's changes wait for the server.
+    pub fn waiting(&self) -> usize {
+        self.client.pending()
+    }
+
+    /// Keeps the crash note where it survives the editor stopping: called with the position of
+    /// each received entry before it is applied, and with `None` once it is.
+    pub fn set_crash_note(&mut self, note: CrashNote) {
+        self.editor.set_crash_note(note);
+    }
+
+    /// Resets the editor to the base the client asked for ([`Event::LoadBase`]); call
+    /// [`Self::base_ready`] next. Work is done in a new editor, so a base that cannot be opened
+    /// leaves the current one as it was.
+    pub fn load_base(&mut self, base: LiveBase<'_>) -> Result<(), GridLiveError> {
+        let mut editor = match base {
+            LiveBase::Empty => GridLiveEditor::blank()?,
+            LiveBase::File { bytes } => GridLiveEditor::from_file_in(crate::Session::new(), bytes)?,
+            LiveBase::Checkpoint { bytes, session_data, stamp } => GridLiveEditor::from_checkpoint(bytes, session_data, stamp)?,
+        };
+        editor.take_crash_note_from(&mut self.editor);
+        self.editor = editor;
+        Ok(())
+    }
+
     /// Replaces the shown editor with a fully recalculated durable checkpoint. Work is done in a
     /// temporary editor, so malformed bytes or identity data leave the current editor untouched.
     pub fn load_checkpoint(&mut self, bytes: &[u8], session_data: &[u8], stamp: collab_live::client::Stamp) -> Result<(), GridLiveError> {
-        let editor = GridLiveEditor::from_checkpoint(bytes, session_data, stamp)?;
+        let mut editor = GridLiveEditor::from_checkpoint(bytes, session_data, stamp)?;
+        editor.take_crash_note_from(&mut self.editor);
         self.editor = editor;
         Ok(())
     }

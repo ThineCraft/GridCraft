@@ -43,6 +43,8 @@ pub fn start() {
         // `data-host="page"` on the canvas opts a page in instead: it runs GridCraft in its own
         // document and talks over DOM `CustomEvent`s on the canvas.
         let bridge = crate::host::Bridge::detect(&canvas);
+        // Live co-authoring (`live`) runs only in a framing ShareCraft page.
+        let framed = bridge.as_ref().is_some_and(crate::host::Bridge::is_framed);
         let app_bridge = bridge.clone();
         let result = eframe::WebRunner::new()
             .start(
@@ -103,7 +105,8 @@ pub fn start() {
                         bridge.post_ready();
                     }
                     crate::api::install(&mut app, cc.egui_ctx.clone());
-                    Ok(Box::new(WebShell { app, inbox, hosted: app_bridge.is_some(), bridge: app_bridge, prefs }))
+                    let live = if framed { crate::live::web::LiveHost::connect(cc.egui_ctx.clone()) } else { None };
+                    Ok(Box::new(WebShell { app, inbox, hosted: app_bridge.is_some(), bridge: app_bridge, prefs, live }))
                 }),
             )
             .await;
@@ -134,6 +137,8 @@ struct WebShell {
     hosted: bool,
     bridge: Option<crate::host::Bridge>,
     prefs: crate::prefs::PrefsSync,
+    /// The live seat, when a framing page may start a live session.
+    live: Option<crate::live::web::LiveHost>,
 }
 
 fn local_storage() -> Option<web_sys::Storage> {
@@ -147,6 +152,10 @@ fn stored(key: &str) -> Option<String> {
 
 impl eframe::App for WebShell {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // Live messages that arrived while the seat was borrowed; most are handled as they come.
+        if let Some(live) = &self.live {
+            live.drain();
+        }
         let dropped = ctx.input_mut(|i| std::mem::take(&mut i.raw.dropped_files));
         // Hosted, a dropped file would replace the host's workbook: drops are ignored.
         let dropped = if self.hosted { Vec::new() } else { dropped };
@@ -189,7 +198,7 @@ impl eframe::App for WebShell {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.app.ui(ui);
         if let Some(bridge) = &self.bridge {
-            bridge.sync(&mut self.app);
+            bridge.sync(&mut self.app, self.live.as_ref().is_some_and(crate::live::web::LiveHost::is_active));
         }
     }
 }

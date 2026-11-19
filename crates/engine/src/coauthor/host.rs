@@ -279,6 +279,8 @@ fn merged_lines(rows: bool, ranges: &[RangeRef]) -> String {
 
 /// What a live editor starts from.
 pub enum LiveBase<'a> {
+    /// The empty document, for a log with no stored revision.
+    Empty,
     /// The document's stored file, for the first live session: fresh identities, the base rows
     /// and columns all participant 0's.
     File { bytes: &'a [u8] },
