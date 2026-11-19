@@ -7,10 +7,11 @@ mod undo;
 
 use std::collections::BTreeMap;
 
-use collab_live::client::{ClientError, Event, LiveClient, LiveConfig, LocalError, Mode, Step};
+use collab_live::client::{AgreedSnapshot, ClientError, Event, LiveClient, LiveConfig, LocalError, Mode, Step};
 use collab_live::ids::IdError;
-use protocol::live::MAX_PAYLOAD_BYTES;
+use protocol::live::{LiveBuild, MAX_PAYLOAD_BYTES};
 use serde_json::Value as Json;
+use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 pub use command::{
@@ -20,7 +21,7 @@ pub use command::{
 pub use editor::{GridLiveEditor, GridSnapshot, SharedDocumentSnapshot};
 pub use ids::{
     CellId, IdentityDelete, IdentityInsert, IdentityPosition, IdentityRange, IdentityRangeKind, IdentityRanges, IdentityRun, IdentitySheetInsert,
-    IdentityStructural, SheetIds, TargetGone, WorkbookIds,
+    IdentityStructural, MAX_SESSION_DATA_BYTES, SheetIds, TargetGone, WorkbookIds,
 };
 pub use undo::{
     GuardedAxisState, GuardedCellContent, GuardedCellInput, GuardedLineFields, GuardedLineState, GuardedPatch, GuardedStructural, GuardedStyleLeaf,
@@ -70,6 +71,14 @@ pub struct PreparedChange {
     pub action: u64,
 }
 
+/// One exact agreed checkpoint result ready for the live host to upload.
+pub struct GridCheckpoint {
+    pub bytes: Vec<u8>,
+    pub session_data: Vec<u8>,
+    pub sha256: [u8; 32],
+    pub entered: [u8; 32],
+}
+
 /// A live entry that cannot be decoded, targeted or applied safely.
 #[derive(Debug, Error)]
 pub enum CoauthorError {
@@ -89,6 +98,8 @@ pub enum CoauthorError {
     Engine(#[from] crate::EngineError),
     #[error("live entry is {bytes} bytes; the limit is {max}")]
     OversizedPayload { bytes: usize, max: usize },
+    #[error("live identity session data is {bytes} bytes; the limit is {max}")]
+    OversizedSessionData { bytes: usize, max: usize },
     #[error("personal history refused the change: {0}")]
     HistoryRefusal(String),
     #[error(transparent)]
@@ -130,7 +141,8 @@ enum PendingHistory {
 
 impl GridCoauthor {
     pub fn new(config: LiveConfig, editor: GridLiveEditor) -> Self {
-        let mut client = LiveClient::new(config);
+        let build = if cfg!(target_arch = "wasm32") { LiveBuild::Browser } else { LiveBuild::Desktop };
+        let mut client = LiveClient::new(config).with_live_capabilities(true, build);
         let outbox = client.connected(0);
         Self {
             client,
@@ -161,6 +173,22 @@ impl GridCoauthor {
 
     pub fn last_undo_report(&self) -> Option<&UndoReport> {
         self.last_undo_report.as_ref()
+    }
+
+    /// Writes the exact agreed state at `at`, excluding any optimistic work still shown.
+    pub fn checkpoint(&self, at: collab_core::ids::Seq) -> Result<GridCheckpoint, GridLiveError> {
+        let state = match self.client.agreed_snapshot(&self.editor, at)? {
+            AgreedSnapshot::Editor(editor) => editor.checkpoint_state()?,
+            AgreedSnapshot::Saved(snapshot) => snapshot.checkpoint_state(),
+        };
+        let mut workbook = state.workbook.clone();
+        state.stored_view.apply(&mut workbook, state.ids);
+        state.ids.restore_file_ids(&mut workbook)?;
+        let bytes = crate::io::save_bytes(&workbook, "checkpoint.xlsx").map_err(CoauthorError::from)?;
+        let session_data = state.ids.session_data()?;
+        let sha256 = Sha256::digest(&bytes).into();
+        let entered = crate::fingerprint::workbook_fingerprint(&workbook).entered;
+        Ok(GridCheckpoint { bytes, session_data, sha256, entered })
     }
 
     /// The existing live connection dropped. The in-memory client and its personal history are

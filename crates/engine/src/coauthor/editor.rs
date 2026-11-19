@@ -6,6 +6,7 @@ use std::sync::Once;
 use collab_core::ids::Seq;
 use collab_live::client::{Crash, Effect, EntryView, LiveEditor, Outcome, Stamp};
 use collab_live::ids::{IdError, LiveId};
+use gridcraft_model::{Sheet, SheetViewMode, ShowObjects, Workbook, WorkbookView};
 use serde_json::Value as Json;
 
 use super::{
@@ -94,6 +95,113 @@ pub struct SharedDocumentSnapshot {
 pub struct GridSnapshot {
     document: SharedDocumentSnapshot,
     ids: WorkbookIds,
+    stored_view: StoredFileView,
+}
+
+#[derive(Clone, Debug)]
+struct StoredSheetView {
+    freeze: Option<(u32, u32)>,
+    show_gridlines: bool,
+    show_headings: bool,
+    show_formulas: bool,
+    show_zeros: bool,
+    show_outline_symbols: bool,
+    right_to_left: bool,
+    zoom: u16,
+    view_active: gridcraft_core::CellRef,
+    view_top_left: gridcraft_core::CellRef,
+    view: SheetViewMode,
+}
+
+impl StoredSheetView {
+    fn capture(sheet: &Sheet) -> Self {
+        Self {
+            freeze: sheet.freeze,
+            show_gridlines: sheet.show_gridlines,
+            show_headings: sheet.show_headings,
+            show_formulas: sheet.show_formulas,
+            show_zeros: sheet.show_zeros,
+            show_outline_symbols: sheet.show_outline_symbols,
+            right_to_left: sheet.right_to_left,
+            zoom: sheet.zoom,
+            view_active: sheet.view_active,
+            view_top_left: sheet.view_top_left,
+            view: sheet.view,
+        }
+    }
+
+    fn restore(&self, sheet: &mut Sheet) {
+        sheet.freeze = self.freeze;
+        sheet.show_gridlines = self.show_gridlines;
+        sheet.show_headings = self.show_headings;
+        sheet.show_formulas = self.show_formulas;
+        sheet.show_zeros = self.show_zeros;
+        sheet.show_outline_symbols = self.show_outline_symbols;
+        sheet.right_to_left = self.right_to_left;
+        sheet.zoom = self.zoom;
+        sheet.view_active = self.view_active;
+        sheet.view_top_left = self.view_top_left;
+        sheet.view = self.view;
+    }
+}
+
+#[derive(Clone, Debug)]
+pub(super) struct StoredFileView {
+    active_sheet: LiveId,
+    active_position: usize,
+    workbook: WorkbookView,
+    show_objects: ShowObjects,
+    sheets: BTreeMap<LiveId, StoredSheetView>,
+}
+
+impl StoredFileView {
+    fn capture(workbook: &Workbook, ids: &WorkbookIds) -> Result<Self, CoauthorError> {
+        let active_position = workbook.active_sheet();
+        let active_sheet = ids.sheet_id(active_position)?;
+        let mut sheets = BTreeMap::new();
+        for (position, sheet) in workbook.sheets.iter().enumerate() {
+            sheets.insert(ids.sheet_id(position)?, StoredSheetView::capture(sheet));
+        }
+        Ok(Self { active_sheet, active_position, workbook: workbook.view, show_objects: workbook.show_objects, sheets })
+    }
+
+    /// Keeps the stored file identity stable across sheet edits. When the stored sheet is
+    /// deleted, every peer chooses the identity now occupying its old position; retaining only
+    /// the old numeric fallback would diverge from a peer that reloads the resulting checkpoint.
+    fn rebase_active(&mut self, ids: &WorkbookIds) {
+        let last = usize::try_from(ids.sheets.len()).map_or(usize::MAX, |len| len.saturating_sub(1));
+        let position = ids.resolve_sheet(self.active_sheet).unwrap_or_else(|_| self.active_position.min(last));
+        if let Ok(sheet) = ids.sheet_id(position) {
+            self.active_sheet = sheet;
+            self.active_position = position;
+        }
+    }
+
+    pub(super) fn apply(&self, workbook: &mut Workbook, ids: &WorkbookIds) {
+        workbook.view = self.workbook;
+        workbook.show_objects = self.show_objects;
+        let default = StoredSheetView::capture(&Sheet::new("Checkpoint"));
+        for position in 0..workbook.sheets.len() {
+            let stored = ids.sheet_id(position).ok().and_then(|id| self.sheets.get(&id)).unwrap_or(&default);
+            if let Some(sheet) = workbook.sheets.get_mut(position) {
+                stored.restore(Arc::make_mut(sheet));
+            }
+        }
+        let active = ids.resolve_sheet(self.active_sheet).unwrap_or_else(|_| self.active_position.min(workbook.sheets.len().saturating_sub(1)));
+        workbook.set_active_sheet(active);
+    }
+}
+
+pub(super) struct GridCheckpointState<'a> {
+    pub workbook: &'a Workbook,
+    pub ids: &'a WorkbookIds,
+    pub stored_view: &'a StoredFileView,
+}
+
+impl GridSnapshot {
+    pub(super) fn checkpoint_state(&self) -> GridCheckpointState<'_> {
+        GridCheckpointState { workbook: &self.document.wb, ids: &self.ids, stored_view: &self.stored_view }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -109,6 +217,7 @@ pub(super) struct PersonalView {
 pub struct GridLiveEditor {
     session: Session,
     ids: WorkbookIds,
+    stored_view: StoredFileView,
     applying_seq: Option<Seq>,
     local_action_high_water: u64,
     history_updates: BTreeMap<u64, Option<UndoAction>>,
@@ -118,15 +227,27 @@ pub struct GridLiveEditor {
 }
 
 impl GridLiveEditor {
-    pub fn new(mut session: Session) -> Result<Self, super::CoauthorError> {
+    pub fn new(session: Session) -> Result<Self, super::CoauthorError> {
+        let ids = WorkbookIds::from_workbook(&session.doc()?.wb)?;
+        Self::with_ids(session, ids)
+    }
+
+    /// Builds an editor around checkpoint identities after validating them against the workbook.
+    pub fn from_session_data(session: Session, session_data: &[u8]) -> Result<Self, super::CoauthorError> {
+        let ids = WorkbookIds::from_session_data(session_data, &session.doc()?.wb)?;
+        Self::with_ids(session, ids)
+    }
+
+    fn with_ids(mut session: Session, ids: WorkbookIds) -> Result<Self, super::CoauthorError> {
         if let Some(debugger) = &session.macro_debug {
             return Err(EngineError::Other(format!("Macro '{}' is being debugged. Stop it before sharing this workbook.", debugger.name)).into());
         }
-        let ids = WorkbookIds::from_workbook(&session.doc()?.wb)?;
+        let stored_view = StoredFileView::capture(&session.doc()?.wb, &ids)?;
         session.coauthoring = true;
         Ok(Self {
             session,
             ids,
+            stored_view,
             applying_seq: None,
             local_action_high_water: 0,
             history_updates: BTreeMap::new(),
@@ -146,6 +267,10 @@ impl GridLiveEditor {
 
     pub fn ids(&self) -> &WorkbookIds {
         &self.ids
+    }
+
+    pub(super) fn checkpoint_state(&self) -> Result<GridCheckpointState<'_>, CoauthorError> {
+        Ok(GridCheckpointState { workbook: &self.session.doc()?.wb, ids: &self.ids, stored_view: &self.stored_view })
     }
 
     pub fn prepare(
@@ -296,6 +421,7 @@ impl GridLiveEditor {
             document.calc = snapshot.document.calc.clone();
             document.revision = snapshot.document.revision;
             self.ids = snapshot.ids.clone();
+            self.stored_view = snapshot.stored_view.clone();
         }
         self.session.take_ui_requests();
         if let Some(view) = view {
@@ -361,7 +487,7 @@ impl LiveEditor for GridLiveEditor {
             |_| SharedDocumentSnapshot { wb: Arc::new(gridcraft_model::Workbook::new()), calc: Calc::new(), revision: 0 },
             |document| SharedDocumentSnapshot { wb: document.wb.clone(), calc: document.calc.clone(), revision: document.revision },
         );
-        GridSnapshot { document, ids: self.ids.clone() }
+        GridSnapshot { document, ids: self.ids.clone(), stored_view: self.stored_view.clone() }
     }
 
     fn restore(&mut self, snapshot: &GridSnapshot) {
@@ -437,11 +563,14 @@ impl LiveEditor for GridLiveEditor {
             self.restore_shared(&before, view.as_ref(), true);
             return Self::engine_error_outcome(error, entry.stamp.is_none() && stamp_was_read);
         }
-        if let Some(structural) = resolved.structural
-            && self.ids.apply_structural_owned(&structural, entry.participant.0).is_err()
+        if let Some(structural) = &resolved.structural
+            && self.ids.apply_structural_owned(structural, entry.participant.0).is_err()
         {
             self.restore_shared(&before, view.as_ref(), true);
             return Ok(Self::no_effect("The shared identities could not be updated.", entry.stamp.is_none() && stamp_was_read));
+        }
+        if resolved.structural.is_some() {
+            self.stored_view.rebase_active(&self.ids);
         }
         self.finish_stamp(prior_stamp, stamp_was_read);
         let read_stamp = entry.stamp.is_none() && stamp_was_read;

@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 
 use collab_live::ids::{IdError, LiveId, Lookup, OrderedIds};
 use gridcraft_core::{CellRef, MAX_COLS, MAX_ROWS, RangeRef};
@@ -17,6 +18,7 @@ pub struct CellId {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct SheetIds {
     pub id: LiveId,
     pub rows: OrderedIds,
@@ -115,16 +117,65 @@ struct DeletedOwner {
     by: u32,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct WorkbookIds {
     pub sheets: OrderedIds,
     pub by_id: BTreeMap<LiveId, SheetIds>,
-    /// Who deleted each deleted row and column identity, indexed by run. Every client derives
-    /// it from the ordered entries it has applied, never from a payload, so structural undo can
-    /// revive only the deleting participant's own identities. It is per-session state: a table
-    /// loaded from elsewhere starts empty, which refuses revival rather than allowing it.
-    #[serde(skip)]
+    /// Stable XLSX `sheetId` values, including identities of deleted sheets. Imported nonzero
+    /// ids are preserved; sheets created in a live session receive a deterministic unused id.
+    file_ids: BTreeMap<LiveId, u32>,
+    /// Imported chart sheets share the XLSX `sheetId` namespace with worksheets even though
+    /// GridCraft keeps them as opaque content.
+    reserved_file_ids: BTreeSet<u32>,
+    /// Who deleted each deleted row and column identity, indexed by run. It is derived from
+    /// ordered entries while the room is live and stored in validated checkpoint session data,
+    /// so a later joiner makes exactly the same structural-undo decision as its peers.
     deleted_by: BTreeMap<DeletedKey, DeletedOwner>,
+}
+
+/// The most identity session data one checkpoint may carry.
+pub const MAX_SESSION_DATA_BYTES: usize = 8 * 1024 * 1024;
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SheetMapWire {
+    key: LiveId,
+    value: SheetIdsWire,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SheetIdsWire {
+    id: LiveId,
+    rows: OrderedIdsWire,
+    cols: OrderedIdsWire,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct DeletedOwnerWire {
+    sheet: LiveId,
+    rows: bool,
+    first: LiveId,
+    count: u32,
+    by: u32,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FileIdWire {
+    sheet: LiveId,
+    id: u32,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WorkbookIdsWire {
+    sheets: OrderedIdsWire,
+    by_id: Vec<SheetMapWire>,
+    file_ids: Vec<FileIdWire>,
+    reserved_file_ids: Vec<u32>,
+    deleted_by: Vec<DeletedOwnerWire>,
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -240,7 +291,202 @@ impl WorkbookIds {
             let id = LiveId(0, position);
             by_id.insert(id, SheetIds { id, rows: OrderedIds::base(MAX_ROWS), cols: OrderedIds::base(MAX_COLS) });
         }
-        Ok(Self { sheets, by_id, deleted_by: BTreeMap::new() })
+        let (file_ids, reserved_file_ids) = canonical_file_ids(wb, &sheets)?;
+        Ok(Self { sheets, by_id, file_ids, reserved_file_ids, deleted_by: BTreeMap::new() })
+    }
+
+    /// Loads and validates the opaque identity data stored beside a checkpoint.
+    pub fn from_session_data(bytes: &[u8], wb: &Workbook) -> Result<Self, CoauthorError> {
+        if bytes.len() > MAX_SESSION_DATA_BYTES {
+            return Err(CoauthorError::OversizedSessionData { bytes: bytes.len(), max: MAX_SESSION_DATA_BYTES });
+        }
+        let wire: WorkbookIdsWire = serde_json::from_slice(bytes).map_err(|error| CoauthorError::MalformedPayload(error.to_string()))?;
+        let sheets = ordered_from_wire(wire.sheets)?;
+
+        let mut by_id = BTreeMap::new();
+        for entry in wire.by_id {
+            if entry.key != entry.value.id {
+                return Err(CoauthorError::MalformedPayload("a sheet identity does not match its map key".into()));
+            }
+            let value = SheetIds { id: entry.value.id, rows: ordered_from_wire(entry.value.rows)?, cols: ordered_from_wire(entry.value.cols)? };
+            if by_id.insert(entry.key, value).is_some() {
+                return Err(CoauthorError::MalformedPayload("the sheet identity map contains a duplicate key".into()));
+            }
+        }
+
+        let mut file_ids = BTreeMap::new();
+        for entry in wire.file_ids {
+            if entry.id == 0 {
+                return Err(CoauthorError::MalformedPayload("a worksheet file identity is zero".into()));
+            }
+            if file_ids.insert(entry.sheet, entry.id).is_some() {
+                return Err(CoauthorError::MalformedPayload("the worksheet file identity map contains a duplicate sheet".into()));
+            }
+        }
+        let reserved_count = wire.reserved_file_ids.len();
+        let reserved_file_ids: BTreeSet<u32> = wire.reserved_file_ids.into_iter().collect();
+        if reserved_file_ids.len() != reserved_count {
+            return Err(CoauthorError::MalformedPayload("preserved file identities are repeated".into()));
+        }
+
+        let mut deleted_by = BTreeMap::new();
+        for owner in wire.deleted_by {
+            if owner.count == 0 || u64::from(owner.first.1).saturating_add(u64::from(owner.count)) > u64::from(u32::MAX) + 1 {
+                return Err(CoauthorError::MalformedPayload("a deletion-owner run is empty or overflows".into()));
+            }
+            if owner.by == 0 {
+                return Err(CoauthorError::MalformedPayload("participant zero cannot own a deletion".into()));
+            }
+            let axis = DeletedAxis::of(owner.rows);
+            let key = DeletedKey { sheet: owner.sheet, axis, participant: owner.first.0, start: owner.first.1 };
+            if deleted_by.insert(key, DeletedOwner { len: owner.count, by: owner.by }).is_some() {
+                return Err(CoauthorError::MalformedPayload("the deletion-owner table contains a duplicate run".into()));
+            }
+        }
+
+        let ids = Self { sheets, by_id, file_ids, reserved_file_ids, deleted_by };
+        ids.validate_graph(wb)?;
+        ids.validate_deleted_owners()?;
+        Ok(ids)
+    }
+
+    /// Serialises the validated identity graph stored beside a checkpoint.
+    pub fn session_data(&self) -> Result<Vec<u8>, CoauthorError> {
+        self.validate_without_workbook()?;
+        self.validate_deleted_owners()?;
+        let by_id = self
+            .by_id
+            .iter()
+            .map(|(&key, value)| {
+                Ok(SheetMapWire { key, value: SheetIdsWire { id: value.id, rows: ordered_wire(&value.rows)?, cols: ordered_wire(&value.cols)? } })
+            })
+            .collect::<Result<Vec<_>, CoauthorError>>()?;
+        let wire = WorkbookIdsWire {
+            sheets: ordered_wire(&self.sheets)?,
+            by_id,
+            file_ids: self.file_ids.iter().map(|(&sheet, &id)| FileIdWire { sheet, id }).collect(),
+            reserved_file_ids: self.reserved_file_ids.iter().copied().collect(),
+            deleted_by: self
+                .deleted_by
+                .iter()
+                .map(|(key, owner)| DeletedOwnerWire {
+                    sheet: key.sheet,
+                    rows: key.axis == DeletedAxis::Row,
+                    first: LiveId(key.participant, key.start),
+                    count: owner.len,
+                    by: owner.by,
+                })
+                .collect(),
+        };
+        let bytes = serde_json::to_vec(&wire).map_err(|error| CoauthorError::MalformedPayload(error.to_string()))?;
+        if bytes.len() > MAX_SESSION_DATA_BYTES {
+            return Err(CoauthorError::OversizedSessionData { bytes: bytes.len(), max: MAX_SESSION_DATA_BYTES });
+        }
+        Ok(bytes)
+    }
+
+    fn validate_without_workbook(&self) -> Result<(), CoauthorError> {
+        self.sheets.validate()?;
+        if self.file_ids.len() != self.by_id.len() || self.file_ids.keys().ne(self.by_id.keys()) {
+            return Err(CoauthorError::MalformedPayload("worksheet file identities do not correspond one-for-one with sheet identities".into()));
+        }
+        let mut unique_file_ids = BTreeSet::new();
+        for &file_id in self.file_ids.values() {
+            if file_id == 0 || !unique_file_ids.insert(file_id) {
+                return Err(CoauthorError::MalformedPayload("worksheet file identities are zero or repeated".into()));
+            }
+        }
+        if self.reserved_file_ids.contains(&0) || self.reserved_file_ids.iter().any(|file_id| unique_file_ids.contains(file_id)) {
+            return Err(CoauthorError::MalformedPayload("preserved and worksheet file identities overlap or contain zero".into()));
+        }
+        for (&key, value) in &self.by_id {
+            if key != value.id {
+                return Err(CoauthorError::MalformedPayload("a sheet identity does not match its map key".into()));
+            }
+            if matches!(self.sheets.find(key), Lookup::Unknown) {
+                return Err(CoauthorError::MalformedPayload("the sheet identity map contains an unknown identity".into()));
+            }
+            value.rows.validate()?;
+            value.cols.validate()?;
+            if value.rows.len() != MAX_ROWS || value.cols.len() != MAX_COLS {
+                return Err(CoauthorError::MalformedPayload("a worksheet identity axis has the wrong length".into()));
+            }
+        }
+        for position in 0..self.sheets.len() {
+            let id = self.sheets.id_at(position).ok_or_else(|| CoauthorError::MalformedPayload("a live sheet identity is missing".into()))?;
+            if !self.by_id.contains_key(&id) {
+                return Err(CoauthorError::MalformedPayload("the sheet identity map is missing a live sheet".into()));
+            }
+        }
+        Ok(())
+    }
+
+    pub(super) fn restore_file_ids(&self, wb: &mut Workbook) -> Result<(), CoauthorError> {
+        for position in 0..wb.sheets.len() {
+            let sheet = self.sheet_id(position)?;
+            let file_id = self
+                .file_ids
+                .get(&sheet)
+                .copied()
+                .ok_or_else(|| CoauthorError::MalformedPayload("a live sheet has no worksheet file identity".into()))?;
+            let model_sheet =
+                wb.sheets.get_mut(position).ok_or_else(|| CoauthorError::MalformedPayload("a live sheet has no workbook sheet".into()))?;
+            Arc::make_mut(model_sheet).file_id = file_id;
+        }
+        Ok(())
+    }
+
+    fn validate_graph(&self, wb: &Workbook) -> Result<(), CoauthorError> {
+        self.validate_without_workbook()?;
+        let sheet_count = u32::try_from(wb.sheets.len())
+            .map_err(|_| CoauthorError::MalformedPayload("the workbook has too many sheets for live identities".into()))?;
+        if self.sheets.len() != sheet_count {
+            return Err(CoauthorError::MalformedPayload("live sheet identities do not correspond one-for-one with the workbook".into()));
+        }
+        let workbook_reserved: BTreeSet<u32> =
+            wb.preserved.iter().flat_map(|kept| kept.sheets.iter().map(|sheet| sheet.sheet_id)).filter(|&id| id != 0).collect();
+        if workbook_reserved != self.reserved_file_ids {
+            return Err(CoauthorError::MalformedPayload("preserved file identities do not match the checkpoint workbook".into()));
+        }
+        for (position, sheet) in wb.sheets.iter().enumerate() {
+            let identity = self.sheet_id(position)?;
+            let mapped = self
+                .file_ids
+                .get(&identity)
+                .copied()
+                .ok_or_else(|| CoauthorError::MalformedPayload("a live sheet has no worksheet file identity".into()))?;
+            if sheet.file_id != 0 && sheet.file_id != mapped {
+                return Err(CoauthorError::MalformedPayload("a worksheet file identity does not match the checkpoint workbook".into()));
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_deleted_owners(&self) -> Result<(), CoauthorError> {
+        let coverage = deleted_coverage(&self.by_id)?;
+        let mut previous: Option<(DeletedKey, u64)> = None;
+        for (&key, owner) in &self.deleted_by {
+            if owner.len == 0 || owner.by == 0 {
+                return Err(CoauthorError::MalformedPayload("a deletion-owner run is empty or has no participant".into()));
+            }
+            let end = u64::from(key.start).saturating_add(u64::from(owner.len));
+            if end > u64::from(u32::MAX) + 1 {
+                return Err(CoauthorError::MalformedPayload("a deletion-owner run overflows".into()));
+            }
+            if let Some((prior, prior_end)) = previous
+                && prior.sheet == key.sheet
+                && prior.axis == key.axis
+                && prior.participant == key.participant
+                && u64::from(key.start) < prior_end
+            {
+                return Err(CoauthorError::MalformedPayload("deletion-owner runs overlap".into()));
+            }
+            if !deleted_run_is_covered(&coverage, key, owner.len) {
+                return Err(CoauthorError::MalformedPayload("a deletion owner names an identity that is not deleted".into()));
+            }
+            previous = Some((key, end));
+        }
+        Ok(())
     }
 
     pub fn cell_id(&self, sheet: usize, cell: CellRef) -> Result<CellId, CoauthorError> {
@@ -473,9 +719,11 @@ impl WorkbookIds {
                 delete_fixed(&mut axes.cols, ids, *first, "column", MAX_COLS)?;
             }
             IdentityStructural::InsertSheet { before, id } => {
+                let file_id = next_file_id(self.file_ids.values().copied().chain(self.reserved_file_ids.iter().copied()))?;
                 let at = position(&self.sheets, *before, "sheet")?;
                 self.sheets.insert(at, *id, 1)?;
                 self.by_id.insert(*id, SheetIds { id: *id, rows: OrderedIds::base(MAX_ROWS), cols: OrderedIds::base(MAX_COLS) });
+                self.file_ids.insert(*id, file_id);
             }
             IdentityStructural::DeleteSheet { id } => delete_exact(&mut self.sheets, &[*id], "sheet")?,
         }
@@ -492,6 +740,7 @@ impl WorkbookIds {
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct OrderedRunWire {
     participant: u32,
     start: u32,
@@ -499,6 +748,7 @@ struct OrderedRunWire {
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct DeletedRunWire {
     run: OrderedRunWire,
     was_at: u32,
@@ -506,14 +756,93 @@ struct DeletedRunWire {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct OrderedIdsWire {
     live: Vec<OrderedRunWire>,
     deleted: Vec<DeletedRunWire>,
 }
 
+fn canonical_file_ids(wb: &Workbook, sheets: &OrderedIds) -> Result<(BTreeMap<LiveId, u32>, BTreeSet<u32>), CoauthorError> {
+    let reserved: BTreeSet<u32> = wb.preserved.iter().flat_map(|kept| kept.sheets.iter().map(|sheet| sheet.sheet_id)).filter(|&id| id != 0).collect();
+    let mut used: BTreeSet<u32> = wb.sheets.iter().map(|sheet| sheet.file_id).filter(|&id| id != 0).chain(reserved.iter().copied()).collect();
+    let mut claimed_imported = BTreeSet::new();
+    let mut file_ids = BTreeMap::new();
+    for (position, sheet) in wb.sheets.iter().enumerate() {
+        let position = u32::try_from(position).map_err(|_| CoauthorError::MalformedPayload("too many sheets for file identities".into()))?;
+        let identity = sheets.id_at(position).ok_or_else(|| CoauthorError::MalformedPayload("a worksheet identity is missing".into()))?;
+        let file_id = if sheet.file_id != 0 && !reserved.contains(&sheet.file_id) && claimed_imported.insert(sheet.file_id) {
+            sheet.file_id
+        } else {
+            take_next_file_id(&mut used)?
+        };
+        file_ids.insert(identity, file_id);
+    }
+    Ok((file_ids, reserved))
+}
+
+fn next_file_id(ids: impl IntoIterator<Item = u32>) -> Result<u32, CoauthorError> {
+    let mut used: BTreeSet<u32> = ids.into_iter().filter(|&id| id != 0).collect();
+    take_next_file_id(&mut used)
+}
+
+fn take_next_file_id(used: &mut BTreeSet<u32>) -> Result<u32, CoauthorError> {
+    let mut candidate = 1u32;
+    while used.contains(&candidate) {
+        candidate = candidate.checked_add(1).ok_or_else(|| CoauthorError::MalformedPayload("worksheet file identities are exhausted".into()))?;
+    }
+    used.insert(candidate);
+    Ok(candidate)
+}
+
 fn ordered_wire(ids: &OrderedIds) -> Result<OrderedIdsWire, CoauthorError> {
     serde_json::from_value(serde_json::to_value(ids).map_err(|error| CoauthorError::MalformedPayload(error.to_string()))?)
         .map_err(|error| CoauthorError::MalformedPayload(error.to_string()))
+}
+
+fn ordered_from_wire(wire: OrderedIdsWire) -> Result<OrderedIds, CoauthorError> {
+    serde_json::from_value(serde_json::to_value(wire).map_err(|error| CoauthorError::MalformedPayload(error.to_string()))?)
+        .map_err(|error| CoauthorError::MalformedPayload(error.to_string()))
+}
+
+type DeletedCoverage = BTreeMap<(LiveId, DeletedAxis, u32), Vec<(u64, u64)>>;
+
+/// Indexes and merges every deleted identity run once. Checkpoint metadata may contain many
+/// owner runs, so rebuilding and sorting an entire million-cell axis per owner would let a
+/// fragmented payload turn validation quadratic.
+fn deleted_coverage(by_id: &BTreeMap<LiveId, SheetIds>) -> Result<DeletedCoverage, CoauthorError> {
+    let mut coverage: DeletedCoverage = BTreeMap::new();
+    for (&sheet, axes) in by_id {
+        for (axis, ids) in [(DeletedAxis::Row, &axes.rows), (DeletedAxis::Column, &axes.cols)] {
+            for gone in ordered_wire(ids)?.deleted {
+                let start = u64::from(gone.run.start);
+                let end = start.saturating_add(u64::from(gone.run.len));
+                coverage.entry((sheet, axis, gone.run.participant)).or_default().push((start, end));
+            }
+        }
+    }
+    for intervals in coverage.values_mut() {
+        intervals.sort_unstable();
+        let mut merged: Vec<(u64, u64)> = Vec::with_capacity(intervals.len());
+        for (start, end) in intervals.drain(..) {
+            if let Some(last) = merged.last_mut()
+                && start <= last.1
+            {
+                last.1 = last.1.max(end);
+            } else {
+                merged.push((start, end));
+            }
+        }
+        *intervals = merged;
+    }
+    Ok(coverage)
+}
+
+fn deleted_run_is_covered(coverage: &DeletedCoverage, key: DeletedKey, count: u32) -> bool {
+    let Some(intervals) = coverage.get(&(key.sheet, key.axis, key.participant)) else { return false };
+    let start = u64::from(key.start);
+    let end = start.saturating_add(u64::from(count));
+    let at = intervals.partition_point(|(_, interval_end)| *interval_end <= start);
+    intervals.get(at).is_some_and(|(interval_start, interval_end)| *interval_start <= start && end <= *interval_end)
 }
 
 /// The live runs of an axis in position order, each with the position of its first identity.
@@ -755,5 +1084,50 @@ fn delete_exact(ids: &mut OrderedIds, targets: &[LiveId], label: &str) -> Result
 impl From<IdError> for CoauthorError {
     fn from(value: IdError) -> Self {
         CoauthorError::Identity(value)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fragmented_multi_owner_checkpoint_metadata_round_trips() {
+        let workbook = Workbook::new();
+        let mut ids = WorkbookIds::from_workbook(&workbook).expect("base identities build");
+        let sheet = ids.sheet_id(0).expect("base sheet has an identity");
+        let mut next = [0u32; 2];
+        for position in 0..256u32 {
+            let by = 1 + position % 2;
+            let slot = usize::try_from(by - 1).expect("test participant index fits");
+            let first = LiveId(by, next[slot]);
+            next[slot] += 1;
+            let row = ids.by_id.get(&sheet).and_then(|axes| axes.rows.id_at(position)).expect("fragmented source row stays live");
+            ids.apply_structural_owned(&IdentityStructural::DeleteRows { sheet, ids: vec![row], first }, by).expect("fragmented deletion applies");
+        }
+
+        let bytes = ids.session_data().expect("fragmented ownership serializes");
+        let loaded = WorkbookIds::from_session_data(&bytes, &workbook).expect("fragmented ownership validates once per axis");
+        assert_eq!(loaded, ids);
+    }
+
+    #[test]
+    fn live_sheet_ids_reserve_preserved_chart_sheet_ids() {
+        let mut workbook = Workbook::new();
+        Arc::make_mut(workbook.sheets.get_mut(0).expect("worksheet exists")).file_id = 2;
+        workbook.preserved = Some(Arc::new(gridcraft_model::Preserved {
+            sheets: vec![
+                gridcraft_model::PreservedSheet { name: "Before".into(), before: 0, sheet_id: 1, ..Default::default() },
+                gridcraft_model::PreservedSheet { name: "After".into(), before: 1, sheet_id: 4, ..Default::default() },
+            ],
+            ..Default::default()
+        }));
+        let mut ids = WorkbookIds::from_workbook(&workbook).expect("mixed sheet identities build");
+        let inserted = LiveId(7, 0);
+        ids.apply_structural_owned(&IdentityStructural::InsertSheet { before: IdentityPosition::End, id: inserted }, 7)
+            .expect("live worksheet inserts around preserved chart sheets");
+
+        assert_eq!(ids.file_ids.get(&inserted), Some(&3), "the inserted worksheet does not steal either chart sheet id");
+        assert_eq!(ids.reserved_file_ids, BTreeSet::from([1, 4]));
     }
 }

@@ -1,13 +1,14 @@
 use collab_core::ids::Seq;
 use collab_live::client::{Crash, Effect, EntryView, Event, LiveConfig, LiveEditor, Mode, Outcome, Stamp, Step};
 use collab_live::ids::{LiveId, Lookup};
-use gridcraft_core::{CellRef, Value};
+use gridcraft_core::{CellRef, MAX_COLS, MAX_ROWS, Value};
 use gridcraft_engine::coauthor::{
-    CellId, GRIDCRAFT_LIVE_FORMAT, GridCoauthor, GridLiveEditor, IdentityInsert, IdentityPosition, SharedCommand, decode_entry, mode_for,
+    CellId, GRIDCRAFT_LIVE_FORMAT, GridCoauthor, GridLiveEditor, IdentityInsert, IdentityPosition, SharedCommand, WorkbookIds, decode_entry, mode_for,
 };
-use gridcraft_engine::fingerprint::{DocId, fingerprint};
-use gridcraft_engine::{EngineError, Session, UiRequest};
+use gridcraft_engine::fingerprint::{DocId, fingerprint, workbook_fingerprint};
+use gridcraft_engine::{DocState, EngineError, Session, Trust, UiRequest, io};
 use gridcraft_model::Cell;
+use protocol::live::{LiveBuild, LiveClientMsg};
 use serde_json::json;
 use std::sync::Arc;
 
@@ -296,6 +297,195 @@ fn pending_rerun_preserves_existing_and_new_sheet_views() {
 
 fn live_config() -> LiveConfig {
     LiveConfig { format: GRIDCRAFT_LIVE_FORMAT.to_string(), crashed_at: None }
+}
+
+#[test]
+fn workbook_ids_reject_inconsistent_session_data() {
+    let session = session_with_sheets(&["Sheet1"]);
+    let workbook = &session.doc().expect("document exists").wb;
+    let ids = WorkbookIds::from_workbook(workbook).expect("base identities build");
+    let valid = ids.session_data().expect("valid session data serializes");
+    WorkbookIds::from_session_data(&valid, workbook).expect("valid session data loads");
+
+    let value: serde_json::Value = serde_json::from_slice(&valid).expect("session data is JSON");
+    let mut invalid = Vec::new();
+
+    let mut missing = value.clone();
+    missing["by_id"].as_array_mut().expect("sheet map is an array").clear();
+    invalid.push(("missing live sheet", missing));
+
+    let mut extra = value.clone();
+    let mut entry = extra["by_id"][0].clone();
+    entry["key"] = json!([9, 9]);
+    entry["value"]["id"] = json!([9, 9]);
+    extra["by_id"].as_array_mut().expect("sheet map is an array").push(entry);
+    invalid.push(("extra live id", extra));
+
+    let mut mismatched = value.clone();
+    mismatched["by_id"][0]["value"]["id"] = json!([7, 7]);
+    invalid.push(("mismatched SheetIds.id", mismatched));
+
+    let mut short_rows = value.clone();
+    short_rows["by_id"][0]["value"]["rows"]["live"][0]["len"] = json!(MAX_ROWS - 1);
+    invalid.push(("short row axis", short_rows));
+
+    let mut short_cols = value.clone();
+    short_cols["by_id"][0]["value"]["cols"]["live"][0]["len"] = json!(MAX_COLS - 1);
+    invalid.push(("short column axis", short_cols));
+
+    let mut unknown = value;
+    unknown["future"] = json!(true);
+    invalid.push(("unknown root key", unknown));
+
+    let mut nested_unknown: serde_json::Value = serde_json::from_slice(&valid).expect("session data is JSON");
+    nested_unknown["by_id"][0]["value"]["rows"]["future"] = json!(true);
+    invalid.push(("unknown nested identity key", nested_unknown));
+
+    for (case, invalid) in invalid {
+        let bytes = serde_json::to_vec(&invalid).expect("invalid probe serializes");
+        assert!(WorkbookIds::from_session_data(&bytes, workbook).is_err(), "{case} must be rejected");
+    }
+
+    let oversized = vec![b' '; 8 * 1024 * 1024 + 1];
+    assert!(WorkbookIds::from_session_data(&oversized, workbook).is_err(), "identity JSON over 8 MiB must be rejected before use");
+}
+
+#[test]
+fn grid_host_advertises_checkpoint_capability_and_build() {
+    let editor = GridLiveEditor::new(session_with_sheets(&["Sheet1"])).expect("editor builds");
+    let mut client = GridCoauthor::new(live_config(), editor);
+    let join = client.tick(0).into_iter().find_map(|frame| serde_json::from_str::<LiveClientMsg>(&frame).ok()).expect("GridCraft sends a join frame");
+    let LiveClientMsg::LiveJoin { can_checkpoint, build, .. } = join else { panic!("first GridCraft frame must be a join") };
+    assert!(can_checkpoint, "the GridCraft host can write checkpoint bytes");
+    let expected = if cfg!(target_arch = "wasm32") { LiveBuild::Browser } else { LiveBuild::Desktop };
+    assert_eq!(build, expected, "the host advertises its actual build kind");
+}
+
+#[test]
+fn grid_checkpoint_uses_the_agreed_snapshot() {
+    let mut server = DeterministicServer::new();
+    let mut client = GridCoauthor::new(live_config(), GridLiveEditor::new(session_with_sheets(&["Sheet1"])).expect("editor builds"));
+    server.join(&mut client, 10);
+
+    client.submit("cell.set", json!({"sheet":"Sheet1","cell":"A1","input":"waiting"}), 2026, 20).expect("waiting cell edit submits");
+    client.submit("home.insertSheet", json!({"name":"Waiting sheet"}), 2026, 21).expect("waiting identity change submits");
+    assert_eq!(value_at(&client, "A1"), Value::text("waiting"), "waiting cell edit remains shown");
+    assert_eq!(client.editor().session().doc().expect("shown document exists").wb.sheets.len(), 2, "waiting sheet remains shown");
+
+    let checkpoint = client.checkpoint(Seq(0)).expect("the agreed base checkpoints");
+    let (workbook, _) = io::open_bytes("checkpoint.xlsx", &checkpoint.bytes).expect("checkpoint bytes reopen");
+    assert_eq!(workbook.sheet(0).expect("Sheet1 exists").value(CellRef::new(0, 0)), Value::Empty, "waiting cell edit is absent from bytes");
+    assert_eq!(workbook.sheets.len(), 1, "waiting sheet is absent from bytes");
+    let stored = WorkbookIds::from_session_data(&checkpoint.session_data, &workbook).expect("checkpoint identities load");
+    assert_eq!(stored.sheets.len(), 1, "waiting sheet identity is absent from session data");
+    assert_eq!(checkpoint.entered, workbook_fingerprint(&workbook).entered, "entered digest covers the written agreed workbook");
+}
+
+#[test]
+fn grid_checkpoint_restores_stored_view_before_writing() {
+    let mut session = session_with_sheets(&["Stored", "Other"]);
+    {
+        let document = session.doc_mut().expect("document exists");
+        let workbook = Arc::make_mut(&mut document.wb);
+        workbook.set_active_sheet(0);
+        let stored = Arc::make_mut(workbook.sheets.get_mut(0).expect("Stored exists"));
+        stored.view_active = CellRef::new(1, 1);
+        stored.view_top_left = CellRef::new(3, 2);
+        stored.zoom = 125;
+        stored.freeze = Some((1, 1));
+        stored.show_gridlines = false;
+        stored.show_headings = false;
+    }
+    let mut client = GridCoauthor::new(live_config(), GridLiveEditor::new(session).expect("editor builds"));
+    let mut server = DeterministicServer::new();
+    server.join(&mut client, 10);
+    {
+        let document = client.editor_mut().session_mut().doc_mut().expect("document exists");
+        let workbook = Arc::make_mut(&mut document.wb);
+        workbook.set_active_sheet(1);
+        let personal = Arc::make_mut(workbook.sheets.get_mut(0).expect("Stored exists"));
+        personal.view_active = CellRef::new(8, 8);
+        personal.view_top_left = CellRef::new(9, 9);
+        personal.zoom = 200;
+        personal.freeze = None;
+        personal.show_gridlines = true;
+        personal.show_headings = true;
+    }
+
+    let checkpoint = client.checkpoint(Seq(0)).expect("checkpoint writes");
+    let (written, _) = io::open_bytes("checkpoint.xlsx", &checkpoint.bytes).expect("checkpoint reopens");
+    let stored = written.sheet(0).expect("Stored exists");
+    assert_eq!(written.active_sheet(), 0);
+    assert_eq!((stored.view_active, stored.view_top_left, stored.zoom), (CellRef::new(1, 1), CellRef::new(3, 2), 125));
+    assert_eq!(stored.freeze, Some((1, 1)));
+    assert!(!stored.show_gridlines && !stored.show_headings);
+
+    let shown = &client.editor().session().doc().expect("shown document exists").wb;
+    assert_eq!(shown.active_sheet(), 1, "checkpointing does not move the person");
+    let personal = shown.sheet(0).expect("Stored exists");
+    assert_eq!((personal.view_active, personal.view_top_left, personal.zoom), (CellRef::new(8, 8), CellRef::new(9, 9), 200));
+    assert_eq!(personal.freeze, None);
+    assert!(personal.show_gridlines && personal.show_headings);
+}
+
+#[test]
+fn checkpoint_session_data_restores_deletion_ownership() {
+    let make_session = || {
+        let mut session = session_with_sheets(&["Sheet1"]);
+        for (cell, input) in [("A1", "top"), ("A2", "deleted"), ("A3", "tail")] {
+            session.execute("cell.set", json!({"sheet":"Sheet1","cell":cell,"input":input})).expect("base cell is set");
+        }
+        session
+    };
+    let mut server = DeterministicServer::new();
+    let mut alice = GridCoauthor::new(live_config(), GridLiveEditor::new(make_session()).expect("Alice editor builds"));
+    let mut bob = GridCoauthor::new(live_config(), GridLiveEditor::new(make_session()).expect("Bob editor builds"));
+    let alice_place = server.join(&mut alice, 10);
+    let bob_place = server.join(&mut bob, 20);
+    let deletion = submit(&mut alice, &server, &alice_place, "home.deleteRows", json!({"sheet":"Sheet1","rows":"2:2"}), 30);
+    let ordered = server.order(&deletion, 1_795_219_200_000, 41);
+    server.deliver_both(&mut alice, &mut bob, &ordered, 40);
+
+    let checkpoint = bob.checkpoint(ordered.seq).expect("peer writes checkpoint");
+    let (workbook, _) = io::open_bytes("checkpoint.xlsx", &checkpoint.bytes).expect("checkpoint reopens");
+    let checkpoint_editor = || {
+        let mut session = Session::new();
+        session.add_document(DocState::from_saved(workbook.clone(), None, "checkpoint.xlsx".into(), Trust::Local));
+        GridLiveEditor::from_session_data(session, &checkpoint.session_data).expect("checkpoint identities load into an editor")
+    };
+    let mut loaded = checkpoint_editor();
+    let mut forged = checkpoint_editor();
+
+    let undo = alice.undo(50).expect("Alice's deletion undo submits");
+    let undo = server.one_proposal(&alice_place, &undo);
+    loaded
+        .apply(&EntryView {
+            seq: Some(Seq(2)),
+            participant: alice_place.participant,
+            own: false,
+            stamp: Some(Stamp { at_ms: 1_795_219_200_050, seed: 42 }),
+            payload: &undo.payload,
+        })
+        .expect("loaded peer applies Alice's undo");
+    assert_eq!(
+        loaded.session().doc().expect("loaded document exists").wb.sheet(0).expect("Sheet1 exists").value(CellRef::new(1, 0)),
+        Value::text("deleted")
+    );
+
+    let outcome = forged
+        .apply(&EntryView {
+            seq: Some(Seq(2)),
+            participant: bob_place.participant,
+            own: false,
+            stamp: Some(Stamp { at_ms: 1_795_219_200_050, seed: 42 }),
+            payload: &undo.payload,
+        })
+        .expect("forged revival is handled without a crash");
+    assert!(matches!(outcome.effect, Effect::NoEffect { .. }), "another participant cannot revive Alice's deletion");
+    assert_eq!(
+        forged.session().doc().expect("forged document exists").wb.sheet(0).expect("Sheet1 exists").value(CellRef::new(1, 0)),
+        Value::text("tail")
+    );
 }
 
 fn rollback_base() -> Session {

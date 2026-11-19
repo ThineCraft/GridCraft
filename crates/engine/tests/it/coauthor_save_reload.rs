@@ -28,13 +28,18 @@
 //! `GRIDCRAFT_COAUTHOR_SAVE_SEEDS=10000` is expected to fail on exactly those.
 
 use std::path::PathBuf;
+use std::sync::Arc;
 
+use collab_core::ids::Seq;
+use collab_live::client::{EntryView, LiveConfig, LiveEditor, Stamp};
+use gridcraft_engine::coauthor::{GRIDCRAFT_LIVE_FORMAT, GridCoauthor, GridLiveEditor, WorkbookIds};
 use gridcraft_engine::core::{CellError, CellRef, Value};
 use gridcraft_engine::fingerprint::{DocId, fingerprint, workbook_fingerprint, workbook_first_difference};
-use gridcraft_engine::model::Workbook;
+use gridcraft_engine::model::{Preserved, PreservedPart, PreservedRel, ShowObjects, Workbook};
 use gridcraft_engine::{DocState, Session, Trust, io};
 use serde_json::json;
 
+use crate::live::{DeterministicServer, session_with_sheets};
 use crate::sequences::{DEFAULT_NOW, Sequence, Step, apply, fresh_session, generate};
 
 /// The file name the engine saves a new workbook under (`file.saveBytes` on "Book1").
@@ -522,6 +527,151 @@ fn save_reload_save_is_stable() {
         }
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
+fn grid_checkpoint_bytes_are_deterministic() {
+    let make_client = || {
+        let mut session = session_with_sheets(&["Stored", "Other"]);
+        session.execute("cell.set", json!({"sheet":"Stored","cell":"A1","input":"same"})).expect("base value is set");
+        GridCoauthor::new(
+            LiveConfig { format: GRIDCRAFT_LIVE_FORMAT.to_string(), crashed_at: None },
+            GridLiveEditor::new(session).expect("editor builds"),
+        )
+    };
+    let mut first = make_client();
+    let mut second = make_client();
+    let mut server = DeterministicServer::new();
+    server.join(&mut first, 10);
+    server.join(&mut second, 20);
+    first.editor_mut().session_mut().execute("sheet.activate", json!({"sheet":"Stored"})).expect("first view changes");
+    first.editor_mut().session_mut().execute("selection.set", json!({"range":"B2"})).expect("first selection changes");
+    second.editor_mut().session_mut().execute("sheet.activate", json!({"sheet":"Other"})).expect("second view changes");
+    second.editor_mut().session_mut().execute("selection.set", json!({"range":"H8"})).expect("second selection changes");
+    {
+        let document = first.editor_mut().session_mut().doc_mut().expect("first document exists");
+        let workbook = std::sync::Arc::make_mut(&mut document.wb);
+        workbook.view.show_sheet_tabs = false;
+        workbook.view.tab_ratio = 125;
+        workbook.show_objects = ShowObjects::None;
+    }
+    {
+        let document = second.editor_mut().session_mut().doc_mut().expect("second document exists");
+        let workbook = std::sync::Arc::make_mut(&mut document.wb);
+        workbook.view.show_horizontal_scroll = false;
+        workbook.view.show_vertical_scroll = false;
+        workbook.view.tab_ratio = 875;
+        workbook.show_objects = ShowObjects::Placeholders;
+    }
+
+    let first = first.checkpoint(Seq(0)).expect("first checkpoint writes");
+    let second = second.checkpoint(Seq(0)).expect("second checkpoint writes");
+    assert_eq!(first.bytes, second.bytes, "personal views do not change checkpoint bytes");
+    assert_eq!(first.session_data, second.session_data, "the same agreed identities serialize identically");
+    assert_eq!(first.sha256, second.sha256);
+    assert_eq!(first.entered, second.entered);
+}
+
+#[test]
+fn grid_checkpoint_rebases_a_deleted_stored_active_sheet() {
+    let mut session = session_with_sheets(&["A", "B", "C"]);
+    session.execute("sheet.activate", json!({"sheet":"B"})).expect("stored active sheet is selected");
+    {
+        let document = session.doc_mut().expect("document exists");
+        let workbook = Arc::make_mut(&mut document.wb);
+        for (sheet, file_id) in workbook.sheets.iter_mut().zip([7, 42, 99]) {
+            Arc::make_mut(sheet).file_id = file_id;
+        }
+    }
+    let mut original = GridCoauthor::new(
+        LiveConfig { format: GRIDCRAFT_LIVE_FORMAT.to_string(), crashed_at: None },
+        GridLiveEditor::new(session).expect("original editor builds"),
+    );
+    let mut server = DeterministicServer::new();
+    let original_place = server.join(&mut original, 10);
+
+    let delete = original.submit("home.deleteSheet", json!({"sheet":"B"}), 2026, 20).expect("delete submits");
+    let delete = server.one_proposal(&original_place, &delete);
+    let delete = server.order(&delete, 1_795_219_200_000, 41);
+    server.deliver(&mut original, &delete, 21);
+    let base = original.checkpoint(delete.seq).expect("deleted-sheet checkpoint writes");
+    let (workbook, _) = io::open_bytes("checkpoint.xlsx", &base.bytes).expect("checkpoint reopens");
+    assert_eq!(workbook.sheet(workbook.active_sheet()).expect("active sheet exists").name, "C");
+    assert_eq!(workbook.sheets.iter().map(|sheet| sheet.file_id).collect::<Vec<_>>(), [7, 99], "imported sheet ids survive checkpointing");
+    let mut tampered: serde_json::Value = serde_json::from_slice(&base.session_data).expect("checkpoint session data is JSON");
+    tampered["file_ids"][0]["id"] = json!(8);
+    let tampered = serde_json::to_vec(&tampered).expect("tampered session data serializes");
+    assert!(WorkbookIds::from_session_data(&tampered, &workbook).is_err(), "session data cannot remap a nonzero worksheet id from the checkpoint");
+
+    let mut loaded_session = Session::new();
+    loaded_session.add_document(DocState::from_saved(workbook, None, "checkpoint.xlsx".into(), Trust::Local));
+    let mut loaded_editor = GridLiveEditor::from_session_data(loaded_session, &base.session_data).expect("checkpoint identities reload");
+
+    let insert = original.submit("home.insertSheet", json!({"name":"X","before":0}), 2026, 40).expect("insert submits");
+    let insert = server.one_proposal(&original_place, &insert);
+    let insert = server.order(&insert, 1_795_219_200_100, 42);
+    server.deliver(&mut original, &insert, 41);
+    loaded_editor
+        .apply(&EntryView {
+            seq: Some(insert.seq),
+            participant: insert.participant,
+            own: false,
+            stamp: Some(Stamp { at_ms: insert.at_ms, seed: insert.seed }),
+            payload: &insert.payload,
+        })
+        .expect("reloaded peer applies the suffix insert");
+    let mut loaded = GridCoauthor::new(LiveConfig { format: GRIDCRAFT_LIVE_FORMAT.to_string(), crashed_at: None }, loaded_editor);
+    let mut loaded_server = DeterministicServer::new();
+    loaded_server.join(&mut loaded, 50);
+
+    let original = original.checkpoint(insert.seq).expect("original writes suffix checkpoint");
+    let loaded = loaded.checkpoint(Seq(0)).expect("reloaded peer writes suffix checkpoint");
+    assert!(
+        original.bytes == loaded.bytes,
+        "delete, checkpoint, reload, and insert keep the stored active identity deterministic: {}",
+        byte_diff(&original.bytes, &loaded.bytes)
+    );
+    assert_eq!(original.sha256, loaded.sha256);
+}
+
+#[test]
+fn grid_checkpoint_preserves_imported_sheet_ids_and_opaque_parts() {
+    let mut session = session_with_sheets(&["Imported"]);
+    {
+        let document = session.doc_mut().expect("document exists");
+        let workbook = Arc::make_mut(&mut document.wb);
+        Arc::make_mut(workbook.sheets.get_mut(0).expect("Imported exists")).file_id = 42;
+        workbook.preserved = Some(Arc::new(Preserved {
+            rels: vec![PreservedRel {
+                id: "rIdOpaque".into(),
+                rel_type: "http://schemas.openxmlformats.org/officeDocument/2006/relationships/customXml".into(),
+                target: "../customXml/sheet-reference.xml".into(),
+                external: false,
+            }],
+            parts: vec![PreservedPart {
+                name: "customXml/sheet-reference.xml".into(),
+                content_type: "application/xml".into(),
+                data: Arc::from(&b"<sheet-reference sheetId=\"42\"/>"[..]),
+                rels: Vec::new(),
+            }],
+            ..Preserved::default()
+        }));
+    }
+    let mut client = GridCoauthor::new(
+        LiveConfig { format: GRIDCRAFT_LIVE_FORMAT.to_string(), crashed_at: None },
+        GridLiveEditor::new(session).expect("editor builds"),
+    );
+    let mut server = DeterministicServer::new();
+    server.join(&mut client, 10);
+
+    let checkpoint = client.checkpoint(Seq(0)).expect("checkpoint writes");
+    let (workbook, _) = io::open_bytes("checkpoint.xlsx", &checkpoint.bytes).expect("checkpoint reopens");
+    assert_eq!(workbook.sheet(0).expect("Imported exists").file_id, 42);
+    let parts = zip_parts(&checkpoint.bytes).expect("checkpoint package lists its parts");
+    assert!(
+        parts.iter().any(|(name, data)| name == "customXml/sheet-reference.xml" && data == b"<sheet-reference sheetId=\"42\"/>"),
+        "opaque content that may refer to an imported sheet id remains byte-identical"
+    );
 }
 
 /// Where two .xlsx files differ: the first part whose bytes differ, and the text around the
