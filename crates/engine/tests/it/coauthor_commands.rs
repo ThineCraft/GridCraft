@@ -1362,3 +1362,53 @@ fn payload_limit_accepts_exactly_max_bytes_and_rejects_one_more() {
         matches!(decode_entry(&over), Err(CoauthorError::OversizedPayload { bytes, max }) if bytes == MAX_PAYLOAD_BYTES + 1 && max == MAX_PAYLOAD_BYTES)
     );
 }
+
+fn dated_filter_session() -> Session {
+    let mut session = session_with_sheets(&["Data"]);
+    for (cell, input) in [("A1", "When"), ("A2", "1/10/2030"), ("A3", "6/1/2030")] {
+        session.execute("cell.set", json!({"sheet":"Data","cell":cell,"input":input})).expect("date is set");
+    }
+    session.execute("data.filterSet", json!({"sheet":"Data","range":"A1:A3"})).expect("filter is set");
+    session
+}
+
+fn row_hidden(editor: &GridLiveEditor, row: u32) -> bool {
+    editor.session().doc().expect("document exists").wb.sheet(0).expect("Data exists").is_row_hidden(row)
+}
+
+#[test]
+fn filter_criteria_read_year_less_dates_in_the_stamped_year() {
+    let mut editor = GridLiveEditor::new(dated_filter_session()).expect("editor builds");
+    let change = editor
+        .prepare(1, "data.filterBy", &json!({"sheet":"Data","range":"A1:A3","column":"A","custom":{"op":">","value":"3/4"}}), 2026, &mut |_| {
+            Err(collab_live::ids::IdError::NoPlace)
+        })
+        .expect("filter prepares");
+    // 2030-03-17: `3/4` is 4 March 2030 on every client, whatever its own clock says.
+    let stamp = Stamp { at_ms: 1_900_000_000_000, seed: 5 };
+    let outcome = editor.apply(&live_entry(&change.payload, Some(stamp))).expect("filter applies");
+    assert_eq!(outcome.effect, Effect::Applied);
+    assert!(row_hidden(&editor, 1), "10 January 2030 is before 4 March 2030");
+    assert!(!row_hidden(&editor, 2), "1 June 2030 is after 4 March 2030");
+
+    let mut pending = GridLiveEditor::new(dated_filter_session()).expect("pending editor builds");
+    let outcome = pending
+        .apply(&EntryView { seq: None, participant: ParticipantNo(1), own: true, stamp: None, payload: &change.payload })
+        .expect("pending filter applies");
+    assert!(outcome.read_stamp, "a pending filter that read a year-less date is re-run under its stamp");
+}
+
+#[test]
+fn filter_criteria_without_year_less_dates_read_no_stamp() {
+    let mut editor = GridLiveEditor::new(dated_filter_session()).expect("editor builds");
+    let change = editor
+        .prepare(1, "data.filterBy", &json!({"sheet":"Data","range":"A1:A3","column":"A","custom":{"op":">","value":"3/4/2030"}}), 2026, &mut |_| {
+            Err(collab_live::ids::IdError::NoPlace)
+        })
+        .expect("filter prepares");
+    let outcome = editor
+        .apply(&EntryView { seq: None, participant: ParticipantNo(1), own: true, stamp: None, payload: &change.payload })
+        .expect("pending filter applies");
+    assert!(!outcome.read_stamp);
+    assert!(row_hidden(&editor, 1));
+}

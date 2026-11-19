@@ -585,6 +585,12 @@ impl Calc {
         self.stamp_read = false;
     }
 
+    /// Records that something outside formula evaluation read the shared clock (a filter
+    /// criterion with a year-less date), so a live entry that did so is re-run under its stamp.
+    pub fn note_stamp_read(&mut self) {
+        self.stamp_read = true;
+    }
+
     /// Returns whether formula evaluation read the shared clock or RNG since tracking was reset.
     pub fn stamp_was_read(&self) -> bool {
         self.stamp_read
