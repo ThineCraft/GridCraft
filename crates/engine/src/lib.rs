@@ -294,8 +294,15 @@ impl DocState {
     /// A document for `wb`, which came from where `trust` says: [`Trust::FromFile`] for anything
     /// read from bytes (a file, a download, a recovery copy), [`Trust::Local`] only for a workbook
     /// made in this session.
-    pub fn new(mut wb: Workbook, path: Option<String>, title: String, trust: Trust) -> DocState {
+    pub fn new(wb: Workbook, path: Option<String>, title: String, trust: Trust) -> DocState {
+        Self::new_configured(wb, path, title, trust, |_| {})
+    }
+    /// A fully calculated document whose calculation state is configured before its first pass.
+    /// Checkpoint loading uses this so volatile and iterative formulas never observe an
+    /// unstamped calculation first.
+    pub(crate) fn new_configured(mut wb: Workbook, path: Option<String>, title: String, trust: Trust, configure: impl FnOnce(&mut Calc)) -> DocState {
         let mut calc = Calc::new();
+        configure(&mut calc);
         calc.recalc_all(&mut wb);
         Self::with_calc(wb, calc, path, title, trust)
     }

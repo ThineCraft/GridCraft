@@ -63,6 +63,16 @@ pub fn open_bytes_with_password(name: &str, bytes: &[u8], password: Option<&str>
     open_bytes_with(name, bytes, password, false)
 }
 
+/// Parses checkpoint XLSX bytes without applying File > Open's imported-row fitting.
+/// Checkpoints already contain the live editor's automatic heights, so fitting them again can
+/// change the agreed entered state.
+pub fn open_checkpoint_bytes(name: &str, bytes: &[u8]) -> Result<(Workbook, Vec<String>)> {
+    if gridcraft_xlsx::sniff(bytes) != gridcraft_xlsx::Format::Xlsx {
+        return Err(EngineError::Other(format!("We can't load checkpoint '{name}': it is not an XLSX workbook.")));
+    }
+    open_plain(name, bytes, false)
+}
+
 /// [`open_bytes_with_password`], and with `csv_as_text` a CSV/TSV/TXT file keeps every field as
 /// the text it holds, with no number, date or boolean conversion (identifiers such as GTINs, SKUs
 /// and ZIP codes survive). It does not apply to other formats.

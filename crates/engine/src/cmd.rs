@@ -32,6 +32,7 @@ use gridcraft_core::{CellRef, RangeRef};
 use gridcraft_model::Workbook;
 use serde::Serialize;
 use serde_json::Value as Json;
+use sha2::{Digest as _, Sha256};
 
 use crate::{DocState, EngineError, Result, Selection, Session};
 
@@ -432,6 +433,44 @@ pub(crate) fn commit<R>(d: &mut DocState, f: impl FnOnce(&mut Ctx) -> Result<R>)
     if changed.len() <= 200_000 {
         fit_rows.extend(changed.iter().map(|(s, c)| (*s, c.row)));
     }
+    // Recalculation can change a formula cell that the edit did not touch. Capture a fixed-size
+    // digest of displayed text, rather than cloning that text: many formulas can cheaply share
+    // one long Arc<str>, and expanding every display would make a count cap no memory bound.
+    // Only wrapped or oversized-font formulas can affect automatic row height.
+    let formula_displays = if structural || !changed.is_empty() {
+        let affects_height = |cell: &gridcraft_model::Cell| {
+            let style = wb.styles.get(cell.style);
+            cell.formula.is_some() && (style.align.wrap || style.font.size > gridcraft_model::DEFAULT_FONT_SIZE)
+        };
+        let formula_count =
+            wb.sheets.iter().fold(0usize, |count, sheet| count.saturating_add(sheet.cells.iter().filter(|(_, cell)| affects_height(cell)).count()));
+        if formula_count <= 200_000 {
+            let mut displays = Vec::with_capacity(formula_count);
+            for (sheet_index, sheet) in wb.sheets.iter().enumerate() {
+                displays.extend(sheet.cells.iter().filter(|(_, cell)| affects_height(cell)).map(|(cell_ref, _)| {
+                    let digest: [u8; 32] = Sha256::digest(crate::display::cell_text(&wb, sheet, cell_ref).as_bytes()).into();
+                    (sheet_index, cell_ref, digest)
+                }));
+            }
+            Some(displays)
+        } else {
+            // Above the fixed-size snapshot limit, fit each relevant row once. This keeps memory
+            // bounded by distinct rows and never drops correctness merely because a workbook has
+            // many formulas. CellStore iteration is row-major, so no set is needed.
+            for (sheet_index, sheet) in wb.sheets.iter().enumerate() {
+                let mut last_row = None;
+                for (cell_ref, _) in sheet.cells.iter().filter(|(_, cell)| affects_height(cell)) {
+                    if last_row != Some(cell_ref.row) {
+                        fit_rows.push((sheet_index, cell_ref.row));
+                        last_row = Some(cell_ref.row);
+                    }
+                }
+            }
+            None
+        }
+    } else {
+        None
+    };
     if let Some(t0) = t0 {
         eprintln!("commit: edit {:?}, {} changed", since(t0), changed.len());
     }
@@ -441,6 +480,15 @@ pub(crate) fn commit<R>(d: &mut DocState, f: impl FnOnce(&mut Ctx) -> Result<R>)
         d.calc.cells_changed(&mut wb, &changed);
     }
     controls::sync_linked_values(&mut wb);
+    if let Some(formula_displays) = formula_displays {
+        for (sheet_index, cell_ref, before) in formula_displays {
+            let Some(sheet) = wb.sheet(sheet_index) else { continue };
+            let after: [u8; 32] = Sha256::digest(crate::display::cell_text(&wb, sheet, cell_ref).as_bytes()).into();
+            if sheet.cell(cell_ref).is_some_and(|cell| cell.formula.is_some()) && after != before {
+                fit_rows.push((sheet_index, cell_ref.row));
+            }
+        }
+    }
     if let Some(t0) = t0 {
         eprintln!("commit: + recalc {:?}", since(t0));
     }

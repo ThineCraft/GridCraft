@@ -5,13 +5,13 @@
 //! (`tests/fixtures/coauthor/`), generated sequences, and hand-made edge cases (sheet names that
 //! need quoting, renamed and deleted sheets behind `#REF!`, extreme numbers and negative zero,
 //! empty text against empty cells, awkward text, merged areas, a filter, defined names). Each is
-//! saved with `file.saveBytes` and read back with `io::open_bytes`, the engine's save and open
-//! paths.
+//! saved with `file.saveBytes` and read back through both the ordinary file-open path and the
+//! host-facing checkpoint path.
 //!
 //! - `save_reload_lossless`: the reopened workbook, with the values its file holds
-//!   (`DocState::from_saved`, as a checkpoint is loaded without recalculating), has the same
-//!   `entered` digest. Its `computed` digest is that of the original's values as the file caches
-//!   them, which is not lossless: a circular reference's `#CIRC!` comes back as 0, and `#SPILL!`
+//!   (`DocState::from_saved`), has the same `entered` digest. Its `computed` digest is that of the
+//!   original's values as the file caches them, which is not lossless: a circular reference's
+//!   `#CIRC!` comes back as 0, and `#SPILL!`
 //!   and `#CALC!` (and the Python errors) come back as `#VALUE!` (`as_cached`). Opened as
 //!   `file.open` opens a file (recalculating), and then both it and the original recalculated in
 //!   full under the sequence's clock and RAND seed, the `computed` digests agree, so computed
@@ -19,13 +19,13 @@
 //! - `save_is_deterministic`: two engines that applied the same commands write identical bytes.
 //! - `save_reload_save_is_stable`: writing, reopening and writing again gives identical bytes.
 //!
-//! - `known_loss_reopen_refits_rows_from_values` (ignored): the one loss of entered content left
-//!   for G4, row heights that opening a file re-fits. It passes while the loss remains.
+//! - `checkpoint_reload_preserves_wrapped_formula_row_height` and
+//!   `checkpoint_reload_preserves_seed_3996_row_heights`: checkpoint save/reload keeps automatic
+//!   row heights after recalculation changes a formula's displayed value.
 //!
 //! Knob: `GRIDCRAFT_COAUTHOR_SAVE_SEEDS` (default 200) generated sequences of 60 steps, seeds
-//! 2000 onwards. The default window (2000 to 2199) holds none of the 8 seeds in 2000 to 11999
-//! that meet the known loss (3996, 4033, 5491, 5580, 6730, 7525, 9347 and 10526), so a run of
-//! `GRIDCRAFT_COAUTHOR_SAVE_SEEDS=10000` is expected to fail on exactly those.
+//! 2000 onwards. Seed 3996 has its own checkpoint row-height regression below; larger values
+//! extend the generated save/reload coverage.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -35,7 +35,7 @@ use collab_live::client::{EntryView, LiveConfig, LiveEditor, Stamp};
 use gridcraft_engine::coauthor::{GRIDCRAFT_LIVE_FORMAT, GridCoauthor, GridLiveEditor, WorkbookIds};
 use gridcraft_engine::core::{CellError, CellRef, Value};
 use gridcraft_engine::fingerprint::{DocId, fingerprint, workbook_fingerprint, workbook_first_difference};
-use gridcraft_engine::model::{Preserved, PreservedPart, PreservedRel, ShowObjects, Workbook};
+use gridcraft_engine::model::{Cell, Formula, Preserved, PreservedPart, PreservedRel, ShowObjects, Workbook};
 use gridcraft_engine::{DocState, Session, Trust, io};
 use serde_json::json;
 
@@ -331,8 +331,8 @@ fn save(s: &mut Session) -> Result<Vec<u8>, String> {
     io::base64_decode(b64).ok_or_else(|| "save gave bad base64".to_string())
 }
 
-/// The bytes read back as a checkpoint is loaded: the values the file holds, with the
-/// sequence's clock and RAND seed for later edits.
+/// The bytes read back with their cached values, for the legacy file-cache comparison in
+/// [`lossless`], with the sequence's clock and RAND seed for later edits.
 fn reopen(bytes: &[u8], seq: &Sequence) -> Result<Session, String> {
     let (wb, _warnings) = io::open_bytes(NAME, bytes).map_err(|e| format!("reopen failed: {e}"))?;
     let mut d = DocState::from_saved(wb, None, "Book1".into(), Trust::Local);
@@ -392,8 +392,8 @@ fn as_cached(wb: &Workbook) -> Workbook {
 /// 1. as `file.open` opens a file (recalculating), then the original and the reopened workbook
 ///    both recalculated in full under the sequence's clock and a restarted RAND stream: both
 ///    digests must agree, so what was entered and what it calculates to survive;
-/// 2. with the values the file holds (`DocState::from_saved`, a checkpoint loaded without
-///    recalculating): `entered` must agree, and `computed` must agree with the original's values
+/// 2. with the values the file holds (`DocState::from_saved`): `entered` must agree, and
+///    `computed` must agree with the original's values
 ///    as the file caches them ([`as_cached`]).
 fn lossless(c: &Case) -> Result<(), String> {
     let mut s = build(c)?;
@@ -424,6 +424,48 @@ fn lossless(c: &Case) -> Result<(), String> {
     }
     if a.computed != b.computed {
         return Err(format!("{}: computed differs after file.open and a full recalculation: {}", c.name, first_diff(&s, &opened)));
+    }
+    Ok(())
+}
+
+/// Writes and loads the case through the host-facing checkpoint surface, then compares both the
+/// entered state and a full calculation under the sequence's deterministic clock and RAND seed.
+fn checkpoint_lossless(c: &Case) -> Result<(), String> {
+    let session = build(c)?;
+    let mut source = GridCoauthor::new(
+        LiveConfig { format: GRIDCRAFT_LIVE_FORMAT.to_string(), crashed_at: None },
+        GridLiveEditor::new(session).map_err(|error| error.to_string())?,
+    );
+    let mut server = DeterministicServer::new();
+    server.join(&mut source, 10);
+    let checkpoint = source.checkpoint(Seq(0)).map_err(|error| error.to_string())?;
+    let mut target = GridCoauthor::new(
+        LiveConfig { format: GRIDCRAFT_LIVE_FORMAT.to_string(), crashed_at: None },
+        GridLiveEditor::new(session_with_sheets(&["Old"])).map_err(|error| error.to_string())?,
+    );
+    let stamp = Stamp {
+        at_ms: ((c.seq.now - 25_569.0) * 86_400_000.0) as i64,
+        seed: u32::try_from(c.seq.seed).map_err(|_| "sequence seed does not fit a live stamp".to_string())?,
+    };
+    target.load_checkpoint(&checkpoint.bytes, &checkpoint.session_data, stamp).map_err(|error| error.to_string())?;
+
+    let entered = source.editor().agreement_digest();
+    if entered != target.editor().agreement_digest() {
+        return Err(format!(
+            "{}: entered differs after checkpoint load: {}",
+            c.name,
+            first_diff(source.editor().session(), target.editor().session())
+        ));
+    }
+    recalc_fully(source.editor_mut().session_mut(), &c.seq)?;
+    let source_computed = fingerprint(source.editor().session(), DocId(0)).computed;
+    let target_computed = fingerprint(target.editor().session(), DocId(0)).computed;
+    if source_computed != target_computed {
+        return Err(format!(
+            "{}: computed differs after checkpoint load: {}",
+            c.name,
+            first_diff(source.editor().session(), target.editor().session())
+        ));
     }
     Ok(())
 }
@@ -573,6 +615,121 @@ fn grid_checkpoint_bytes_are_deterministic() {
 }
 
 #[test]
+fn checkpoint_load_recalculates_every_formula() {
+    let mut source_session = session_with_sheets(&["Calculated"]);
+    source_session.execute("cell.set", json!({"sheet":"Calculated","cell":"A1","input":"=NOW()"})).expect("volatile formula is set");
+    source_session.execute("cell.set", json!({"sheet":"Calculated","cell":"B1","input":"=A1+1"})).expect("dependent formula is set");
+    let mut source = GridCoauthor::new(
+        LiveConfig { format: GRIDCRAFT_LIVE_FORMAT.to_string(), crashed_at: None },
+        GridLiveEditor::new(source_session).expect("source editor builds"),
+    );
+    let mut source_server = DeterministicServer::new();
+    source_server.join(&mut source, 10);
+    let checkpoint = source.checkpoint(Seq(0)).expect("source checkpoint writes");
+
+    let mut target_session = session_with_sheets(&["Old"]);
+    target_session.execute("cell.set", json!({"sheet":"Old","cell":"A1","input":"old"})).expect("old state is set");
+    let mut target = GridCoauthor::new(
+        LiveConfig { format: GRIDCRAFT_LIVE_FORMAT.to_string(), crashed_at: None },
+        GridLiveEditor::new(target_session).expect("target editor builds"),
+    );
+    let before = target.editor().agreement_digest();
+    assert!(target.load_checkpoint(&checkpoint.bytes, b"{}", Stamp { at_ms: 0, seed: 17 }).is_err(), "invalid identities are refused");
+    assert_eq!(target.editor().agreement_digest(), before, "a refused checkpoint leaves the old editor untouched");
+
+    let stamp = Stamp { at_ms: 1_795_219_200_000, seed: 41 };
+    target.load_checkpoint(&checkpoint.bytes, &checkpoint.session_data, stamp).expect("checkpoint loads");
+    let workbook = &target.editor().session().doc().expect("loaded document exists").wb;
+    let sheet = workbook.sheet(0).expect("Calculated exists");
+    let now = gridcraft_engine::core::date::serial_from_unix_ms(stamp.at_ms as f64);
+    assert_eq!(sheet.value(CellRef::new(0, 0)), Value::Number(now), "NOW uses the supplied checkpoint stamp");
+    assert_eq!(sheet.value(CellRef::new(0, 1)), Value::Number(now + 1.0), "dependent formulas are fully recalculated");
+}
+
+#[test]
+fn checkpoint_load_stamps_the_first_iterative_calculation() {
+    let mut workbook = Workbook::new();
+    workbook.calc.iterative = true;
+    workbook.calc.max_iterations = 1;
+    workbook
+        .sheet_mut(0)
+        .expect("Sheet1 exists")
+        .set_cell(CellRef::new(0, 0), Cell { value: Value::Number(0.0), formula: Some(Arc::new(Formula::new("A1+NOW()"))), ..Cell::default() });
+    let mut session = Session::new();
+    session.add_document(DocState::from_saved(workbook, None, "iterative.xlsx".into(), Trust::Local));
+    let mut source = GridCoauthor::new(
+        LiveConfig { format: GRIDCRAFT_LIVE_FORMAT.to_string(), crashed_at: None },
+        GridLiveEditor::new(session).expect("source editor builds"),
+    );
+    let mut server = DeterministicServer::new();
+    server.join(&mut source, 10);
+    let checkpoint = source.checkpoint(Seq(0)).expect("checkpoint writes cached iterative value");
+
+    let mut target = GridCoauthor::new(
+        LiveConfig { format: GRIDCRAFT_LIVE_FORMAT.to_string(), crashed_at: None },
+        GridLiveEditor::new(session_with_sheets(&["Old"])).expect("target editor builds"),
+    );
+    let stamp = Stamp { at_ms: 1_795_219_200_000, seed: 41 };
+    target.load_checkpoint(&checkpoint.bytes, &checkpoint.session_data, stamp).expect("checkpoint loads");
+    let value = target.editor().session().doc().expect("loaded document exists").wb.sheet(0).expect("Sheet1 exists").value(CellRef::new(0, 0));
+    assert_eq!(
+        value,
+        Value::Number(gridcraft_engine::core::date::serial_from_unix_ms(stamp.at_ms as f64)),
+        "the one permitted iteration starts from the cached value under the supplied stamp"
+    );
+}
+
+#[test]
+fn formula_row_fitting_is_not_dropped_above_two_hundred_thousand_formulas() {
+    const FORMULAS: u32 = 200_001;
+    let mut workbook = Workbook::new();
+    let wrapped = workbook.styles.derive(gridcraft_engine::model::StyleId::DEFAULT, |style| style.align.wrap = true);
+    let formula = Arc::new(Formula::new("$A$1"));
+    let cached: Arc<str> = Arc::from("an old shared value cached by every formula");
+    let sheet = workbook.sheet_mut(0).expect("Sheet1 exists");
+    for index in 0..=FORMULAS {
+        let cell_ref = CellRef::new(index / gridcraft_engine::core::MAX_COLS, index % gridcraft_engine::core::MAX_COLS);
+        if cell_ref == CellRef::new(0, 0) {
+            continue;
+        }
+        sheet.set_cell(
+            cell_ref,
+            Cell {
+                value: Value::Text(cached.clone()),
+                formula: Some(formula.clone()),
+                style: if cell_ref == CellRef::new(1, 1) { wrapped } else { Default::default() },
+                ..Cell::default()
+            },
+        );
+    }
+    let before = sheet.row_height(1);
+    let mut session = Session::new();
+    session.add_document(DocState::from_saved(workbook, None, "many-formulas.xlsx".into(), Trust::Local));
+    session
+        .execute("cell.set", json!({"cell":"A1","input":"a long shared value that wraps in the dependent formula row and must make that row taller"}))
+        .expect("precedent changes");
+    let after = session.doc().expect("document exists").wb.sheet(0).expect("Sheet1 exists").row_height(1);
+    assert!(after > before, "a formula-count allocation guard must not drop automatic row fitting");
+}
+
+#[test]
+fn ordinary_file_open_still_fits_imported_rows() {
+    let mut workbook = Workbook::new();
+    let large = workbook.styles.derive(gridcraft_engine::model::StyleId::DEFAULT, |style| style.font.size = 20.0);
+    let sheet = workbook.sheet_mut(0).expect("Sheet1 exists");
+    sheet.set_value(CellRef::new(4, 0), Value::text("large"));
+    sheet.set_style(CellRef::new(4, 0), large);
+    let bytes = io::save_bytes(&workbook, "large.xlsx").expect("workbook saves");
+
+    let (checkpoint, _) = io::open_checkpoint_bytes("large.xlsx", &bytes).expect("checkpoint parses");
+    let (ordinary, _) = io::open_bytes("large.xlsx", &bytes).expect("ordinary file parses");
+    let checkpoint_height = checkpoint.sheet(0).expect("checkpoint sheet exists").row_height(4);
+    let ordinary_height = ordinary.sheet(0).expect("ordinary sheet exists").row_height(4);
+    assert_eq!(checkpoint_height, checkpoint.sheet(0).expect("checkpoint sheet exists").default_row_height);
+    assert!(ordinary_height >= 30.0, "ordinary File > Open still fits the imported 20pt row, got {ordinary_height}");
+}
+
+#[test]
 fn grid_checkpoint_rebases_a_deleted_stored_active_sheet() {
     let mut session = session_with_sheets(&["A", "B", "C"]);
     session.execute("sheet.activate", json!({"sheet":"B"})).expect("stored active sheet is selected");
@@ -711,30 +868,26 @@ fn zip_parts(bytes: &[u8]) -> Result<Vec<(String, Vec<u8>)>, String> {
     Ok(out)
 }
 
-/// Known, left for G4: opening a file fits every row without a stored height to its cells
-/// (`io::open_bytes`, as Excel does), but the live engine fits a row only when a cell in it is
-/// edited or formatted. A wrapped formula whose text grows because a cell it reads changed keeps
-/// its row's height live, and gets a taller row after a save and reopen. (Seed 3996 at 60 steps
-/// meets the same through a circular reference: `#CIRC!` is cached as 0, which a long-date
-/// format shows as a long wrapped text.) A checkpoint loaded without re-fitting rows would keep
-/// the heights as written. Run with `--ignored`: it passes while both cases still lose a row
-/// height, and fails once the loss is fixed.
+/// A wrapped formula whose displayed text grows after a precedent changes must re-fit its row
+/// before the checkpoint is written, so reopening cannot change the entered workbook state.
 #[test]
-#[ignore = "known loss for G4: opening re-fits rows the live engine left alone"]
-fn known_loss_reopen_refits_rows_from_values() {
+fn checkpoint_reload_preserves_wrapped_formula_row_height() {
     let steps = vec![
         step("home.wrapText", json!({"sheet": "Sheet1", "range": "B1", "on": true})),
         set("Sheet1", "B1", "=A3"),
         set("Sheet1", "A3", "a long line of text that wraps in a narrow column and goes on and on and on"),
     ];
-    let mut cases = vec![case("wrapped-formula-grows", 1, steps)];
-    cases.push(Case { name: "seed 3996".into(), seq: generate(3_996, 60) });
-    // Both cases still lose a row height. When G4 fixes the loss this fails, and the test (and
-    // the module notes about it) should go.
-    for c in &cases {
-        match lossless(c) {
-            Ok(()) => panic!("{}: no longer loses a row height; the known loss is fixed", c.name),
-            Err(e) => assert!(e.contains("!row "), "{}: lost something other than a row height:\n{e}", c.name),
-        }
-    }
+    let case = case("wrapped-formula-grows", 1, steps);
+    let session = build(&case).expect("wrapped formula case builds");
+    let sheet = session.doc().expect("document exists").wb.sheet(0).expect("Sheet1 exists");
+    assert!(sheet.row_height(0) > sheet.default_row_height, "the live wrapped-formula row is fitted before checkpointing");
+    checkpoint_lossless(&case).expect("wrapped formula row height survives checkpoint reload");
+}
+
+/// Seed 3996 reaches the same row-height edge through a circular reference: the file caches
+/// `#CIRC!` as zero, and loading the checkpoint must retain its live automatic row heights.
+#[test]
+fn checkpoint_reload_preserves_seed_3996_row_heights() {
+    let case = Case { name: "seed 3996".into(), seq: generate(3_996, 60) };
+    checkpoint_lossless(&case).expect("seed 3996 row heights survive checkpoint reload");
 }

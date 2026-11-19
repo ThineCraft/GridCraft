@@ -191,6 +191,14 @@ impl GridCoauthor {
         Ok(GridCheckpoint { bytes, session_data, sha256, entered })
     }
 
+    /// Replaces the shown editor with a fully recalculated durable checkpoint. Work is done in a
+    /// temporary editor, so malformed bytes or identity data leave the current editor untouched.
+    pub fn load_checkpoint(&mut self, bytes: &[u8], session_data: &[u8], stamp: collab_live::client::Stamp) -> Result<(), GridLiveError> {
+        let editor = GridLiveEditor::from_checkpoint(bytes, session_data, stamp)?;
+        self.editor = editor;
+        Ok(())
+    }
+
     /// The existing live connection dropped. The in-memory client and its personal history are
     /// kept so a server-confirmed kept place can resume them.
     pub fn disconnected(&mut self, now_ms: u64) {

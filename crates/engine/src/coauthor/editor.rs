@@ -16,7 +16,7 @@ use super::{
 };
 use crate::calc::recalc::CalcStampState;
 use crate::fingerprint::{DocId, fingerprint};
-use crate::{Calc, EngineError, Selection, Session};
+use crate::{Calc, DocState, EngineError, Selection, Session, Trust};
 
 const GUARDED_APPLY_COMMAND: &str = "internal.coauthorGuardedPatch";
 
@@ -235,6 +235,19 @@ impl GridLiveEditor {
     /// Builds an editor around checkpoint identities after validating them against the workbook.
     pub fn from_session_data(session: Session, session_data: &[u8]) -> Result<Self, super::CoauthorError> {
         let ids = WorkbookIds::from_session_data(session_data, &session.doc()?.wb)?;
+        Self::with_ids(session, ids)
+    }
+
+    /// Builds a fresh editor from one durable checkpoint. Identity validation happens against
+    /// the parsed workbook before any caller-owned editor is replaced.
+    pub(super) fn from_checkpoint(bytes: &[u8], session_data: &[u8], stamp: Stamp) -> Result<Self, super::CoauthorError> {
+        let (workbook, _) = crate::io::open_checkpoint_bytes("checkpoint.xlsx", bytes)?;
+        let ids = WorkbookIds::from_session_data(session_data, &workbook)?;
+        let mut session = Session::new();
+        session.add_document(DocState::new_configured(workbook, None, "checkpoint.xlsx".into(), Trust::FromFile, |calc| {
+            calc.fixed_now = Some(gridcraft_core::date::serial_from_unix_ms(stamp.at_ms as f64));
+            calc.set_rand_seed(u64::from(stamp.seed));
+        }));
         Self::with_ids(session, ids)
     }
 
