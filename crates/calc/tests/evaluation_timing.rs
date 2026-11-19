@@ -1,6 +1,8 @@
 //! Timing for ordinary (not live) formula evaluation: operator- and call-heavy formulas over
 //! 200,000 lambda calls. Ignored by default; run it in release to compare two builds:
 //! `cargo test -p gridcraft-calc --release --test evaluation_timing -- --ignored --nocapture`.
+//! Native only: the web build has no clock to time with.
+#![cfg(not(target_arch = "wasm32"))]
 
 use std::time::{Duration, Instant};
 
@@ -13,6 +15,8 @@ const FORMULAS: [(&str, &str); 3] = [
     ("LEN(\"ab\")+VALUE(\"3\")", "=SUM(MAP(SEQUENCE(200000),LAMBDA(x,LEN(\"ab\")+VALUE(\"3\"))))"),
 ];
 
+// Reading the clock is allowed off wasm (this file is native only).
+#[allow(clippy::disallowed_methods)]
 fn best_of(runs: usize, formula: &str, workbook: &Workbook) -> (Duration, Value) {
     let mut best = Duration::MAX;
     let mut value = Value::Empty;
