@@ -29,12 +29,15 @@ thread_local! {
 
 fn run_guarded_apply(session: &mut Session, _: &Json) -> crate::Result<Json> {
     let context = GUARDED_APPLY.with(|slot| slot.borrow_mut().take());
-    let context = context.ok_or_else(|| EngineError::Other("the co-author guarded command is internal".into()))?;
-    let report = apply_guarded_patch(session, &context.ids, &context.patch)?;
+    let mut context = context.ok_or_else(|| EngineError::Other("the co-author guarded command is internal".into()))?;
+    let report = apply_guarded_patch(session, &mut context.ids, &context.patch)?;
+    GUARDED_APPLY.with(|slot| {
+        *slot.borrow_mut() = Some(context);
+    });
     serde_json::to_value(report).map_err(|error| EngineError::Other(error.to_string()))
 }
 
-fn execute_guarded_apply(session: &mut Session, ids: &WorkbookIds, patch: &super::GuardedPatch) -> Result<UndoReport, EngineError> {
+fn execute_guarded_apply(session: &mut Session, ids: &mut WorkbookIds, patch: &super::GuardedPatch) -> Result<UndoReport, EngineError> {
     static REGISTER: Once = Once::new();
     REGISTER.call_once(|| crate::cmd::register_test_command(GUARDED_APPLY_COMMAND, run_guarded_apply));
     let occupied = GUARDED_APPLY.with(|slot| {
@@ -55,10 +58,10 @@ fn execute_guarded_apply(session: &mut Session, ids: &WorkbookIds, patch: &super
     let result = session.execute(GUARDED_APPLY_COMMAND, Json::Null);
     session.journal_paused = journal_paused;
     session.recorder = recorder;
-    GUARDED_APPLY.with(|slot| {
-        slot.borrow_mut().take();
-    });
+    let context = GUARDED_APPLY.with(|slot| slot.borrow_mut().take());
     let value = result?;
+    let context = context.ok_or_else(|| EngineError::Other("the co-author guarded command did not return its identity state".into()))?;
+    *ids = context.ids;
     serde_json::from_value(value).map_err(|error| EngineError::Other(error.to_string()))
 }
 
@@ -282,7 +285,7 @@ impl LiveEditor for GridLiveEditor {
         if let SharedCommand::Guarded { patch } = &decoded.command {
             let view = self.capture_view();
             let before = self.snapshot();
-            let report = match execute_guarded_apply(&mut self.session, &self.ids, patch) {
+            let report = match execute_guarded_apply(&mut self.session, &mut self.ids, patch) {
                 Ok(report) => report,
                 Err(error) => {
                     self.restore_shared(&before, view.as_ref(), true);
@@ -360,7 +363,7 @@ impl LiveEditor for GridLiveEditor {
         }
         if entry.own
             && let Ok(document) = self.session.doc()
-            && let Ok(Some(action)) = build_undo_action(decoded.action, &self.ids, &before.document.wb, &document.wb, &decoded.command)
+            && let Ok(Some(action)) = build_undo_action(decoded.action, &before.ids, &self.ids, &before.document.wb, &document.wb, &decoded.command)
         {
             self.history_updates.insert(decoded.action, Some(action));
         }

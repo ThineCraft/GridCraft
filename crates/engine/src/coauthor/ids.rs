@@ -8,7 +8,7 @@ use thiserror::Error;
 
 use super::CoauthorError;
 
-#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(deny_unknown_fields)]
 pub struct CellId {
     pub sheet: LiveId,
@@ -222,6 +222,34 @@ impl WorkbookIds {
         Ok(())
     }
 
+    pub(crate) fn exchange_rows(&mut self, sheet: LiveId, remove: &[LiveId], insert_at: u32, restore: &[LiveId]) -> Result<(), CoauthorError> {
+        let mut next = self.clone();
+        let axes = next.live_sheet_mut(sheet)?;
+        exchange_exact(&mut axes.rows, remove, insert_at, restore, "row")?;
+        *self = next;
+        Ok(())
+    }
+
+    pub(crate) fn exchange_columns(&mut self, sheet: LiveId, remove: &[LiveId], insert_at: u32, restore: &[LiveId]) -> Result<(), CoauthorError> {
+        let mut next = self.clone();
+        let axes = next.live_sheet_mut(sheet)?;
+        exchange_exact(&mut axes.cols, remove, insert_at, restore, "column")?;
+        *self = next;
+        Ok(())
+    }
+
+    pub(crate) fn restore_sheet(&mut self, remove: Option<LiveId>, insert_at: u32, restore: Option<LiveId>) -> Result<(), CoauthorError> {
+        let mut next = self.clone();
+        if let Some(remove) = remove {
+            delete_exact(&mut next.sheets, &[remove], "sheet")?;
+        }
+        if let Some(restore) = restore {
+            revive_exact(&mut next.sheets, insert_at, &[restore], "sheet")?;
+        }
+        *self = next;
+        Ok(())
+    }
+
     /// Checks a structural identity change without changing this table.
     pub fn validate_structural(&self, change: &IdentityStructural) -> Result<(), CoauthorError> {
         let mut next = self.clone();
@@ -263,6 +291,92 @@ impl WorkbookIds {
             Lookup::Unknown => Err(CoauthorError::UnknownIdentity(format!("sheet {id:?}"))),
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+struct OrderedRunWire {
+    participant: u32,
+    start: u32,
+    len: u32,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+struct DeletedRunWire {
+    run: OrderedRunWire,
+    was_at: u32,
+    after: Option<LiveId>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct OrderedIdsWire {
+    live: Vec<OrderedRunWire>,
+    deleted: Vec<DeletedRunWire>,
+}
+
+fn exchange_exact(ids: &mut OrderedIds, remove: &[LiveId], insert_at: u32, restore: &[LiveId], label: &str) -> Result<(), CoauthorError> {
+    delete_exact(ids, remove, label)?;
+    revive_exact(ids, insert_at, restore, label)
+}
+
+fn revive_exact(ids: &mut OrderedIds, insert_at: u32, restore: &[LiveId], label: &str) -> Result<(), CoauthorError> {
+    if restore.is_empty() {
+        return Err(CoauthorError::MalformedPayload(format!("{label} restoration has no identities")));
+    }
+    let wanted: BTreeSet<LiveId> = restore.iter().copied().collect();
+    if wanted.len() != restore.len() {
+        return Err(CoauthorError::MalformedPayload(format!("{label} restoration repeats an identity")));
+    }
+    for id in restore {
+        if !matches!(ids.find(*id), Lookup::Deleted { .. }) {
+            return Err(CoauthorError::MalformedPayload(format!("{label} identity {id:?} is not deleted")));
+        }
+    }
+    let mut wire: OrderedIdsWire =
+        serde_json::from_value(serde_json::to_value(&*ids).map_err(|error| CoauthorError::MalformedPayload(error.to_string()))?)
+            .map_err(|error| CoauthorError::MalformedPayload(error.to_string()))?;
+    let mut deleted = Vec::new();
+    for gone in wire.deleted {
+        let end = gone.run.start.checked_add(gone.run.len).ok_or_else(|| CoauthorError::MalformedPayload("deleted identity run overflows".into()))?;
+        let mut piece_start = gone.run.start;
+        for counter in gone.run.start..end {
+            let id = LiveId(gone.run.participant, counter);
+            if !wanted.contains(&id) {
+                continue;
+            }
+            if counter > piece_start {
+                deleted.push(DeletedRunWire {
+                    run: OrderedRunWire { participant: gone.run.participant, start: piece_start, len: counter - piece_start },
+                    was_at: gone.was_at.saturating_add(piece_start - gone.run.start),
+                    after: gone.after,
+                });
+            }
+            piece_start = counter.saturating_add(1);
+        }
+        if piece_start < end {
+            deleted.push(DeletedRunWire {
+                run: OrderedRunWire { participant: gone.run.participant, start: piece_start, len: end - piece_start },
+                was_at: gone.was_at.saturating_add(piece_start - gone.run.start),
+                after: gone.after,
+            });
+        }
+    }
+    wire.deleted = deleted;
+    let mut revived: OrderedIds =
+        serde_json::from_value(serde_json::to_value(wire).map_err(|error| CoauthorError::MalformedPayload(error.to_string()))?)
+            .map_err(|error| CoauthorError::MalformedPayload(error.to_string()))?;
+    let mut at = insert_at;
+    let mut index = 0usize;
+    while let Some(first) = restore.get(index).copied() {
+        let mut count = 1u32;
+        while restore.get(index.saturating_add(count as usize)).is_some_and(|next| next.0 == first.0 && first.1.checked_add(count) == Some(next.1)) {
+            count = count.saturating_add(1);
+        }
+        revived.insert(at, first, count)?;
+        at = at.checked_add(count).ok_or_else(|| CoauthorError::MalformedPayload(format!("{label} restoration position overflows")))?;
+        index = index.saturating_add(count as usize);
+    }
+    *ids = revived;
+    Ok(())
 }
 
 #[derive(Clone, Copy)]
