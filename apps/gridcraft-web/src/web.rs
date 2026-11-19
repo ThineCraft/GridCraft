@@ -105,7 +105,10 @@ pub fn start() {
                         bridge.post_ready();
                     }
                     crate::api::install(&mut app, cc.egui_ctx.clone());
-                    let live = if framed { crate::live::web::LiveHost::connect(cc.egui_ctx.clone()) } else { None };
+                    let live = match &app_bridge {
+                        Some(bridge) if framed => crate::live::web::LiveHost::connect(cc.egui_ctx.clone(), bridge.live_flag()),
+                        _ => None,
+                    };
                     Ok(Box::new(WebShell { app, inbox, hosted: app_bridge.is_some(), bridge: app_bridge, prefs, live }))
                 }),
             )
@@ -198,7 +201,7 @@ impl eframe::App for WebShell {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.app.ui(ui);
         if let Some(bridge) = &self.bridge {
-            bridge.sync(&mut self.app, self.live.as_ref().is_some_and(crate::live::web::LiveHost::is_active));
+            bridge.sync(&mut self.app);
         }
     }
 }

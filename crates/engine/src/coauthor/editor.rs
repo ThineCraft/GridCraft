@@ -337,7 +337,12 @@ impl GridLiveEditor {
     /// An editor on a new blank workbook (one empty sheet), alike on every machine: the base of
     /// a log with no stored revision, and what a host holds before its base arrives.
     pub fn blank() -> Result<Self, super::CoauthorError> {
-        let mut session = Session::new();
+        Self::blank_in(Session::new())
+    }
+
+    /// [`Self::blank`] in the host's own session, whose documents the blank workbook replaces.
+    pub(super) fn blank_in(mut session: Session) -> Result<Self, super::CoauthorError> {
+        close_all_documents(&mut session);
         session.add_document(DocState::new(gridcraft_model::Workbook::new(), None, "Workbook".into(), Trust::Local));
         Self::new(session)
     }

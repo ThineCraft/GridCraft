@@ -10,9 +10,9 @@ mod undo;
 use std::collections::BTreeMap;
 
 pub use collab_core::ids::Seq;
-use collab_live::client::{AgreedSnapshot, Effect, LiveClient, LocalError, Mode};
+use collab_live::client::{AgreedSnapshot, Effect, LiveClient, Mode};
 /// The live client's types a host names, so it needs no dependency of its own on ShareCraft's crates.
-pub use collab_live::client::{ClientError, Event, LiveConfig, Phase, Stamp, Step};
+pub use collab_live::client::{ClientError, Event, LiveConfig, LocalError, Phase, Stamp, Step};
 use collab_live::ids::IdError;
 use protocol::live::{LiveBuild, MAX_PAYLOAD_BYTES, RefusedReason};
 use serde_json::Value as Json;
@@ -40,6 +40,9 @@ use undo::{apply_guarded_patch, build_undo_action, unrecorded_action};
 
 /// The longest command id a refusal notice repeats.
 const MAX_NOTICE_COMMAND_CHARS: usize = 64;
+
+/// The room compares entered digests at every non-zero multiple of this many positions (G4).
+pub const AGREEMENT_EVERY: u64 = 64;
 
 /// The format name negotiated with a live room.
 pub const GRIDCRAFT_LIVE_FORMAT: &str = "gridcraft/1";
@@ -120,10 +123,10 @@ pub enum CoauthorError {
 
 /// What the host does for one checkpoint ticket.
 pub enum TicketAnswer {
-    /// Upload the checkpoint under the ticket; `send` carries the entered fingerprint frame.
-    Write { ticket: String, at: Seq, base: Option<String>, checkpoint: GridCheckpoint, send: Vec<String> },
-    /// Report the hash of the independently written checkpoint; `send` carries the fingerprint.
-    Verify { ticket: String, at: Seq, sha256: [u8; 32], send: Vec<String> },
+    /// Upload the checkpoint under the ticket.
+    Write { ticket: String, at: Seq, base: Option<String>, checkpoint: GridCheckpoint },
+    /// Report the hash of the independently written checkpoint.
+    Verify { ticket: String, at: Seq, sha256: [u8; 32] },
     /// The ticket cannot be honoured: send the `checkpoint_failed` frame, and post nothing.
     Failed { send: Option<String> },
 }
@@ -203,7 +206,7 @@ impl GridCoauthor {
         let editor = match base {
             LiveBase::File { bytes } => GridLiveEditor::from_file_in(session, bytes)?,
             LiveBase::Checkpoint { bytes, session_data, stamp } => GridLiveEditor::from_checkpoint_in(session, bytes, session_data, stamp)?,
-            LiveBase::Empty => GridLiveEditor::new(session)?,
+            LiveBase::Empty => GridLiveEditor::blank_in(session)?,
         };
         Ok(Self::new(config, editor))
     }
@@ -237,6 +240,11 @@ impl GridCoauthor {
     /// The person's presence note when it changed since the last one sent, at most one every
     /// [`MIN_PRESENCE_INTERVAL_MS`]; a change held back by the interval goes on a later call.
     pub fn presence(&mut self, now_ms: u64) -> Option<String> {
+        // Before the client is live there is no place to show, and the shown editor may still be
+        // the blank one from before the base.
+        if self.client.phase() != Phase::Live {
+            return None;
+        }
         let note = presence::encode(self.editor.session(), self.editor.ids(), self.editing)?;
         if self.presence_sent.as_deref() == Some(note.as_str()) {
             return None;
@@ -303,18 +311,14 @@ impl GridCoauthor {
             Event::VerifyRequested { ticket, at, base } => (*ticket, *at, false, base.clone()),
             _ => return None,
         };
-        let written = self.checkpoint(at).and_then(|checkpoint| {
-            let fingerprint = self.client.fingerprint(at, checkpoint.entered)?;
-            Ok((checkpoint, fingerprint))
-        });
-        let Ok((checkpoint, fingerprint)) = written else {
+        let Ok(checkpoint) = self.checkpoint(at) else {
             return Some(TicketAnswer::Failed { send: serde_json::to_string(&protocol::live::LiveClientMsg::CheckpointFailed { ticket }).ok() });
         };
         let ticket = ticket.to_string();
         Some(if write {
-            TicketAnswer::Write { ticket, at, base, checkpoint, send: vec![fingerprint] }
+            TicketAnswer::Write { ticket, at, base, checkpoint }
         } else {
-            TicketAnswer::Verify { ticket, at, sha256: checkpoint.sha256, send: vec![fingerprint] }
+            TicketAnswer::Verify { ticket, at, sha256: checkpoint.sha256 }
         })
     }
 
@@ -444,6 +448,7 @@ impl GridCoauthor {
     pub fn receive(&mut self, frame: &str, now_ms: u64) -> Result<Step, GridLiveError> {
         let view = self.editor.capture_view();
         let local_action_high_water = self.editor.local_action_high_water();
+        let agreed_before = self.client.agreed_seq();
         let result = self.client.receive(&mut self.editor, frame, now_ms);
         // A first WaitForServer application may intentionally change the view at acknowledgement;
         // every replay and remote application must keep the view captured around the whole receive.
@@ -452,20 +457,46 @@ impl GridCoauthor {
         {
             self.editor.restore_view(view);
         }
-        let step = result?;
+        let mut step = result?;
         self.reconcile_history(&step);
+        self.report_agreement(agreed_before, &mut step);
         Ok(step)
     }
 
     pub fn base_ready(&mut self, now_ms: u64) -> Result<Step, GridLiveError> {
         let view = self.editor.capture_view();
+        let agreed_before = self.client.agreed_seq();
         let result = self.client.base_ready(&mut self.editor, now_ms);
         if let Some(view) = view.as_ref() {
             self.editor.restore_view(view);
         }
-        let step = result?;
+        let mut step = result?;
         self.reconcile_history(&step);
+        self.report_agreement(agreed_before, &mut step);
         Ok(step)
+    }
+
+    /// Reports the entered digest when the agreed state has just reached a non-zero multiple of
+    /// [`AGREEMENT_EVERY`]: the room compares editors' reports there and resyncs a client that
+    /// disagrees. Only an editing, live client reports, and only when the agreed state is exactly
+    /// at that position; a catch-up that passes over one in a single step does not report it.
+    fn report_agreement(&mut self, before: Seq, step: &mut Step) {
+        let at = self.client.agreed_seq();
+        if at == before || at.0 == 0 || !at.0.is_multiple_of(AGREEMENT_EVERY) || !self.client.can_edit() || self.client.phase() != Phase::Live {
+            return;
+        }
+        let entered = match self.client.agreed_snapshot(&self.editor, at) {
+            Ok(AgreedSnapshot::Editor(editor)) => {
+                editor.checkpoint_state().map(|state| crate::fingerprint::workbook_fingerprint(state.workbook).entered)
+            }
+            Ok(AgreedSnapshot::Saved(snapshot)) => Ok(crate::fingerprint::workbook_fingerprint(snapshot.checkpoint_state().workbook).entered),
+            Err(_) => return,
+        };
+        if let Ok(entered) = entered
+            && let Ok(frame) = self.client.fingerprint(at, entered)
+        {
+            step.send.push(frame);
+        }
     }
 
     pub fn tick(&mut self, now_ms: u64) -> Vec<String> {
@@ -533,7 +564,7 @@ impl GridCoauthor {
                 }
                 Event::Returned { .. } => returned_not_applied = Some(0),
                 Event::ArchiveReturn { .. } => self.notices.push(LiveNotice::ArchivedReturn),
-                Event::AccessChanged { can_edit } => self.notices.push(LiveNotice::ReadOnly(!can_edit)),
+                Event::AccessChanged { can_edit } => self.notices.push(LiveNotice::ReadOnly { read_only: !can_edit }),
                 Event::ChangesPaused { entries, bytes } => self.notices.push(LiveNotice::Paused { entries: *entries, bytes: *bytes }),
                 Event::ChangesResumed => self.notices.push(LiveNotice::Resumed),
                 Event::CannotOpen { .. } => self.notices.push(LiveNotice::CannotOpen),

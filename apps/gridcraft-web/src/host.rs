@@ -35,13 +35,10 @@ use craft_web_host::Mode;
 use craft_web_host::web::{FileData, Host, Message};
 use gridcraft_ui_egui::{Inbox, Services, SheetApp};
 
-use crate::hostmode::open_name;
+use crate::hostmode::{hands_save_to_page, is_workbook, open_name, reported_dirty};
 
 /// The app id in the host messages (`gridcraft:ready`).
 const APP: &str = "gridcraft";
-
-/// Saved files that count as a workbook: the document is then clean under the name it was saved as.
-const WORKBOOK_EXTS: &[&str] = &["xlsx"];
 
 /// The largest workbook taken from the host page, refused before it is copied.
 const MAX_OPEN_BYTES: u64 = 512 << 20;
@@ -54,7 +51,8 @@ pub struct Bridge {
     host: Rc<Host>,
     /// Names of the files handed to the host since the last frame.
     saved: Rc<RefCell<Vec<String>>>,
-    /// A live session runs: the workbook is the room's, not a file the page stores on Save.
+    /// A live session runs: the workbook is the room's, not a file the page stores on Save. The
+    /// live host sets it as each start or stop is handled, so Save reads the current state.
     live: Rc<Cell<bool>>,
 }
 
@@ -93,6 +91,11 @@ impl Bridge {
         matches!(self.host.mode(), Mode::Parent)
     }
 
+    /// The live flag, for the live host to keep current.
+    pub fn live_flag(&self) -> Rc<Cell<bool>> {
+        Rc::clone(&self.live)
+    }
+
     pub fn post_ready(&self) {
         let _ = self.host.post_ready(env!("CARGO_PKG_VERSION"), false);
     }
@@ -104,11 +107,11 @@ impl Bridge {
     /// After each frame: a workbook handed to the host this frame counts as saved under the
     /// name it was saved as, and the host hears when unsaved changes appear or go away (the
     /// crate does not repeat a state it already reported).
-    pub fn sync(&self, app: &mut SheetApp, live: bool) {
-        self.live.set(live);
+    pub fn sync(&self, app: &mut SheetApp) {
+        let live = self.live.get();
         if live {
             self.saved.borrow_mut().clear();
-            self.host.post_dirty(false);
+            self.host.post_dirty(reported_dirty(live, true));
             return;
         }
         let saved = std::mem::take(&mut *self.saved.borrow_mut());
@@ -120,14 +123,14 @@ impl Bridge {
                 doc.title = name.clone();
             }
         }
-        self.host.post_dirty(app.session.documents().iter().any(|d| d.is_dirty()));
+        self.host.post_dirty(reported_dirty(live, app.session.documents().iter().any(|d| d.is_dirty())));
     }
 
     fn post_save(&self, path: &str, bytes: &[u8]) -> Result<(), String> {
         let name = file_name(path);
-        if self.live.get() && is_workbook(&name) {
-            log::info!("live: the workbook's own Save is not handed to the page");
-            return Ok(());
+        if !hands_save_to_page(&name, self.live.get()) {
+            // Not saved: the error says so, and the workbook is not counted as saved.
+            return Err("not handed to the page: a live document is kept by the room".to_string());
         }
         self.host.post_save(&name, bytes, None, false)?;
         self.saved.borrow_mut().push(name);
@@ -157,10 +160,6 @@ fn deliver_open(queue: &Inbox, ctx: &egui::Context, name: &str, data: &FileData)
     }
     queue.lock().unwrap_or_else(|e| e.into_inner()).push((open_name(name), array.to_vec()));
     ctx.request_repaint();
-}
-
-fn is_workbook(name: &str) -> bool {
-    name.rsplit_once('.').is_some_and(|(_, ext)| WORKBOOK_EXTS.iter().any(|e| ext.eq_ignore_ascii_case(e)))
 }
 
 fn file_name(path: &str) -> String {

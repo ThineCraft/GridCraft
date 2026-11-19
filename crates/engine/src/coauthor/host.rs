@@ -331,8 +331,8 @@ pub enum LiveNotice {
     ArchivedReturn,
     /// Another person's changes made while away are arriving. (Sent once the room relays it.)
     OthersReturning { participant: ParticipantNo },
-    /// The person's right to edit changed: `true` is read only.
-    ReadOnly(bool),
+    /// The person's right to edit changed: `read_only` is the new state.
+    ReadOnly { read_only: bool },
     /// The document cannot be opened from the log.
     CannotOpen,
     /// This editor build does not match the session.
@@ -362,7 +362,7 @@ impl fmt::Debug for LiveNotice {
             Self::Returned { not_applied } => f.debug_struct("Returned").field("not_applied", not_applied).finish(),
             Self::ArchivedReturn => f.write_str("ArchivedReturn"),
             Self::OthersReturning { participant } => f.debug_struct("OthersReturning").field("participant", participant).finish(),
-            Self::ReadOnly(read_only) => f.debug_tuple("ReadOnly").field(read_only).finish(),
+            Self::ReadOnly { read_only } => f.debug_struct("ReadOnly").field("read_only", read_only).finish(),
             Self::CannotOpen => f.write_str("CannotOpen"),
             Self::Incompatible => f.write_str("Incompatible"),
             Self::BuildRefused => f.write_str("BuildRefused"),

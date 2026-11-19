@@ -33,12 +33,15 @@
 //!
 //! Nothing here logs a name, a frame, a payload or typed text: log lines name kinds and positions.
 
+use std::cell::{Cell, RefCell};
+use std::collections::VecDeque;
 use std::fmt;
+use std::rc::Rc;
 use std::sync::Arc;
 
 use gridcraft_engine::coauthor::{
-    ClientError, Event, GRIDCRAFT_LIVE_FORMAT, GridCoauthor, GridLiveEditor, GridLiveError, LiveBase, LiveConfig, MAX_SESSION_DATA_BYTES, Phase, Seq,
-    Stamp, Step, TicketAnswer,
+    ClientError, Event, GRIDCRAFT_LIVE_FORMAT, GridCoauthor, GridLiveEditor, GridLiveError, LiveBase, LiveConfig, LocalError, MAX_SESSION_DATA_BYTES,
+    Phase, Seq, Stamp, Step, TicketAnswer,
 };
 use serde_json::{Value as Json, json};
 
@@ -60,6 +63,13 @@ pub const MAX_INITIALS_CHARS: usize = 8;
 pub const MAX_COLOUR_CHARS: usize = 32;
 /// The longest format name.
 const MAX_FORMAT_CHARS: usize = 64;
+
+/// The most page messages held while the app has the seat.
+pub const MAX_QUEUED: usize = 4096;
+/// The most frame and people bytes held while the app has the seat; one base may wait besides.
+pub const MAX_QUEUED_BYTES: usize = 16 << 20;
+/// What a queued person costs against [`MAX_QUEUED_BYTES`]: the bound on their fields.
+const PERSON_BYTES: usize = 4 * (MAX_NAME_CHARS + MAX_INITIALS_CHARS + MAX_COLOUR_CHARS) + 16;
 
 /// The crash note's key in the frame's session storage, before the document id.
 pub const CRASH_NOTE_PREFIX: &str = "gridcraft-live-applying:";
@@ -386,6 +396,60 @@ impl LiveSeat {
         &self.people
     }
 
+    /// Sends one shared change made on the screen. Refused, with nothing shown, when the page
+    /// said this tab may only view, as well as when the room does.
+    #[allow(dead_code, reason = "the screen drives the seat (G5 task 11)")]
+    pub fn submit(&mut self, id: &str, params: Json, origin_year: i32, now_ms: u64) -> Result<Vec<LiveEditorMsg>, GridLiveError> {
+        let coauthor = self.editable()?;
+        let result = coauthor.submit(id, params, origin_year, now_ms);
+        self.finish_local(result, now_ms)
+    }
+
+    /// The person's own Undo while editing together.
+    #[allow(dead_code, reason = "the screen drives the seat (G5 task 11)")]
+    pub fn undo(&mut self, now_ms: u64) -> Result<Vec<LiveEditorMsg>, GridLiveError> {
+        let result = self.editable()?.undo(now_ms);
+        self.finish_local(result, now_ms)
+    }
+
+    /// The person's own Redo while editing together.
+    #[allow(dead_code, reason = "the screen drives the seat (G5 task 11)")]
+    pub fn redo(&mut self, now_ms: u64) -> Result<Vec<LiveEditorMsg>, GridLiveError> {
+        let result = self.editable()?.redo(now_ms);
+        self.finish_local(result, now_ms)
+    }
+
+    /// Whether the page lets this tab edit.
+    #[allow(dead_code, reason = "the screen drives the seat (G5 task 11)")]
+    pub fn page_may_edit(&self) -> bool {
+        self.page_may_edit
+    }
+
+    #[allow(dead_code, reason = "the screen drives the seat (G5 task 11)")]
+    fn editable(&mut self) -> Result<&mut GridCoauthor, GridLiveError> {
+        let may_edit = self.page_may_edit;
+        let coauthor = self.coauthor.as_mut().ok_or(GridLiveError::Local(LocalError::NotLive))?;
+        if !may_edit {
+            return Err(GridLiveError::Local(LocalError::ReadOnly));
+        }
+        Ok(coauthor)
+    }
+
+    /// What a local change produced, plus the notices it raised (a refusal included).
+    #[allow(dead_code, reason = "the screen drives the seat (G5 task 11)")]
+    fn finish_local(&mut self, result: Result<Step, GridLiveError>, now_ms: u64) -> Result<Vec<LiveEditorMsg>, GridLiveError> {
+        let mut out = Vec::new();
+        let outcome = match result {
+            Ok(step) => {
+                self.after(Ok(step), &mut out);
+                Ok(())
+            }
+            Err(error) => Err(error),
+        };
+        self.flush(now_ms, &mut out);
+        outcome.map(|()| out)
+    }
+
     /// Handles one page message at `now_ms` (a monotonic clock) and returns what to post.
     pub fn handle(&mut self, message: LivePageMsg, now_ms: u64) -> Vec<LiveEditorMsg> {
         let mut out = Vec::new();
@@ -479,12 +543,19 @@ impl LiveSeat {
             log::warn!("live: a base for position {} that was not asked for; ignored", base.at);
             return;
         }
-        let loaded = match (&base.session_data, base.stamp) {
-            (Some(session_data), Some((at_ms, seed))) => {
+        // No revision is the empty document (`Event::LoadBase`), whatever bytes come with it, so a
+        // page fault cannot give one client a different base.
+        let loaded = match (&base.revision, &base.session_data, base.stamp) {
+            (None, _, _) => {
+                if !base.bytes.is_empty() || base.session_data.is_some() {
+                    log::warn!("live: a base with no revision carried content; the empty document is used");
+                }
+                coauthor.load_base(LiveBase::Empty)
+            }
+            (Some(_), Some(session_data), Some((at_ms, seed))) => {
                 coauthor.load_base(LiveBase::Checkpoint { bytes: &base.bytes, session_data, stamp: Stamp { at_ms, seed } })
             }
-            _ if base.revision.is_none() && base.bytes.is_empty() => coauthor.load_base(LiveBase::Empty),
-            _ => coauthor.load_base(LiveBase::File { bytes: &base.bytes }),
+            (Some(_), _, _) => coauthor.load_base(LiveBase::File { bytes: &base.bytes }),
         };
         if loaded.is_err() {
             log::warn!("live: the base for position {} could not be opened", base.at);
@@ -553,6 +624,130 @@ impl LiveSeat {
     }
 }
 
+/// The page messages waiting while the app holds the seat, bounded by count and by bytes. On
+/// overflow it sheds what a reconnect sends again (frames, ticks, people, the base) and keeps
+/// the lifecycle messages; the caller resets the connection loudly instead of dropping one.
+#[derive(Default)]
+pub struct PageQueue {
+    items: VecDeque<LivePageMsg>,
+    bytes: usize,
+    has_base: bool,
+}
+
+/// The queue overflowed; the connection must be reset.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Overloaded;
+
+impl PageQueue {
+    pub fn push(&mut self, message: LivePageMsg) -> Result<(), Overloaded> {
+        let lifecycle = matches!(message, LivePageMsg::Start { .. } | LivePageMsg::Open | LivePageMsg::Closed | LivePageMsg::Stop);
+        let base = matches!(message, LivePageMsg::Base(_));
+        let cost = cost(&message);
+        let fits = self.items.len() < MAX_QUEUED && if base { !self.has_base } else { self.bytes.saturating_add(cost) <= MAX_QUEUED_BYTES };
+        if fits || (lifecycle && self.items.len() < MAX_QUEUED) {
+            self.has_base |= base;
+            self.bytes = self.bytes.saturating_add(cost);
+            self.items.push_back(message);
+            return Ok(());
+        }
+        self.shed();
+        if lifecycle {
+            self.items.push_back(message);
+        }
+        Err(Overloaded)
+    }
+
+    pub fn pop(&mut self) -> Option<LivePageMsg> {
+        let message = self.items.pop_front()?;
+        self.bytes = self.bytes.saturating_sub(cost(&message));
+        if matches!(message, LivePageMsg::Base(_)) {
+            self.has_base = false;
+        }
+        Some(message)
+    }
+
+    #[cfg(test)]
+    pub fn len(&self) -> usize {
+        self.items.len()
+    }
+
+    fn shed(&mut self) {
+        self.items.retain(|message| matches!(message, LivePageMsg::Start { .. } | LivePageMsg::Open | LivePageMsg::Closed | LivePageMsg::Stop));
+        // Lifecycle messages cost nothing against the byte bound.
+        self.bytes = 0;
+        self.has_base = false;
+    }
+}
+
+/// What a waiting message costs against [`MAX_QUEUED_BYTES`]; a base is bounded on its own.
+fn cost(message: &LivePageMsg) -> usize {
+    match message {
+        LivePageMsg::Frame(frame) => frame.len(),
+        LivePageMsg::People(people) => people.len().saturating_mul(PERSON_BYTES),
+        _ => 0,
+    }
+}
+
+/// The seat and its queue: what the browser's message handler and the app share. Messages are
+/// handled as they arrive; while the app holds the seat they wait for [`Self::drain`]. The live
+/// flag follows the seat as each message is handled, so Save sees a start or a stop at once.
+pub struct LiveCore {
+    seat: RefCell<LiveSeat>,
+    queue: RefCell<PageQueue>,
+    active: Rc<Cell<bool>>,
+}
+
+impl LiveCore {
+    #[cfg(test)]
+    pub fn new(notes: Arc<dyn CrashNotes>) -> Self {
+        Self::with_flag(notes, Rc::default())
+    }
+
+    /// With the live flag the host bridge reads at Save.
+    pub fn with_flag(notes: Arc<dyn CrashNotes>, active: Rc<Cell<bool>>) -> Self {
+        Self { seat: RefCell::new(LiveSeat::new(notes)), queue: RefCell::default(), active }
+    }
+
+    #[allow(dead_code, reason = "the screen drives the seat (G5 task 11)")]
+    pub fn seat(&self) -> &RefCell<LiveSeat> {
+        &self.seat
+    }
+
+    #[allow(dead_code, reason = "the screen drives the seat (G5 task 11)")]
+    pub fn active(&self) -> Rc<Cell<bool>> {
+        Rc::clone(&self.active)
+    }
+
+    /// One message from the page: queued, then handled at once if the seat is free.
+    pub fn hear(&self, message: LivePageMsg, now_ms: u64) -> Vec<LiveEditorMsg> {
+        let mut out = Vec::new();
+        if self.queue.borrow_mut().push(message).is_err() {
+            log::warn!("live: too many page messages waiting; resetting the connection");
+            out.push(LiveEditorMsg::Reset { kind: "overloaded" });
+        }
+        out.extend(self.drain(now_ms));
+        out
+    }
+
+    /// Handles the waiting messages in order, unless the app holds the seat.
+    pub fn drain(&self, now_ms: u64) -> Vec<LiveEditorMsg> {
+        let Ok(mut seat) = self.seat.try_borrow_mut() else { return Vec::new() };
+        let mut out = Vec::new();
+        loop {
+            let next = self.queue.borrow_mut().pop();
+            let Some(message) = next else { break };
+            out.extend(seat.handle(message, now_ms));
+            self.active.set(seat.is_active());
+        }
+        out
+    }
+}
+
+/// Whether a `message` event is heard: from the parent window, on this window's own origin.
+pub fn accepts_message(event_origin: &str, own_origin: &str, from_parent: bool) -> bool {
+    from_parent && event_origin == own_origin
+}
+
 /// STAND-IN for ShareCraft G5 task 1. The live wire has no presence message yet
 /// (`LiveClientMsg::Presence`, sent through `LiveClient::presence`), so a note cannot be framed
 /// and nothing is sent. Replace this with the client's presence frame once task 1 lands.
@@ -563,23 +758,15 @@ fn presence_frame_stand_in(note: String) -> Option<String> {
 
 fn ticket_messages(answer: TicketAnswer) -> Vec<LiveEditorMsg> {
     match answer {
-        TicketAnswer::Write { ticket, at, base, checkpoint, send } => {
-            let mut out = vec![LiveEditorMsg::Checkpoint {
-                ticket,
-                at: at.0,
-                base,
-                sha256: hex(&checkpoint.sha256),
-                bytes: checkpoint.bytes,
-                session_data: checkpoint.session_data,
-            }];
-            out.extend(send.into_iter().map(LiveEditorMsg::Send));
-            out
-        }
-        TicketAnswer::Verify { ticket, at, sha256, send } => {
-            let mut out = vec![LiveEditorMsg::Hash { ticket, at: at.0, sha256: hex(&sha256) }];
-            out.extend(send.into_iter().map(LiveEditorMsg::Send));
-            out
-        }
+        TicketAnswer::Write { ticket, at, base, checkpoint } => vec![LiveEditorMsg::Checkpoint {
+            ticket,
+            at: at.0,
+            base,
+            sha256: hex(&checkpoint.sha256),
+            bytes: checkpoint.bytes,
+            session_data: checkpoint.session_data,
+        }],
+        TicketAnswer::Verify { ticket, at, sha256 } => vec![LiveEditorMsg::Hash { ticket, at: at.0, sha256: hex(&sha256) }],
         TicketAnswer::Failed { send } => {
             log::warn!("live: a checkpoint ticket could not be honoured");
             send.into_iter().map(LiveEditorMsg::Send).collect()
@@ -633,11 +820,10 @@ fn message_name(message: &LivePageMsg) -> &'static str {
 }
 
 /// The browser side: hears the parent's live messages, converts them, and posts the answers.
-/// Nothing here decides anything; [`LiveSeat`] does.
+/// Nothing here decides anything; [`LiveCore`] and [`LiveSeat`] do.
 #[cfg(target_arch = "wasm32")]
 pub mod web {
-    use std::cell::RefCell;
-    use std::collections::VecDeque;
+    use std::cell::{Cell, RefCell};
     use std::rc::Rc;
     use std::sync::Arc;
 
@@ -646,12 +832,12 @@ pub mod web {
     use wasm_bindgen::{JsCast as _, JsValue};
 
     use super::{
-        CrashNotes, LiveEditorMsg, LiveMsgError, LivePageMsg, LiveSeat, MAX_FRAME_BYTES, MAX_PEOPLE, PageBinaries, check_base_sizes, is_live_type,
-        parse_page_msg,
+        CrashNotes, LiveCore, LiveEditorMsg, LiveMsgError, LivePageMsg, LiveSeat, MAX_FRAME_BYTES, MAX_PEOPLE, PageBinaries, accepts_message,
+        check_base_sizes, is_live_type, parse_page_msg,
     };
 
-    /// The most messages held while the app has the seat; a page that floods is cut off.
-    const MAX_QUEUED: usize = 4096;
+    /// The longest message `type` read; anything longer is not a live message.
+    const MAX_TYPE_CHARS: u32 = 64;
 
     /// The scalar fields a live message may carry, besides `type`.
     const FIELDS: &[&str] = &["document", "format", "canEdit", "frame", "revision", "at"];
@@ -683,8 +869,7 @@ pub mod web {
     }
 
     struct Shared {
-        seat: RefCell<LiveSeat>,
-        queue: RefCell<VecDeque<LivePageMsg>>,
+        core: LiveCore,
         parent: web_sys::Window,
         origin: String,
         ctx: egui::Context,
@@ -697,8 +882,9 @@ pub mod web {
     }
 
     impl LiveHost {
-        /// Listens to a same-origin parent window; `None` without one.
-        pub fn connect(ctx: egui::Context) -> Option<Self> {
+        /// Listens to a same-origin parent window; `None` without one. `active` is the live flag
+        /// the host bridge reads at Save; it follows the seat as each message is handled.
+        pub fn connect(ctx: egui::Context, active: Rc<Cell<bool>>) -> Option<Self> {
             let window = web_sys::window()?;
             let parent = window.parent().ok().flatten()?;
             if js_sys::Object::is(&parent, &window) {
@@ -708,20 +894,15 @@ pub mod web {
             if parent.location().origin().ok()? != origin {
                 return None;
             }
-            let shared = Rc::new(Shared {
-                seat: RefCell::new(LiveSeat::new(Arc::new(SessionNotes))),
-                queue: RefCell::default(),
-                parent: parent.clone(),
-                origin: origin.clone(),
-                ctx,
-            });
+            let core = LiveCore::with_flag(Arc::new(SessionNotes), active);
+            let shared = Rc::new(Shared { core, parent: parent.clone(), origin: origin.clone(), ctx });
             let host = Self { shared };
             let listener = host.clone();
             let on_message = Closure::<dyn Fn(web_sys::MessageEvent)>::new(move |event: web_sys::MessageEvent| {
-                if event.origin() != origin || !event.source().is_some_and(|source| js_sys::Object::is(&source, &parent)) {
-                    return;
+                let from_parent = event.source().is_some_and(|source| js_sys::Object::is(&source, &parent));
+                if accepts_message(&event.origin(), &origin, from_parent) {
+                    listener.hear(&event.data());
                 }
-                listener.hear(&event.data());
             });
             if window.add_event_listener_with_callback("message", on_message.as_ref().unchecked_ref()).is_err() {
                 return None;
@@ -731,25 +912,29 @@ pub mod web {
         }
 
         /// Whether a live session runs.
+        #[allow(dead_code, reason = "the screen drives the seat (G5 task 11)")]
         pub fn is_active(&self) -> bool {
-            self.shared.seat.try_borrow().is_ok_and(|seat| seat.is_active())
+            self.shared.core.active().get()
         }
 
-        /// The seat, for the screen (task 11). Borrow it only within a frame.
-        #[allow(dead_code, reason = "the screen reads and drives the seat (G5 task 11)")]
+        /// The seat, for the screen. Borrow it only within a frame.
+        #[allow(dead_code, reason = "the screen drives the seat (G5 task 11)")]
         pub fn seat(&self) -> &RefCell<LiveSeat> {
-            &self.shared.seat
+            self.shared.core.seat()
         }
 
         /// Handles messages queued while the app held the seat; called at the start of a frame.
         pub fn drain(&self) {
-            let Ok(mut seat) = self.shared.seat.try_borrow_mut() else { return };
-            loop {
-                let next = self.shared.queue.borrow_mut().pop_front();
-                let Some(message) = next else { break };
-                for out in seat.handle(message, now_ms()) {
-                    self.post(&out);
-                }
+            for out in self.shared.core.drain(now_ms()) {
+                self.post(&out);
+            }
+        }
+
+        /// Posts what the screen's own change produced.
+        #[allow(dead_code, reason = "the screen drives the seat (G5 task 11)")]
+        pub fn post_all(&self, out: &[LiveEditorMsg]) {
+            for message in out {
+                self.post(message);
             }
         }
 
@@ -762,15 +947,9 @@ pub mod web {
                     return;
                 }
             };
-            {
-                let mut queue = self.shared.queue.borrow_mut();
-                if queue.len() >= MAX_QUEUED {
-                    log::warn!("live: too many page messages waiting; one was dropped");
-                    return;
-                }
-                queue.push_back(message);
+            for out in self.shared.core.hear(message, now_ms()) {
+                self.post(&out);
             }
-            self.drain();
             self.shared.ctx.request_repaint();
         }
 
@@ -782,7 +961,7 @@ pub mod web {
     }
 
     /// The page's clock: monotonic, in milliseconds.
-    fn now_ms() -> u64 {
+    pub fn now_ms() -> u64 {
         let now = web_sys::window().and_then(|window| window.performance()).map_or(0.0, |performance| performance.now());
         if now.is_finite() && now > 0.0 { now as u64 } else { 0 }
     }
@@ -807,7 +986,10 @@ pub mod web {
     /// Reads a page message: its scalar fields into JSON (bounded before anything is copied), its
     /// file bytes apart. `Ok(None)` for anything that is not a live message.
     fn read(data: &JsValue) -> Result<Option<LivePageMsg>, LiveMsgError> {
-        let Some(kind) = js_sys::Reflect::get(data, &"type".into()).ok().and_then(|kind| kind.as_string()) else { return Ok(None) };
+        let Some(kind) = field(data, "type") else { return Ok(None) };
+        let Some(kind) = kind.dyn_ref::<js_sys::JsString>().filter(|kind| kind.length() <= MAX_TYPE_CHARS).and_then(|kind| kind.as_string()) else {
+            return Ok(None);
+        };
         if !is_live_type(&kind) {
             return Ok(None);
         }
@@ -1111,7 +1293,7 @@ mod tests {
         assert_eq!(posted.fields(), json!({"ticket":ticket,"at":0,"base":"r1","sha256":hex}), "file content goes apart from the fields");
         let binaries: Vec<&str> = posted.binaries().into_iter().map(|(name, _)| name).collect();
         assert_eq!(binaries, ["bytes", "sessionData"]);
-        assert!(sends(&out).iter().any(|frame| frame["type"] == "fingerprint" && frame["at"] == 0), "the entered fingerprint goes to the room");
+        assert!(sends(&out).is_empty(), "agreement is reported at its own positions, not with tickets");
 
         let verify =
             json!({"type":"checkpoint_ticket","ticket":"00000000-0000-0000-0000-0000000000a2","purpose":"verify","at":0,"base":"r1","major":null});
@@ -1195,5 +1377,158 @@ mod tests {
             let states = out.iter().filter(|message| matches!(message, LiveEditorMsg::State { phase: "live", waiting: 0, can_edit: true })).count();
             assert_eq!(states, 1, "each tick gets one state: {out:?}");
         }
+    }
+
+    /// Joins the seat and leaves it waiting for the base at position 0 of `revision`.
+    fn awaiting_base(seat: &mut LiveSeat, participant: u32, revision: Option<&str>, now: u64) {
+        let joined = json!({
+            "type":"live_joined",
+            "session":"00000000-0000-0000-0000-00000000005e",
+            "participant":participant,
+            "place":{"is":"new"},
+            "can_edit":true,
+            "heartbeat_ms":60_000,
+            "people":[]
+        });
+        seat.handle(LivePageMsg::Frame(joined.to_string()), now);
+        let catchup = json!({"type":"catchup","base":0,"revision":revision,"from":0,"head":0});
+        let out = seat.handle(LivePageMsg::Frame(catchup.to_string()), now + 1);
+        assert!(out.iter().any(|message| matches!(message, LiveEditorMsg::Load { at: 0, .. })), "{out:?}");
+    }
+
+    fn phase(seat: &mut LiveSeat, now: u64) -> &'static str {
+        seat.handle(LivePageMsg::Tick, now)
+            .iter()
+            .find_map(|message| match message {
+                LiveEditorMsg::State { phase, .. } => Some(*phase),
+                _ => None,
+            })
+            .unwrap()
+    }
+
+    fn start_msg(can_edit: bool) -> LivePageMsg {
+        LivePageMsg::Start { document: DOCUMENT.into(), format: GRIDCRAFT_LIVE_FORMAT.into(), can_edit }
+    }
+
+    #[test]
+    fn checkpoint_and_empty_bases_load_in_the_seat() {
+        let (mut alice, _) = opened(Arc::default(), 10);
+        join_live(&mut alice, 2, 10);
+        let checkpoint = alice.coauthor().unwrap().checkpoint(Seq(0)).unwrap();
+
+        let (mut bob, _) = opened(Arc::default(), 10);
+        awaiting_base(&mut bob, 3, Some("r2"), 20);
+        let stray = PageBase { revision: Some("r2".into()), at: 5, bytes: checkpoint.bytes.clone(), session_data: None, stamp: None };
+        bob.handle(LivePageMsg::Base(stray), 25);
+        assert_eq!(phase(&mut bob, 26), "loading_base", "a base that was not asked for is ignored");
+        let base = PageBase {
+            revision: Some("r2".into()),
+            at: 0,
+            bytes: checkpoint.bytes.clone(),
+            session_data: Some(checkpoint.session_data.clone()),
+            stamp: Some((1_795_219_200_000, 7)),
+        };
+        bob.handle(LivePageMsg::Base(base), 30);
+        assert_eq!(phase(&mut bob, 31), "live", "a checkpoint base loads with its stamp");
+        assert_eq!(bob.coauthor().unwrap().editor().ids(), alice.coauthor().unwrap().editor().ids());
+
+        let (mut carol, _) = opened(Arc::default(), 10);
+        awaiting_base(&mut carol, 4, None, 20);
+        let stray_bytes = PageBase { revision: None, at: 0, bytes: base_bytes(), session_data: None, stamp: None };
+        carol.handle(LivePageMsg::Base(stray_bytes), 30);
+        assert_eq!(phase(&mut carol, 31), "live", "no revision is the empty document, whatever bytes come with it");
+        let blank = gridcraft_engine::coauthor::GridLiveEditor::blank().unwrap();
+        assert_eq!(carol.coauthor().unwrap().editor().ids(), blank.ids());
+
+        let (mut dave, _) = opened(Arc::default(), 10);
+        awaiting_base(&mut dave, 5, Some("r1"), 20);
+        let broken = PageBase { revision: Some("r1".into()), at: 0, bytes: b"not a workbook".to_vec(), session_data: None, stamp: None };
+        let out = dave.handle(LivePageMsg::Base(broken), 30);
+        assert!(out.iter().any(|message| matches!(message, LiveEditorMsg::Reset { kind: "base" })), "{out:?}");
+    }
+
+    #[test]
+    fn access_change_posts_a_read_only_notice() {
+        let (mut seat, _) = opened(Arc::default(), 10);
+        join_live(&mut seat, 3, 10);
+        let out = seat.handle(LivePageMsg::Frame(json!({"type":"access","can_edit":false}).to_string()), 20);
+        let notice = out.iter().find_map(|message| match message {
+            LiveEditorMsg::Notice(notice) => Some(notice.clone()),
+            _ => None,
+        });
+        assert_eq!(notice, Some(json!({"kind":"read_only","read_only":true})), "{out:?}");
+    }
+
+    #[test]
+    fn a_tab_the_page_may_not_edit_is_refused() {
+        let mut seat = LiveSeat::new(Arc::new(MemoryNotes::default()));
+        seat.handle(start_msg(false), 10);
+        seat.handle(LivePageMsg::Open, 11);
+        join_live(&mut seat, 3, 12);
+        let refused = seat.submit("cell.set", json!({"sheet":0,"cell":"A1","input":"9"}), 2026, 20);
+        assert!(refused.is_err(), "the page said this tab may only view");
+        assert_eq!(a1(&seat), Value::Empty, "nothing was shown");
+        let (mut editor, _) = opened(Arc::default(), 10);
+        join_live(&mut editor, 4, 10);
+        let sent = editor.submit("cell.set", json!({"sheet":0,"cell":"A1","input":"9"}), 2026, 20).unwrap();
+        assert!(sends(&sent).iter().any(|frame| frame["type"] == "entry"), "an editing tab sends the change");
+        assert_eq!(a1(&editor), Value::Number(9.0));
+        assert!(!seat.page_may_edit() && editor.page_may_edit());
+        assert!(seat.undo(30).is_err() && seat.redo(31).is_err(), "nor its own Undo or Redo");
+        assert!(
+            !matches!(editor.undo(30), Err(GridLiveError::Local(LocalError::ReadOnly))),
+            "an editing tab's Undo is not refused as read only (it waits for the change to be stored)"
+        );
+    }
+
+    #[test]
+    fn messages_wait_while_the_app_holds_the_seat() {
+        let core = LiveCore::new(Arc::new(MemoryNotes::default()));
+        let held = core.seat().borrow_mut();
+        assert!(core.hear(start_msg(true), 10).is_empty(), "the seat is busy: the start waits");
+        assert!(core.hear(LivePageMsg::Open, 11).is_empty());
+        assert!(!core.active().get(), "nothing has run yet");
+        drop(held);
+        let out = core.drain(12);
+        assert!(sends(&out).iter().any(|frame| frame["type"] == "live_join"), "start, then open, in order: {out:?}");
+        assert!(core.active().get(), "the live flag turns on as the start is handled");
+        let out = core.hear(LivePageMsg::Stop, 13);
+        assert!(sends(&out).iter().any(|frame| frame["type"] == "leave"));
+        assert!(!core.active().get(), "and off in the same handler as the stop, before any frame is drawn");
+    }
+
+    #[test]
+    fn the_queue_is_bounded_by_bytes_and_overflow_resets() {
+        let mut queue = PageQueue::default();
+        let frame = || LivePageMsg::Frame("x".repeat(MAX_FRAME_BYTES));
+        let mut pushed = 0;
+        while queue.push(frame()).is_ok() {
+            pushed += 1;
+            assert!(pushed <= MAX_QUEUED_BYTES / MAX_FRAME_BYTES, "frames are bounded by their bytes");
+        }
+        assert_eq!(queue.len(), 0, "an overflow sheds what a reconnect sends again");
+        let base = || LivePageMsg::Base(PageBase { revision: None, at: 0, bytes: vec![0; 16], session_data: None, stamp: None });
+        assert!(queue.push(base()).is_ok());
+        assert!(queue.push(base()).is_err(), "a second base while one waits is an overflow, not a silent drop");
+        assert!(queue.push(LivePageMsg::Stop).is_ok());
+        assert_eq!(queue.len(), 1);
+        assert!(matches!(queue.pop(), Some(LivePageMsg::Stop)), "a stop is never shed");
+
+        let core = LiveCore::new(Arc::new(MemoryNotes::default()));
+        let held = core.seat().borrow_mut();
+        let mut out = Vec::new();
+        for _ in 0..=(MAX_QUEUED_BYTES / MAX_FRAME_BYTES) {
+            out.extend(core.hear(frame(), 10));
+        }
+        drop(held);
+        assert!(out.iter().any(|message| matches!(message, LiveEditorMsg::Reset { kind: "overloaded" })), "the page is told: {out:?}");
+    }
+
+    #[test]
+    fn only_the_parent_on_this_origin_is_heard() {
+        assert!(accepts_message("https://share.example", "https://share.example", true));
+        assert!(!accepts_message("https://other.example", "https://share.example", true), "another origin");
+        assert!(!accepts_message("https://share.example", "https://share.example", false), "another window on this origin");
+        assert!(!accepts_message("null", "https://share.example", true));
     }
 }

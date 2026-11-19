@@ -27,6 +27,32 @@ fn coauthor(names: &[&str]) -> GridCoauthor {
     GridCoauthor::new(live_config(), GridLiveEditor::new(session_with_sheets(names)).expect("editor builds"))
 }
 
+/// A co-author joined to its own test room, so it is live.
+fn live_coauthor(names: &[&str]) -> GridCoauthor {
+    let mut client = coauthor(names);
+    DeterministicServer::new().join(&mut client, 1);
+    client
+}
+
+/// The same client joins again on a new connection and keeps its place.
+fn rejoin(client: &mut GridCoauthor, now_ms: u64) {
+    let _ = client.connected(now_ms);
+    let joined = json!({
+        "type":"live_joined",
+        "session":"00000000-0000-0000-0000-00000000005e",
+        "participant":1,
+        "place":{"is":"kept"},
+        "can_edit":true,
+        "heartbeat_ms":60_000,
+        "people":[]
+    });
+    client.receive(&joined.to_string(), now_ms + 1).expect("join is accepted");
+    let step = client.receive(&json!({"type":"catchup","base":0,"revision":null,"from":0,"head":0}).to_string(), now_ms + 2).expect("catch-up");
+    if step.events.iter().any(|event| matches!(event, Event::LoadBase { .. })) {
+        client.base_ready(now_ms + 3).expect("base");
+    }
+}
+
 fn submit(client: &mut GridCoauthor, server: &DeterministicServer, place: &ClientPlace, id: &str, params: Json, now_ms: u64) -> ProposedEntry {
     let step = client.submit(id, params, ORIGIN_YEAR, now_ms).expect("shared change is accepted locally");
     server.one_proposal(place, &step)
@@ -269,7 +295,7 @@ fn starting_from_a_checkpoint_keeps_its_identities() {
 
 #[test]
 fn presence_round_trips_by_identity() {
-    let mut alice = coauthor(&["Data", "View"]);
+    let mut alice = live_coauthor(&["Data", "View"]);
     let bob = coauthor(&["Data", "View"]);
     select(alice.editor_mut().session_mut(), "View", "C3");
     alice.editor_mut().session_mut().execute("selection.set", json!({"range":"C3:D4","active":"C3"})).expect("range selects");
@@ -336,7 +362,7 @@ fn presence_on_a_deleted_row_is_dropped() {
 fn malformed_presence_is_ignored() {
     let alice = coauthor(&["Data"]);
     let good = {
-        let mut sender = coauthor(&["Data"]);
+        let mut sender = live_coauthor(&["Data"]);
         sender.presence(0).expect("note")
     };
     assert!(alice.shown_presence(&good).is_some());
@@ -400,7 +426,7 @@ fn room_events_become_notices() {
     let _ = client.take_notices();
 
     client.receive(&json!({"type":"access","can_edit":false}).to_string(), 20).expect("access change is accepted");
-    assert_eq!(client.take_notices(), vec![LiveNotice::ReadOnly(true)]);
+    assert_eq!(client.take_notices(), vec![LiveNotice::ReadOnly { read_only: true }]);
     assert!(!client.can_edit());
 }
 
@@ -461,12 +487,13 @@ fn filter_commands_target_the_sheet_filter_not_the_selection() {
 
 #[test]
 fn presence_is_sent_again_after_a_reconnect() {
-    let mut alice = coauthor(&["Data"]);
+    let mut alice = live_coauthor(&["Data"]);
     select(alice.editor_mut().session_mut(), "Data", "C3");
     assert!(alice.presence(0).is_some(), "a first note is sent");
     assert_eq!(alice.presence(500), None, "an unchanged note is not repeated");
     alice.disconnected(600);
-    let _ = alice.connected(700);
+    assert_eq!(alice.presence(650), None, "nothing while offline");
+    rejoin(&mut alice, 700);
     assert!(alice.presence(800).is_some(), "the room dropped the note with the connection, so it goes again");
 }
 
@@ -482,4 +509,111 @@ fn clicking_the_active_alignment_again_returns_to_general() {
     session.execute("home.alignCenter", again).expect("returns to General");
     let third = explicit_params(&session, "home.alignCenter", json!({})).expect("alignment target");
     assert_eq!(third["on"], json!(true), "the cell is back to General, so the next click centres it");
+}
+
+/// Every notice reaches the page as JSON with its kind; none fails to serialise.
+#[test]
+fn every_notice_serialises() {
+    let notices = [
+        LiveNotice::NotApplied { seq: Seq(3), kept_text: Some("typed".into()), reason: NotAppliedReason::RowDeleted },
+        LiveNotice::ChangeRefused { reason: protocol::live::RefusedReason::ReadOnly },
+        LiveNotice::UndoLeft { cells: 2 },
+        LiveNotice::UndoRefused { reason: "no".into() },
+        LiveNotice::Unshared { command: "home.mergeCells".into() },
+        LiveNotice::Paused { entries: 1, bytes: 2 },
+        LiveNotice::Resumed,
+        LiveNotice::Returned { not_applied: 1 },
+        LiveNotice::ArchivedReturn,
+        LiveNotice::OthersReturning { participant: protocol::live::ParticipantNo(4) },
+        LiveNotice::ReadOnly { read_only: true },
+        LiveNotice::CannotOpen,
+        LiveNotice::Incompatible,
+        LiveNotice::BuildRefused,
+        LiveNotice::Removed,
+    ];
+    for notice in &notices {
+        let json = serde_json::to_value(notice).unwrap_or_else(|error| panic!("{notice:?} does not serialise: {error}"));
+        assert!(json["kind"].is_string(), "{notice:?} names its kind: {json}");
+    }
+    assert_eq!(serde_json::to_value(LiveNotice::ReadOnly { read_only: false }).expect("serialises"), json!({"kind":"read_only","read_only":false}));
+}
+
+fn fingerprints(step: &Step) -> Vec<Json> {
+    step.send.iter().filter_map(|frame| serde_json::from_str::<Json>(frame).ok()).filter(|frame| frame["type"] == "fingerprint").collect()
+}
+
+/// The room compares entered digests at every non-zero multiple of 64 positions and resyncs a
+/// client that disagrees (G4 `live_room.rs` `fingerprint`, `AGREEMENT_EVERY`). Every editing
+/// client reports at those positions, and a client whose workbook drifted reports a different
+/// digest, which the room's decision catches.
+#[test]
+fn entered_agreement_is_reported_at_every_64th_position_and_catches_drift() {
+    let mut server = DeterministicServer::new();
+    let mut alice = coauthor(&["Data"]);
+    let mut bob = coauthor(&["Data"]);
+    let alice_place = server.join(&mut alice, 10);
+    server.join(&mut bob, 10);
+    let mut reports: Vec<(u64, Json, Json)> = Vec::new();
+    for n in 1..=128_u64 {
+        if n == 100 {
+            // Bob's copy changes outside the log: his digest must stop agreeing.
+            bob.editor_mut().session_mut().execute("cell.set", json!({"sheet":"Data","cell":"Z9","input":"drift"})).expect("drift");
+        }
+        let now = 100 + n * 100;
+        let step = alice.submit("cell.set", json!({"sheet":0,"cell":"A1","input":n.to_string()}), ORIGIN_YEAR, now).expect("submits");
+        assert!(fingerprints(&step).is_empty(), "nothing is reported for a change still waiting");
+        let proposal = server.one_proposal(&alice_place, &step);
+        let ordered = server.order(&proposal, 1_795_219_200_000, 7);
+        let (alice_step, bob_step) = server.deliver_both(&mut alice, &mut bob, &ordered, now + 1);
+        let (from_alice, from_bob) = (fingerprints(&alice_step), fingerprints(&bob_step));
+        if n % 64 == 0 {
+            assert_eq!((from_alice.len(), from_bob.len()), (1, 1), "both editors report at {n}");
+            reports.push((n, from_alice[0].clone(), from_bob[0].clone()));
+        } else {
+            assert!(from_alice.is_empty() && from_bob.is_empty(), "no report at {n}");
+        }
+    }
+    for (at, alice_report, bob_report) in &reports {
+        for report in [alice_report, bob_report] {
+            assert_eq!(report["at"], json!(at), "the report names its exact position");
+            let entered = report["entered"].as_str().expect("entered is text");
+            assert!(entered.len() == 64 && entered.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()), "the room's digest form");
+        }
+    }
+    assert_eq!(reports[0].1["entered"], reports[0].2["entered"], "at 64 both copies agree");
+    assert_ne!(reports[1].1["entered"], reports[1].2["entered"], "at 128 the drifted copy disagrees, so the room resyncs it");
+}
+
+#[test]
+fn a_viewer_does_not_report_agreement() {
+    let mut server = DeterministicServer::new();
+    let mut alice = coauthor(&["Data"]);
+    let mut viewer = coauthor(&["Data"]);
+    let place = server.join(&mut alice, 10);
+    join_with_access(&mut viewer, 9, false, 10);
+    for n in 1..=64_u64 {
+        let proposal = submit(&mut alice, &server, &place, "cell.set", json!({"sheet":0,"cell":"A1","input":n.to_string()}), 100 + n * 100);
+        let ordered = server.order(&proposal, 1_795_219_200_000, 7);
+        let step = server.deliver(&mut viewer, &ordered, 150 + n * 100);
+        assert!(fingerprints(&step).is_empty(), "the room takes reports from editors only");
+    }
+}
+
+#[test]
+fn presence_waits_for_the_live_phase() {
+    let mut alice = coauthor(&["Data"]);
+    assert_eq!(alice.presence(10), None, "no note before the client is live");
+    let mut server = DeterministicServer::new();
+    server.join(&mut alice, 30);
+    assert!(alice.presence(40).is_some(), "the first note goes once live");
+}
+
+#[test]
+fn starting_empty_ignores_the_hosts_workbook() {
+    let mut session = session_with_sheets(&["Other", "Sheets"]);
+    session.execute("cell.set", json!({"sheet":"Other","cell":"A1","input":"mine"})).expect("seed");
+    let started = GridCoauthor::start(session, LiveBase::Empty, live_config()).expect("an empty base starts");
+    let blank = GridLiveEditor::blank().expect("blank editor");
+    assert_eq!(started.editor().ids(), blank.ids(), "the empty base is the same on every machine");
+    assert_eq!(entered(&started), fingerprint(blank.session(), DocId(0)).entered);
 }
