@@ -561,6 +561,10 @@ impl Session {
     pub fn new() -> Session {
         Session::default()
     }
+    /// Whether a live co-authoring editor owns this session's shared workbook.
+    pub fn is_coauthoring(&self) -> bool {
+        self.coauthoring
+    }
     pub fn documents(&self) -> &[DocState] {
         &self.docs
     }

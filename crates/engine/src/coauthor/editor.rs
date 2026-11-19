@@ -10,7 +10,7 @@ use gridcraft_model::{Sheet, SheetViewMode, ShowObjects, Workbook, WorkbookView}
 use serde_json::Value as Json;
 
 use super::{
-    CoauthorError, GuardedPatch, GuardedStructural, PreparedChange, SharedCommand, TargetGone, UndoAction, UndoReport, WorkbookIds,
+    CoauthorError, GuardedPatch, GuardedStructural, NotAppliedReason, PreparedChange, SharedCommand, TargetGone, UndoAction, UndoReport, WorkbookIds,
     allocates_only_own_identities, apply_guarded_patch, build_undo_action, decode_entry, encode_command, mode_for, resolve_command,
     unrecorded_action,
 };
@@ -222,6 +222,9 @@ pub struct GridLiveEditor {
     local_action_high_water: u64,
     history_updates: BTreeMap<u64, Option<UndoAction>>,
     undo_reports: BTreeMap<u64, UndoReport>,
+    /// Why each of this person's own actions did nothing, by action number, as last applied.
+    /// Kept until the action settles, so the host can tell its author.
+    own_no_effects: BTreeMap<u64, NotAppliedReason>,
     #[cfg(test)]
     test_command_override: Option<&'static str>,
 }
@@ -241,14 +244,68 @@ impl GridLiveEditor {
     /// Builds a fresh editor from one durable checkpoint. Identity validation happens against
     /// the parsed workbook before any caller-owned editor is replaced.
     pub(super) fn from_checkpoint(bytes: &[u8], session_data: &[u8], stamp: Stamp) -> Result<Self, super::CoauthorError> {
+        Self::from_checkpoint_in(Session::new(), bytes, session_data, stamp)
+    }
+
+    /// [`Self::from_checkpoint`] in the host's own session, whose documents the checkpoint
+    /// replaces.
+    pub(super) fn from_checkpoint_in(mut session: Session, bytes: &[u8], session_data: &[u8], stamp: Stamp) -> Result<Self, super::CoauthorError> {
         let (workbook, _) = crate::io::open_checkpoint_bytes("checkpoint.xlsx", bytes)?;
         let ids = WorkbookIds::from_session_data(session_data, &workbook)?;
-        let mut session = Session::new();
+        close_all_documents(&mut session);
         session.add_document(DocState::new_checkpoint_configured(workbook, None, "checkpoint.xlsx".into(), Trust::FromFile, |calc| {
             calc.fixed_now = Some(gridcraft_core::date::serial_from_unix_ms(stamp.at_ms as f64));
             calc.set_rand_seed(u64::from(stamp.seed));
         }));
         Self::with_ids(session, ids)
+    }
+
+    /// Builds an editor from the document's stored file for a first live session: the file
+    /// replaces the session's documents and every row, column and sheet gets participant 0's
+    /// fresh identity, alike on every machine.
+    pub(super) fn from_file_in(mut session: Session, bytes: &[u8]) -> Result<Self, super::CoauthorError> {
+        let title = session.doc().map_or_else(|_| "Workbook".to_string(), |document| document.title.clone());
+        // A live document is an XLSX workbook; other bytes (text that would open as CSV, or an
+        // encrypted file nobody can enter a password for here) are not a base.
+        if gridcraft_xlsx::sniff(bytes) != gridcraft_xlsx::Format::Xlsx {
+            return Err(EngineError::Other("The stored file is not an XLSX workbook, so it can't be edited together.".into()).into());
+        }
+        let (workbook, _) = crate::io::open_bytes(&title, bytes)?;
+        close_all_documents(&mut session);
+        session.add_document(DocState::new(workbook, None, title, Trust::FromFile));
+        Self::new(session)
+    }
+
+    /// Ends live editing and hands the session back as an ordinary, unshared one. Identities,
+    /// personal history and pending outcomes are dropped with the editor.
+    pub(super) fn into_session(self) -> Session {
+        let mut session = self.session;
+        session.coauthoring = false;
+        session
+    }
+
+    pub(super) fn take_own_no_effect(&mut self, action: u64) -> Option<NotAppliedReason> {
+        self.own_no_effects.remove(&action)
+    }
+
+    pub(super) fn clear_own_no_effects(&mut self) {
+        self.own_no_effects.clear();
+    }
+
+    /// Notes what an own entry did, for its author's notice. Other people's entries are not
+    /// noted: their authors are told on their own machines.
+    fn note_own(&mut self, own: bool, action: u64, reason: Option<NotAppliedReason>) {
+        if !own {
+            return;
+        }
+        match reason {
+            Some(reason) => {
+                self.own_no_effects.insert(action, reason);
+            }
+            None => {
+                self.own_no_effects.remove(&action);
+            }
+        }
     }
 
     fn with_ids(mut session: Session, ids: WorkbookIds) -> Result<Self, super::CoauthorError> {
@@ -265,6 +322,7 @@ impl GridLiveEditor {
             local_action_high_water: 0,
             history_updates: BTreeMap::new(),
             undo_reports: BTreeMap::new(),
+            own_no_effects: BTreeMap::new(),
             #[cfg(test)]
             test_command_override: None,
         })
@@ -469,6 +527,16 @@ impl GridLiveEditor {
         Self::no_effect(&format!("The `{action}` {kind} target {state}."), false)
     }
 
+    fn not_applied_reason(error: &TargetGone) -> NotAppliedReason {
+        match error {
+            TargetGone::DeletedSheet(_) => NotAppliedReason::SheetDeleted,
+            TargetGone::DeletedRow(_) => NotAppliedReason::RowDeleted,
+            TargetGone::DeletedColumn(_) => NotAppliedReason::ColumnDeleted,
+            TargetGone::Malformed(_) => NotAppliedReason::Invalid,
+            _ => NotAppliedReason::TargetUnavailable,
+        }
+    }
+
     fn guarded_target_kind(patch: &GuardedPatch) -> &'static str {
         match patch {
             GuardedPatch::Cells(_) => "cell content",
@@ -489,6 +557,19 @@ impl GridLiveEditor {
             EngineError::Internal(_, _) => Err(Crash),
             _ => Ok(Self::no_effect("The shared change could not be applied.", read_stamp)),
         }
+    }
+}
+
+/// Closes every document the session holds, so a live base becomes its only one.
+fn close_all_documents(session: &mut Session) {
+    let mut left = session.documents().len();
+    while left > 0 {
+        session.close_document(0);
+        let now = session.documents().len();
+        if now >= left {
+            break;
+        }
+        left = now;
     }
 }
 
@@ -516,6 +597,7 @@ impl LiveEditor for GridLiveEditor {
         // An entry may allocate only its sender's identities; the check reads nothing but the
         // entry, so every client refuses the same entries.
         if !allocates_only_own_identities(&decoded.command, entry.participant.0) {
+            self.note_own(entry.own, decoded.action, Some(NotAppliedReason::Invalid));
             return Ok(Self::no_effect("The shared change is not valid.", false));
         }
         if let SharedCommand::Guarded { patch } = &decoded.command {
@@ -531,6 +613,7 @@ impl LiveEditor for GridLiveEditor {
                 Ok(report) => report,
                 Err(error) => {
                     self.restore_shared(&before, view.as_ref(), true);
+                    self.note_own(entry.own, decoded.action, Some(NotAppliedReason::Failed));
                     return Self::engine_error_outcome(error, read_stamp);
                 }
             };
@@ -545,7 +628,9 @@ impl LiveEditor for GridLiveEditor {
             if !first_local_apply && let Some(view) = view.as_ref() {
                 self.restore_view(view);
             }
-            let effect = if report.restored == 0 && report.left > 0 {
+            let left_everything = report.restored == 0 && report.left > 0;
+            self.note_own(entry.own, decoded.action, left_everything.then_some(NotAppliedReason::ChangedSinceUndo));
+            let effect = if left_everything {
                 Effect::NoEffect {
                     reason: format!("Undo or Redo left the {} unchanged because it changed after this action.", Self::guarded_target_kind(patch)),
                 }
@@ -561,7 +646,10 @@ impl LiveEditor for GridLiveEditor {
         }
         let resolved = match resolve_command(&self.ids, &self.session, &decoded) {
             Ok(resolved) => resolved,
-            Err(error) => return Ok(Self::target_no_effect(&decoded.command, &error)),
+            Err(error) => {
+                self.note_own(entry.own, decoded.action, Some(Self::not_applied_reason(&error)));
+                return Ok(Self::target_no_effect(&decoded.command, &error));
+            }
         };
         let view = self.capture_view();
         let before = self.snapshot();
@@ -574,12 +662,14 @@ impl LiveEditor for GridLiveEditor {
         let stamp_was_read = self.session.doc().is_ok_and(|document| document.calc.stamp_was_read());
         if let Err(error) = result {
             self.restore_shared(&before, view.as_ref(), true);
+            self.note_own(entry.own, decoded.action, Some(NotAppliedReason::Failed));
             return Self::engine_error_outcome(error, entry.stamp.is_none() && stamp_was_read);
         }
         if let Some(structural) = &resolved.structural
             && self.ids.apply_structural_owned(structural, entry.participant.0).is_err()
         {
             self.restore_shared(&before, view.as_ref(), true);
+            self.note_own(entry.own, decoded.action, Some(NotAppliedReason::Failed));
             return Ok(Self::no_effect("The shared identities could not be updated.", entry.stamp.is_none() && stamp_was_read));
         }
         if resolved.structural.is_some() {
@@ -613,6 +703,7 @@ impl LiveEditor for GridLiveEditor {
                 }
             }
         }
+        self.note_own(entry.own, decoded.action, None);
         Ok(Outcome { effect: Effect::Applied, read_stamp })
     }
 

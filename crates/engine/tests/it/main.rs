@@ -5,6 +5,7 @@ mod cf_formula_validate;
 mod chart_area_stacked100;
 mod chart_workbook_names;
 mod coauthor_commands;
+mod coauthor_host;
 mod coauthor_live;
 mod coauthor_replay;
 mod coauthor_save_reload;

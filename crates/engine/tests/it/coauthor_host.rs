@@ -1,0 +1,412 @@
+//! The engine's host surface for a live document: routing, explicit targets, start and finish,
+//! presence and notices (plan G5, task 9).
+
+use collab_core::ids::Seq;
+use collab_live::client::{Event, LiveConfig, LocalError, Step};
+use collab_live::ids::LiveId;
+use gridcraft_core::{CellRef, RangeRef};
+use gridcraft_engine::coauthor::{
+    GRIDCRAFT_LIVE_FORMAT, GridCoauthor, GridLiveEditor, GridLiveError, LiveBase, LiveNotice, MAX_PRESENCE_BYTES, NotAppliedReason, Route,
+    ShownPresence, UNSHARED_REASON, explicit_params, is_local_command, is_shared_command, route,
+};
+use gridcraft_engine::fingerprint::{DocId, fingerprint};
+use gridcraft_engine::{Session, command_specs, io};
+use protocol::live::LiveClientMsg;
+use serde_json::{Value as Json, json};
+use std::sync::Arc;
+
+use crate::live::{ClientPlace, DeterministicServer, ProposedEntry, select, session_with_sheets};
+
+const ORIGIN_YEAR: i32 = 2026;
+
+fn live_config() -> LiveConfig {
+    LiveConfig { format: GRIDCRAFT_LIVE_FORMAT.to_string(), crashed_at: None }
+}
+
+fn coauthor(names: &[&str]) -> GridCoauthor {
+    GridCoauthor::new(live_config(), GridLiveEditor::new(session_with_sheets(names)).expect("editor builds"))
+}
+
+fn submit(client: &mut GridCoauthor, server: &DeterministicServer, place: &ClientPlace, id: &str, params: Json, now_ms: u64) -> ProposedEntry {
+    let step = client.submit(id, params, ORIGIN_YEAR, now_ms).expect("shared change is accepted locally");
+    server.one_proposal(place, &step)
+}
+
+/// Joins `client` as participant `participant` with the given right to edit, without the shared
+/// test server's always-editing join.
+fn join_with_access(client: &mut GridCoauthor, participant: u32, can_edit: bool, now_ms: u64) {
+    let join = client.tick(now_ms).into_iter().any(|frame| matches!(serde_json::from_str(&frame), Ok(LiveClientMsg::LiveJoin { .. })));
+    assert!(join, "a new co-author sends a live join");
+    client
+        .receive(
+            &json!({
+                "type":"live_joined",
+                "session":"00000000-0000-0000-0000-00000000005e",
+                "participant":participant,
+                "place":{"is":"new"},
+                "can_edit":can_edit,
+                "heartbeat_ms":60_000,
+                "people":[]
+            })
+            .to_string(),
+            now_ms.saturating_add(1),
+        )
+        .expect("join is accepted");
+    client
+        .receive(&json!({"type":"catchup","base":0,"revision":null,"from":0,"head":0}).to_string(), now_ms.saturating_add(2))
+        .expect("catch-up is accepted");
+    client.base_ready(now_ms.saturating_add(3)).expect("loaded base is accepted");
+}
+
+fn entered(client: &GridCoauthor) -> [u8; 32] {
+    fingerprint(client.editor().session(), DocId(0)).entered
+}
+
+fn active_cell(client: &GridCoauthor) -> (usize, CellRef) {
+    let document = client.editor().session().doc().expect("document exists");
+    (document.wb.active_sheet(), document.selection.active)
+}
+
+fn debuggable_session() -> Session {
+    let mut session = session_with_sheets(&["Data"]);
+    let script = json!({"name":"M","output":{"onConflict":"overwrite"},"steps":[
+        {"command":"cell.set","params":{"cell":"C1","input":"x"}}
+    ]});
+    let shared_macro = gridcraft_engine::macros::parse_macro(&script).expect("macro parses");
+    let document = session.doc_mut().expect("document exists");
+    Arc::make_mut(&mut document.wb).macros.push(shared_macro);
+    session
+}
+
+#[test]
+fn leaving_the_room_clears_coauthoring() {
+    let mut client = coauthor(&["Data"]);
+    assert!(client.editor().session().is_coauthoring(), "a live editor marks its session as shared");
+    let mut server = DeterministicServer::new();
+    server.join(&mut client, 10);
+
+    let leave = client.leave();
+    assert!(leave.is_some_and(|frame| matches!(serde_json::from_str(&frame), Ok(LiveClientMsg::Leave))), "leaving says so to the room");
+    let session = client.finish();
+
+    assert!(!session.is_coauthoring(), "the session handed back is no longer shared");
+    assert!(session.doc().is_ok(), "the workbook stays open");
+}
+
+#[test]
+fn macro_debugger_can_start_after_leaving() {
+    let mut client = GridCoauthor::new(live_config(), GridLiveEditor::new(debuggable_session()).expect("editor builds"));
+    let refused = client.editor_mut().session_mut().execute("macro.debug", json!({"name":"M"}));
+    assert!(refused.is_err(), "the debugger stays off while shared: {refused:?}");
+
+    let mut session = client.finish();
+
+    session.execute("macro.debug", json!({"name":"M"})).expect("the debugger starts once the workbook is no longer shared");
+}
+
+#[test]
+fn every_shared_command_routes_shared_and_view_commands_route_local() {
+    for id in ["cell.set", "home.bold", "home.insertRows", "home.deleteSheet", "data.filterBy", "sheet.rename"] {
+        assert_eq!(route(id), Route::Shared, "{id}");
+    }
+    for id in [
+        "selection.set",
+        "selection.move",
+        "sheet.activate",
+        "sheet.next",
+        "sheet.previous",
+        "view.zoom",
+        "view.freezePanes",
+        "view.unfreezePanes",
+        "view.gridlines",
+        "edit.copy",
+        "edit.find",
+        "cell.get",
+    ] {
+        assert_eq!(route(id), Route::Local, "{id}");
+    }
+    for id in ["edit.replace", "edit.cut", "edit.paste", "home.mergeCells", "data.sortAscending", "macro.run", "file.save"] {
+        assert_eq!(route(id), Route::Refused(UNSHARED_REASON), "{id}");
+    }
+
+    // Every registered command falls in exactly one class, and both lists name real commands.
+    let registered: Vec<&str> = command_specs().iter().map(|spec| spec.id).collect();
+    for id in &registered {
+        let shared = is_shared_command(id);
+        let local = is_local_command(id);
+        assert!(!(shared && local), "{id} is both shared and personal");
+        let expected = if shared {
+            Route::Shared
+        } else if local {
+            Route::Local
+        } else {
+            Route::Refused(UNSHARED_REASON)
+        };
+        assert_eq!(route(id), expected, "{id}");
+    }
+    for id in gridcraft_engine::coauthor::LOCAL_COMMANDS {
+        assert!(registered.contains(id), "the personal list names `{id}`, which is not a command");
+    }
+    for id in registered.iter().filter(|id| is_shared_command(id)) {
+        assert!(!is_local_command(id), "{id}");
+    }
+    assert_eq!(registered.iter().filter(|id| is_shared_command(id)).count(), 34, "every shared command is registered");
+}
+
+#[test]
+fn unshared_document_command_is_refused_with_a_reason() {
+    let mut server = DeterministicServer::new();
+    let mut client = coauthor(&["Data"]);
+    server.join(&mut client, 10);
+    let before = entered(&client);
+
+    let result = client.submit("home.mergeCells", json!({"range":"A1:B2"}), ORIGIN_YEAR, 20);
+
+    assert!(result.is_err(), "an unshared document command is not sent");
+    assert_eq!(entered(&client), before, "nothing changed");
+    assert_eq!(client.take_notices(), vec![LiveNotice::Unshared { command: "home.mergeCells".into() }]);
+    assert!(client.take_notices().is_empty(), "notices are taken once");
+}
+
+#[test]
+fn ui_defaults_become_explicit_targets() {
+    let mut session = session_with_sheets(&["Data", "View"]);
+    select(&mut session, "View", "B2");
+    session.execute("selection.set", json!({"range":"B2:C3,E5","active":"E5"})).expect("selection moves");
+
+    let bold = explicit_params(&session, "home.bold", json!({})).expect("bold targets");
+    assert_eq!(bold, json!({"sheet":1,"range":"B2:C3,E5","on":true}));
+    let named = explicit_params(&session, "home.bold", json!({"sheet":"Data","range":"A1","on":false})).expect("given targets stay");
+    assert_eq!(named, json!({"sheet":0,"range":"A1","on":false}));
+
+    let typed = explicit_params(&session, "cell.set", json!({"input":"typed"})).expect("cell targets");
+    assert_eq!(typed, json!({"sheet":1,"cell":"E5","input":"typed"}));
+    let number = explicit_params(&session, "cell.set", json!({"value":12})).expect("a number is entered as typed");
+    assert_eq!(number, json!({"sheet":1,"cell":"E5","input":"12"}));
+
+    let delete = explicit_params(&session, "home.deleteRows", json!({})).expect("rows target");
+    assert_eq!(delete, json!({"sheet":1,"rows":"2:3,5:5"}));
+    let delete_cols = explicit_params(&session, "home.deleteColumns", json!({})).expect("columns target");
+    assert_eq!(delete_cols, json!({"sheet":1,"cols":"B:C,E:E"}));
+    let insert = explicit_params(&session, "home.insertRows", json!({})).expect("insert target");
+    assert_eq!(insert, json!({"sheet":1,"rows":"5:5"}));
+
+    let sheet = explicit_params(&session, "home.insertSheet", json!({})).expect("sheet insert target");
+    assert_eq!(sheet, json!({"name":"Sheet1","before":2}));
+    let rename = explicit_params(&session, "sheet.rename", json!({"name":"Renamed"})).expect("rename target");
+    assert_eq!(rename, json!({"sheet":1,"name":"Renamed"}));
+    let size = explicit_params(&session, "home.increaseFontSize", json!({})).expect("size target");
+    assert_eq!(size, json!({"sheet":1,"range":"B2:C3,E5","size":12.0}));
+    let underline = explicit_params(&session, "home.underline", json!({})).expect("underline target");
+    assert_eq!(underline, json!({"sheet":1,"range":"B2:C3,E5","on":true,"style":"single"}));
+
+    assert!(explicit_params(&session, "home.mergeCells", json!({})).is_err(), "only shared commands are made explicit");
+
+    // An explicit command names the same targets wherever the sender's view moves next.
+    let mut client = GridCoauthor::new(live_config(), GridLiveEditor::new(session).expect("editor builds"));
+    let mut server = DeterministicServer::new();
+    let place = server.join(&mut client, 10);
+    let proposal = submit(&mut client, &server, &place, "home.bold", bold, 20);
+    let payload: Json = serde_json::from_str(&proposal.payload).expect("payload is JSON");
+    assert_eq!(payload["command"]["on"], json!(true));
+    assert_eq!(payload["command"]["sheet"], json!([0, 1]), "the View sheet's identity");
+}
+
+#[test]
+fn viewer_cannot_submit_but_can_move_its_own_view() {
+    let mut viewer = coauthor(&["Data", "View"]);
+    join_with_access(&mut viewer, 3, false, 10);
+    assert!(!viewer.can_edit());
+    let before = entered(&viewer);
+
+    let refused = viewer.submit("cell.set", json!({"sheet":0,"cell":"A1","input":"no"}), ORIGIN_YEAR, 20);
+    assert!(matches!(refused, Err(GridLiveError::Local(LocalError::ReadOnly))), "{refused:?}");
+    assert!(matches!(viewer.undo(21), Err(GridLiveError::Local(LocalError::ReadOnly))), "personal Undo is refused too");
+    assert_eq!(entered(&viewer), before, "nothing was shown");
+    assert!(viewer.tick(22).iter().all(|frame| !frame.contains("\"entry\"")), "nothing was sent");
+
+    viewer.editor_mut().session_mut().execute("sheet.activate", json!({"sheet":"View"})).expect("the viewer changes sheet");
+    viewer.editor_mut().session_mut().execute("selection.set", json!({"range":"D4"})).expect("the viewer moves");
+    assert_eq!(active_cell(&viewer), (1, CellRef::new(3, 3)));
+    assert_eq!(entered(&viewer), before, "moving the view changes no shared content");
+}
+
+#[test]
+fn starting_from_file_bytes_gives_every_client_the_same_identities() {
+    let mut source = session_with_sheets(&["Data", "Notes"]);
+    source.execute("cell.set", json!({"sheet":"Data","cell":"B2","input":"=1+2"})).expect("content enters");
+    source.execute("home.insertRows", json!({"sheet":"Data","rows":"1:1"})).expect("rows insert");
+    let bytes = io::save_bytes(&source.doc().expect("document exists").wb, "Base.xlsx").expect("workbook saves");
+
+    let first = GridCoauthor::start(Session::new(), LiveBase::File { bytes: &bytes }, live_config()).expect("first client starts");
+    let second = GridCoauthor::start(session_with_sheets(&["Other"]), LiveBase::File { bytes: &bytes }, live_config()).expect("second client starts");
+
+    assert_eq!(first.editor().ids(), second.editor().ids(), "fresh identities agree");
+    assert_eq!(first.editor().ids().session_data().expect("data"), second.editor().ids().session_data().expect("data"));
+    assert_eq!(first.editor().ids().sheet_id(1).expect("second sheet"), LiveId(0, 1), "base identities are participant 0");
+    assert_eq!(entered(&first), entered(&second), "the same entered content");
+    assert_eq!(second.editor().session().documents().len(), 1, "the base replaces what the session held");
+    assert!(first.editor().session().is_coauthoring());
+
+    let garbage = GridCoauthor::start(Session::new(), LiveBase::File { bytes: b"not a workbook" }, live_config());
+    assert!(garbage.is_err(), "unreadable bytes are an error, not a crash");
+}
+
+#[test]
+fn starting_from_a_checkpoint_keeps_its_identities() {
+    let mut server = DeterministicServer::new();
+    let mut alice = coauthor(&["Data"]);
+    let place = server.join(&mut alice, 10);
+    let insert = submit(&mut alice, &server, &place, "home.insertRows", json!({"sheet":0,"rows":"2:2"}), 20);
+    let ordered = server.order(&insert, 1_795_219_200_000, 7);
+    server.deliver(&mut alice, &ordered, 30);
+    let checkpoint = alice.checkpoint(server.head()).expect("checkpoint writes");
+
+    let stamp = collab_live::client::Stamp { at_ms: 1_795_219_200_000, seed: 7 };
+    let joined = GridCoauthor::start(
+        Session::new(),
+        LiveBase::Checkpoint { bytes: &checkpoint.bytes, session_data: &checkpoint.session_data, stamp },
+        live_config(),
+    )
+    .expect("a checkpoint base starts");
+
+    assert_eq!(joined.editor().ids(), alice.editor().ids(), "the checkpoint's identities are kept");
+    assert_eq!(entered(&joined), checkpoint.entered);
+}
+
+#[test]
+fn presence_round_trips_by_identity() {
+    let mut alice = coauthor(&["Data", "View"]);
+    let bob = coauthor(&["Data", "View"]);
+    select(alice.editor_mut().session_mut(), "View", "C3");
+    alice.editor_mut().session_mut().execute("selection.set", json!({"range":"C3:D4","active":"C3"})).expect("range selects");
+    alice.set_editing(true);
+
+    let note = alice.presence(0).expect("a first note is sent");
+    assert!(note.len() <= MAX_PRESENCE_BYTES);
+    assert_eq!(
+        bob.shown_presence(&note),
+        Some(ShownPresence { sheet: 1, active: (2, 2), range: Some(RangeRef::parse("C3:D4").expect("range")), editing: true })
+    );
+    assert_eq!(alice.presence(1_000), None, "an unchanged view sends nothing");
+
+    alice.editor_mut().session_mut().execute("selection.set", json!({"range":"E5"})).expect("moves");
+    alice.set_editing(false);
+    let moved = alice.presence(1_010).expect("a change is sent");
+    assert_eq!(bob.shown_presence(&moved), Some(ShownPresence { sheet: 1, active: (4, 4), range: None, editing: false }));
+
+    alice.editor_mut().session_mut().execute("selection.set", json!({"range":"F6"})).expect("moves again");
+    assert_eq!(alice.presence(1_050), None, "at most ten notes a second");
+    let later = alice.presence(1_110).expect("the held change goes once the interval passes");
+    assert_eq!(bob.shown_presence(&later).map(|shown| shown.active), Some((5, 5)));
+    assert_eq!(fingerprint(alice.editor().session(), DocId(0)).entered, entered(&bob), "presence never changes the workbook");
+}
+
+#[test]
+fn presence_follows_a_remote_row_insert() {
+    let mut server = DeterministicServer::new();
+    let mut alice = coauthor(&["Data"]);
+    let mut bob = coauthor(&["Data"]);
+    let _alice_place = server.join(&mut alice, 10);
+    let bob_place = server.join(&mut bob, 20);
+    select(alice.editor_mut().session_mut(), "Data", "B5");
+    let note = alice.presence(30).expect("note");
+
+    let insert = submit(&mut bob, &server, &bob_place, "home.insertRows", json!({"sheet":0,"rows":"2:3"}), 40);
+    let ordered = server.order(&insert, 1_795_219_200_000, 3);
+    server.deliver_both(&mut alice, &mut bob, &ordered, 50);
+
+    assert_eq!(bob.shown_presence(&note).map(|shown| shown.active), Some((6, 1)), "the note names a row, not a position");
+}
+
+#[test]
+fn presence_on_a_deleted_row_is_dropped() {
+    let mut server = DeterministicServer::new();
+    let mut alice = coauthor(&["Data"]);
+    let mut bob = coauthor(&["Data"]);
+    let _alice_place = server.join(&mut alice, 10);
+    let bob_place = server.join(&mut bob, 20);
+    select(alice.editor_mut().session_mut(), "Data", "B5");
+    let note = alice.presence(30).expect("note");
+    alice.editor_mut().session_mut().execute("selection.set", json!({"range":"A1:C2"})).expect("range");
+    let range_note = alice.presence(200).expect("range note");
+
+    let delete = submit(&mut bob, &server, &bob_place, "home.deleteRows", json!({"sheet":0,"rows":"5:5"}), 40);
+    let ordered = server.order(&delete, 1_795_219_200_000, 3);
+    server.deliver_both(&mut alice, &mut bob, &ordered, 50);
+
+    assert_eq!(bob.shown_presence(&note), None, "a note on a deleted row is not drawn");
+    assert!(bob.shown_presence(&range_note).is_some(), "a note on surviving rows still is");
+}
+
+#[test]
+fn malformed_presence_is_ignored() {
+    let alice = coauthor(&["Data"]);
+    let good = {
+        let mut sender = coauthor(&["Data"]);
+        sender.presence(0).expect("note")
+    };
+    assert!(alice.shown_presence(&good).is_some());
+
+    let mut value: Json = serde_json::from_str(&good).expect("note is JSON");
+    value["future"] = json!(true);
+    let unknown_field = value.to_string();
+    let mut other_sheet: Json = serde_json::from_str(&good).expect("note is JSON");
+    other_sheet["active"]["sheet"] = json!([9, 9]);
+    let oversized = format!("{}{}", good, " ".repeat(MAX_PRESENCE_BYTES));
+
+    for bad in ["", "null", "{}", "[1,2]", "{\"sheet\":", unknown_field.as_str(), other_sheet.to_string().as_str(), oversized.as_str()] {
+        assert_eq!(alice.shown_presence(bad), None, "{bad:.80}");
+    }
+}
+
+#[test]
+fn no_effect_notice_keeps_the_typed_text() {
+    let mut server = DeterministicServer::new();
+    let mut alice = coauthor(&["Data"]);
+    let mut bob = coauthor(&["Data"]);
+    let alice_place = server.join(&mut alice, 10);
+    let bob_place = server.join(&mut bob, 20);
+
+    let typed = submit(&mut alice, &server, &alice_place, "cell.set", json!({"sheet":0,"cell":"B5","input":"my careful words"}), 30);
+    let delete = submit(&mut bob, &server, &bob_place, "home.deleteRows", json!({"sheet":0,"rows":"5:5"}), 31);
+    let deleted = server.order(&delete, 1_795_219_200_000, 1);
+    let late = server.order(&typed, 1_795_219_201_000, 2);
+    let steps: Vec<Step> = [&deleted, &late].into_iter().map(|entry| server.deliver(&mut alice, entry, 40)).collect();
+    server.deliver(&mut bob, &deleted, 41);
+    server.deliver(&mut bob, &late, 42);
+
+    assert!(steps.iter().flat_map(|step| &step.events).any(|event| matches!(event, Event::Applied { own: true, .. })), "Alice's change was ordered");
+    let notices = alice.take_notices();
+    assert_eq!(
+        notices,
+        vec![LiveNotice::NotApplied { seq: late.seq, kept_text: Some("my careful words".into()), reason: NotAppliedReason::RowDeleted }]
+    );
+    assert!(bob.take_notices().is_empty(), "the other person is not told about Alice's change");
+    assert_eq!(entered(&alice), entered(&bob), "both agree");
+}
+
+#[test]
+fn notice_debug_hides_the_kept_text() {
+    let notice = LiveNotice::NotApplied { seq: Seq(4), kept_text: Some("salary 120000".into()), reason: NotAppliedReason::RowDeleted };
+
+    let debug = format!("{notice:?}");
+    assert!(!debug.contains("salary") && !debug.contains("120000"), "{debug}");
+    assert!(debug.contains("13"), "Debug shows the length: {debug}");
+
+    let json = serde_json::to_value(&notice).expect("notice serializes for the page");
+    assert_eq!(json["kind"], json!("not_applied"));
+    assert_eq!(json["kept_text"], json!("salary 120000"), "the page still gets the text to show its owner");
+    assert_eq!(json["reason"], json!("row_deleted"));
+}
+
+#[test]
+fn room_events_become_notices() {
+    let mut client = coauthor(&["Data"]);
+    join_with_access(&mut client, 2, true, 10);
+    let _ = client.take_notices();
+
+    client.receive(&json!({"type":"access","can_edit":false}).to_string(), 20).expect("access change is accepted");
+    assert_eq!(client.take_notices(), vec![LiveNotice::ReadOnly(true)]);
+    assert!(!client.can_edit());
+}

@@ -362,6 +362,11 @@ fn font_size(s: &mut Session, p: &Json) -> Result<Json> {
 
 const SIZES: [f32; 16] = [8.0, 9.0, 10.0, 11.0, 12.0, 14.0, 16.0, 18.0, 20.0, 24.0, 28.0, 36.0, 48.0, 72.0, 96.0, 409.0];
 
+/// The next listed font size above (`up`) or below `cur`, as Increase and Decrease Font Size step.
+pub(crate) fn stepped_font_size(cur: f32, up: bool) -> f32 {
+    if up { SIZES.iter().copied().find(|x| *x > cur).unwrap_or(409.0) } else { SIZES.iter().rev().copied().find(|x| *x < cur).unwrap_or(1.0) }
+}
+
 fn step_font(s: &mut Session, p: &Json, up: bool) -> Result<Json> {
     let next = if let Some(size) = f64_param(p, "size") {
         if !(1.0..=409.0).contains(&size) {
@@ -369,8 +374,7 @@ fn step_font(s: &mut Session, p: &Json, up: bool) -> Result<Json> {
         }
         ((size * 2.0).round() / 2.0) as f32
     } else {
-        let cur = active_style(s)?.font.size;
-        if up { SIZES.iter().copied().find(|x| *x > cur).unwrap_or(409.0) } else { SIZES.iter().rev().copied().find(|x| *x < cur).unwrap_or(1.0) }
+        stepped_font_size(active_style(s)?.font.size, up)
     };
     apply_style(s, p, |st| st.font.size = next)?;
     Ok(json!({"size": next}))
