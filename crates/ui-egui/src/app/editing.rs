@@ -18,6 +18,11 @@ impl SheetApp {
             self.message = Some(("Text Box".into(), clean_error(&e)));
             return;
         }
+        // A person who may only view a live workbook gets no draft at all.
+        if !self.live_may_edit() {
+            self.toast = Some((crate::live::READ_ONLY_REASON.into(), now_ms()));
+            return;
+        }
         let Some(d) = self.session.active() else { return };
         let Some(sh) = d.wb.active() else { return };
         let at = sh.merge_at(d.selection.active).map(|m| m.start).unwrap_or(d.selection.active);
@@ -71,6 +76,7 @@ impl SheetApp {
         }
         self.editor = Some(ed);
         self.session.mode = if replace { gridcraft_engine::Mode::Enter } else { gridcraft_engine::Mode::Edit };
+        self.live_editing(true);
     }
 
     /// Commits the edit; `then` moves the selection (dr, dc) afterwards.
@@ -129,6 +135,7 @@ impl SheetApp {
         }
         let Some(mut ed) = self.editor.take() else { return true };
         self.session.mode = gridcraft_engine::Mode::Ready;
+        self.live_editing(false);
         if !self.follow_draft_sheet(&mut ed) {
             return true;
         }
@@ -194,9 +201,9 @@ impl SheetApp {
         let r = if unchanged {
             Ok(json!({}))
         } else if fill_selection {
-            self.session.run("range.fill", json!({"input": text}))
+            self.run_engine("range.fill", json!({"input": text}))
         } else {
-            self.session.run("cell.set", json!({"cell": ed.cell.a1(), "input": text, "array": array}))
+            self.run_engine("cell.set", json!({"cell": ed.cell.a1(), "input": text, "array": array}))
         };
         match r {
             Ok(_) => {
@@ -281,6 +288,7 @@ impl SheetApp {
     pub fn cancel_edit(&mut self) {
         self.editor = None;
         self.session.mode = gridcraft_engine::Mode::Ready;
+        self.live_editing(false);
     }
 
     /// Starts editing the active cell in Python mode, in the formula bar: its code, or no code

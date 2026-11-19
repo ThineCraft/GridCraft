@@ -936,7 +936,12 @@ fn select_to_pointer(app: &mut SheetApp, geo: &Geo, sh: &Sheet, wb: &Workbook, p
     }
 }
 
-fn coalesce_last_undo(app: &mut SheetApp) {
+pub(crate) fn coalesce_last_undo(app: &mut SheetApp) {
+    // Editing together, the undo list is not the screen's to trim (personal history is the
+    // coauthor's).
+    if app.is_live() {
+        return;
+    }
     // Merge consecutive drag steps into one undo entry.
     if let Some(d) = app.session.active_mut()
         && d.undo.len() >= 2

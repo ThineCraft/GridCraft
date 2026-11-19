@@ -34,15 +34,17 @@
 //! Nothing here logs a name, a frame, a payload or typed text: log lines name kinds and positions.
 
 use std::cell::{Cell, RefCell};
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 use std::fmt;
 use std::rc::Rc;
 use std::sync::Arc;
 
+use gridcraft_engine::Session;
 use gridcraft_engine::coauthor::{
     ClientError, Event, GRIDCRAFT_LIVE_FORMAT, GridCoauthor, GridLiveEditor, GridLiveError, LiveBase, LiveConfig, LocalError, MAX_SESSION_DATA_BYTES,
     Phase, Seq, Stamp, Step, TicketAnswer,
 };
+use gridcraft_ui_egui::live::OtherPlace;
 use serde_json::{Value as Json, json};
 
 /// The largest server frame taken from the page.
@@ -361,12 +363,30 @@ pub struct LiveSeat {
     people: Vec<PagePerson>,
     crashed_at: Option<u64>,
     last_state: Option<LiveEditorMsg>,
+    /// The session a stopped session handed back, unshared, for the screen to show.
+    finished: Option<Session>,
+    /// Who may edit, by participant, from the room's people list.
+    room_can_edit: BTreeMap<u32, bool>,
+    /// Other people's latest presence notes, by participant. STAND-IN: stays empty until the
+    /// live wire carries presence (ShareCraft G5 task 1, `LiveServerMsg::Presence`).
+    presence: BTreeMap<u32, String>,
 }
 
 impl LiveSeat {
     pub fn new(notes: Arc<dyn CrashNotes>) -> Self {
         let idle = LiveEditorMsg::State { phase: "idle", waiting: 0, can_edit: false };
-        Self { notes, coauthor: None, page_may_edit: false, expected_base: None, people: Vec::new(), crashed_at: None, last_state: Some(idle) }
+        Self {
+            notes,
+            coauthor: None,
+            page_may_edit: false,
+            expected_base: None,
+            people: Vec::new(),
+            crashed_at: None,
+            last_state: Some(idle),
+            finished: None,
+            room_can_edit: BTreeMap::new(),
+            presence: BTreeMap::new(),
+        }
     }
 
     /// Whether a live session runs.
@@ -374,31 +394,23 @@ impl LiveSeat {
         self.coauthor.is_some()
     }
 
-    #[allow(dead_code, reason = "the screen reads and drives the seat (G5 task 11)")]
+    #[cfg(test)]
     pub fn coauthor(&self) -> Option<&GridCoauthor> {
         self.coauthor.as_ref()
     }
 
-    #[allow(dead_code, reason = "the screen reads and drives the seat (G5 task 11)")]
     pub fn coauthor_mut(&mut self) -> Option<&mut GridCoauthor> {
         self.coauthor.as_mut()
     }
 
+    #[cfg(test)]
     /// The position the editor stopped in before this load, from the crash note.
-    #[allow(dead_code, reason = "the screen reads and drives the seat (G5 task 11)")]
     pub fn crashed_at(&self) -> Option<u64> {
         self.crashed_at
     }
 
-    /// The room's people as the page named them.
-    #[allow(dead_code, reason = "the screen reads and drives the seat (G5 task 11)")]
-    pub fn people(&self) -> &[PagePerson] {
-        &self.people
-    }
-
     /// Sends one shared change made on the screen. Refused, with nothing shown, when the page
     /// said this tab may only view, as well as when the room does.
-    #[allow(dead_code, reason = "the screen drives the seat (G5 task 11)")]
     pub fn submit(&mut self, id: &str, params: Json, origin_year: i32, now_ms: u64) -> Result<Vec<LiveEditorMsg>, GridLiveError> {
         let coauthor = self.editable()?;
         let result = coauthor.submit(id, params, origin_year, now_ms);
@@ -406,26 +418,23 @@ impl LiveSeat {
     }
 
     /// The person's own Undo while editing together.
-    #[allow(dead_code, reason = "the screen drives the seat (G5 task 11)")]
     pub fn undo(&mut self, now_ms: u64) -> Result<Vec<LiveEditorMsg>, GridLiveError> {
         let result = self.editable()?.undo(now_ms);
         self.finish_local(result, now_ms)
     }
 
     /// The person's own Redo while editing together.
-    #[allow(dead_code, reason = "the screen drives the seat (G5 task 11)")]
     pub fn redo(&mut self, now_ms: u64) -> Result<Vec<LiveEditorMsg>, GridLiveError> {
         let result = self.editable()?.redo(now_ms);
         self.finish_local(result, now_ms)
     }
 
+    #[cfg(test)]
     /// Whether the page lets this tab edit.
-    #[allow(dead_code, reason = "the screen drives the seat (G5 task 11)")]
     pub fn page_may_edit(&self) -> bool {
         self.page_may_edit
     }
 
-    #[allow(dead_code, reason = "the screen drives the seat (G5 task 11)")]
     fn editable(&mut self) -> Result<&mut GridCoauthor, GridLiveError> {
         let may_edit = self.page_may_edit;
         let coauthor = self.coauthor.as_mut().ok_or(GridLiveError::Local(LocalError::NotLive))?;
@@ -436,7 +445,6 @@ impl LiveSeat {
     }
 
     /// What a local change produced, plus the notices it raised (a refusal included).
-    #[allow(dead_code, reason = "the screen drives the seat (G5 task 11)")]
     fn finish_local(&mut self, result: Result<Step, GridLiveError>, now_ms: u64) -> Result<Vec<LiveEditorMsg>, GridLiveError> {
         let mut out = Vec::new();
         let outcome = match result {
@@ -531,10 +539,68 @@ impl LiveSeat {
             if let Some(frame) = coauthor.leave() {
                 out.push(LiveEditorMsg::Send(frame));
             }
-            // The session comes back unshared; the screen takes it over (task 11).
-            drop(coauthor.finish());
+            // The session comes back unshared; the screen shows it from its next frame.
+            self.finished = Some(coauthor.finish());
         }
         self.expected_base = None;
+        self.presence.clear();
+        self.room_can_edit.clear();
+    }
+
+    /// The unshared session a stop handed back, once.
+    pub fn take_finished(&mut self) -> Option<Session> {
+        self.finished.take()
+    }
+
+    /// Runs `f` with `session` (the shown session, lent to the screen) moved into the coauthor and
+    /// back: a move of the struct, never a copy.
+    pub fn with_session<T>(&mut self, session: &mut Session, f: impl FnOnce(&mut Self) -> T) -> T {
+        if let Some(coauthor) = self.coauthor.as_mut() {
+            std::mem::swap(session, coauthor.editor_mut().session_mut());
+        }
+        let result = f(self);
+        if let Some(coauthor) = self.coauthor.as_mut() {
+            std::mem::swap(session, coauthor.editor_mut().session_mut());
+        }
+        result
+    }
+
+    /// Whether the person may make shared changes: the page and the room both allow it.
+    pub fn may_edit(&self) -> bool {
+        self.page_may_edit && self.coauthor.as_ref().is_some_and(GridCoauthor::can_edit)
+    }
+
+    /// Whether the person is typing in a cell, for presence.
+    pub fn set_editing(&mut self, editing: bool) {
+        if let Some(coauthor) = self.coauthor.as_mut() {
+            coauthor.set_editing(editing);
+        }
+    }
+
+    /// Other people's places for the screen: the page's names and colours, the room's rights,
+    /// and each presence note resolved against this editor's identities. A note that no longer
+    /// resolves, or a person without a note, is left out.
+    pub fn others(&self) -> Vec<OtherPlace> {
+        let Some(coauthor) = self.coauthor.as_ref() else { return Vec::new() };
+        self.people
+            .iter()
+            .filter_map(|person| {
+                let note = self.presence.get(&person.participant)?;
+                let shown = coauthor.shown_presence(note)?;
+                Some(OtherPlace {
+                    participant: person.participant,
+                    name: person.name.clone(),
+                    initials: person.initials.clone(),
+                    colour: colour(&person.colour),
+                    connected: person.connected,
+                    can_edit: self.room_can_edit.get(&person.participant).copied().unwrap_or(true),
+                    sheet: shown.sheet,
+                    active: shown.active,
+                    range: shown.range,
+                    editing: shown.editing,
+                })
+            })
+            .collect()
     }
 
     fn load_base(&mut self, base: PageBase, now_ms: u64, out: &mut Vec<LiveEditorMsg>) {
@@ -592,6 +658,12 @@ impl LiveSeat {
                     }
                 }
                 Event::Expired => out.push(LiveEditorMsg::Reset { kind: "expired" }),
+                Event::People(people) => {
+                    self.room_can_edit = people.iter().map(|person| (person.participant.0, person.can_edit)).collect();
+                    // A person whose connection dropped is shown nowhere at once.
+                    let connected: Vec<u32> = people.iter().filter(|person| person.connected).map(|person| person.participant.0).collect();
+                    self.presence.retain(|participant, _| connected.contains(participant));
+                }
                 _ => {}
             }
         }
@@ -621,6 +693,16 @@ impl LiveSeat {
                 can_edit: self.page_may_edit && coauthor.can_edit(),
             },
         }
+    }
+}
+
+/// A page colour (`#rrggbb`) as an egui colour; grey for anything else.
+fn colour(text: &str) -> egui::Color32 {
+    let hex = text.strip_prefix('#').filter(|hex| hex.len() == 6 && hex.is_ascii());
+    let channel = |at: usize| hex.and_then(|hex| hex.get(at..at + 2)).and_then(|pair| u8::from_str_radix(pair, 16).ok());
+    match (channel(0), channel(2), channel(4)) {
+        (Some(r), Some(g), Some(b)) => egui::Color32::from_rgb(r, g, b),
+        _ => egui::Color32::GRAY,
     }
 }
 
@@ -695,6 +777,8 @@ pub struct LiveCore {
     seat: RefCell<LiveSeat>,
     queue: RefCell<PageQueue>,
     active: Rc<Cell<bool>>,
+    /// The shared session is lent to the screen for the current frame: messages wait.
+    lent: Cell<bool>,
 }
 
 impl LiveCore {
@@ -705,15 +789,14 @@ impl LiveCore {
 
     /// With the live flag the host bridge reads at Save.
     pub fn with_flag(notes: Arc<dyn CrashNotes>, active: Rc<Cell<bool>>) -> Self {
-        Self { seat: RefCell::new(LiveSeat::new(notes)), queue: RefCell::default(), active }
+        Self { seat: RefCell::new(LiveSeat::new(notes)), queue: RefCell::default(), active, lent: Cell::new(false) }
     }
 
-    #[allow(dead_code, reason = "the screen drives the seat (G5 task 11)")]
     pub fn seat(&self) -> &RefCell<LiveSeat> {
         &self.seat
     }
 
-    #[allow(dead_code, reason = "the screen drives the seat (G5 task 11)")]
+    #[cfg(test)]
     pub fn active(&self) -> Rc<Cell<bool>> {
         Rc::clone(&self.active)
     }
@@ -731,6 +814,9 @@ impl LiveCore {
 
     /// Handles the waiting messages in order, unless the app holds the seat.
     pub fn drain(&self, now_ms: u64) -> Vec<LiveEditorMsg> {
+        if self.lent.get() {
+            return Vec::new();
+        }
         let Ok(mut seat) = self.seat.try_borrow_mut() else { return Vec::new() };
         let mut out = Vec::new();
         loop {
@@ -740,6 +826,42 @@ impl LiveCore {
             self.active.set(seat.is_active());
         }
         out
+    }
+}
+
+impl LiveCore {
+    /// Lends the shared session to the screen for one frame: `session` (the app's) and the
+    /// coauthor's change places. A stopped session's unshared session replaces the app's first.
+    /// Until [`Self::give_back`], page messages wait.
+    pub fn lend(&self, session: &mut Session) {
+        if self.lent.get() {
+            return;
+        }
+        let Ok(mut seat) = self.seat.try_borrow_mut() else { return };
+        if let Some(finished) = seat.take_finished() {
+            *session = finished;
+        }
+        if let Some(coauthor) = seat.coauthor_mut() {
+            std::mem::swap(session, coauthor.editor_mut().session_mut());
+            self.lent.set(true);
+        }
+    }
+
+    /// Takes the shared session back at the end of the frame.
+    pub fn give_back(&self, session: &mut Session) {
+        if !self.lent.get() {
+            return;
+        }
+        let Ok(mut seat) = self.seat.try_borrow_mut() else { return };
+        if let Some(coauthor) = seat.coauthor_mut() {
+            std::mem::swap(session, coauthor.editor_mut().session_mut());
+        }
+        self.lent.set(false);
+    }
+
+    /// Whether the shared session is lent to the screen now.
+    pub fn is_lent(&self) -> bool {
+        self.lent.get()
     }
 }
 
@@ -827,6 +949,8 @@ pub mod web {
     use std::rc::Rc;
     use std::sync::Arc;
 
+    use gridcraft_engine::Session;
+    use gridcraft_ui_egui::live::{LiveLink, OtherPlace};
     use serde_json::{Map, Value as Json};
     use wasm_bindgen::closure::Closure;
     use wasm_bindgen::{JsCast as _, JsValue};
@@ -911,16 +1035,22 @@ pub mod web {
             Some(host)
         }
 
-        /// Whether a live session runs.
-        #[allow(dead_code, reason = "the screen drives the seat (G5 task 11)")]
-        pub fn is_active(&self) -> bool {
-            self.shared.core.active().get()
-        }
-
         /// The seat, for the screen. Borrow it only within a frame.
-        #[allow(dead_code, reason = "the screen drives the seat (G5 task 11)")]
         pub fn seat(&self) -> &RefCell<LiveSeat> {
             self.shared.core.seat()
+        }
+
+        /// Lends the shared session to the screen for this frame (see [`LiveCore::lend`]) and
+        /// gives the app its live link while a session runs.
+        pub fn lend(&self, session: &mut Session) -> Option<Box<dyn LiveLink>> {
+            self.shared.core.lend(session);
+            self.shared.core.is_lent().then(|| Box::new(WebLink(self.clone())) as Box<dyn LiveLink>)
+        }
+
+        /// Takes the shared session back at the end of the frame and handles what waited.
+        pub fn give_back(&self, session: &mut Session) {
+            self.shared.core.give_back(session);
+            self.drain();
         }
 
         /// Handles messages queued while the app held the seat; called at the start of a frame.
@@ -931,7 +1061,6 @@ pub mod web {
         }
 
         /// Posts what the screen's own change produced.
-        #[allow(dead_code, reason = "the screen drives the seat (G5 task 11)")]
         pub fn post_all(&self, out: &[LiveEditorMsg]) {
             for message in out {
                 self.post(message);
@@ -957,6 +1086,53 @@ pub mod web {
             if let Err(error) = post_to(&self.shared.parent, &self.shared.origin, message) {
                 log::warn!("live: {} could not be posted ({error})", message.kind());
             }
+        }
+    }
+
+    /// The screen's link to the seat. Each call moves the shown session into the coauthor and
+    /// back, and posts what it produced.
+    struct WebLink(LiveHost);
+
+    impl WebLink {
+        fn local(
+            &self,
+            session: &mut Session,
+            call: impl FnOnce(&mut LiveSeat, u64) -> Result<Vec<LiveEditorMsg>, super::GridLiveError>,
+        ) -> Result<(), String> {
+            let out = {
+                let mut seat = self.0.seat().try_borrow_mut().map_err(|_| "the live session is busy".to_string())?;
+                seat.with_session(session, |seat| call(seat, now_ms())).map_err(|error| error.to_string())?
+            };
+            self.0.post_all(&out);
+            Ok(())
+        }
+    }
+
+    impl LiveLink for WebLink {
+        fn may_edit(&self) -> bool {
+            self.0.seat().try_borrow().is_ok_and(|seat| seat.may_edit())
+        }
+
+        fn submit(&self, session: &mut Session, id: &str, params: Json, origin_year: i32) -> Result<(), String> {
+            self.local(session, |seat, now| seat.submit(id, params, origin_year, now))
+        }
+
+        fn undo(&self, session: &mut Session) -> Result<(), String> {
+            self.local(session, LiveSeat::undo)
+        }
+
+        fn redo(&self, session: &mut Session) -> Result<(), String> {
+            self.local(session, LiveSeat::redo)
+        }
+
+        fn set_editing(&self, editing: bool) {
+            if let Ok(mut seat) = self.0.seat().try_borrow_mut() {
+                seat.set_editing(editing);
+            }
+        }
+
+        fn others(&self) -> Vec<OtherPlace> {
+            self.0.seat().try_borrow().map(|seat| seat.others()).unwrap_or_default()
         }
     }
 
@@ -1069,6 +1245,7 @@ mod tests {
     use std::collections::BTreeMap;
     use std::sync::{Arc, Mutex};
 
+    use gridcraft_engine::Session;
     use gridcraft_engine::coauthor::{GRIDCRAFT_LIVE_FORMAT, Seq};
     use gridcraft_engine::core::CellRef;
     use gridcraft_engine::core::Value;
@@ -1530,5 +1707,68 @@ mod tests {
         assert!(!accepts_message("https://other.example", "https://share.example", true), "another origin");
         assert!(!accepts_message("https://share.example", "https://share.example", false), "another window on this origin");
         assert!(!accepts_message("null", "https://share.example", true));
+    }
+
+    #[test]
+    fn the_shared_session_is_lent_for_each_frame() {
+        let core = LiveCore::new(Arc::new(MemoryNotes::default()));
+        core.hear(start_msg(true), 10);
+        core.hear(LivePageMsg::Open, 11);
+        {
+            let mut seat = core.seat().borrow_mut();
+            join_live(&mut seat, 3, 12);
+        }
+        let mut shown = Session::new();
+        core.lend(&mut shown);
+        assert!(core.is_lent());
+        assert!(shown.is_coauthoring() && shown.doc().is_ok(), "the app shows the shared session");
+        assert!(core.hear(LivePageMsg::Tick, 20).is_empty(), "while it is lent, page messages wait");
+        assert!(core.seat().borrow().may_edit());
+        core.give_back(&mut shown);
+        assert!(!shown.is_coauthoring(), "between frames the seat holds it again");
+        assert!(core.drain(21).iter().any(|message| matches!(message, LiveEditorMsg::State { .. })), "the waiting tick is answered");
+
+        // The screen's own change moves the shown session into the coauthor and back.
+        core.lend(&mut shown);
+        let out = core
+            .seat()
+            .borrow_mut()
+            .with_session(&mut shown, |seat| seat.submit("cell.set", json!({"sheet":0,"cell":"A1","input":"7"}), 2026, 30))
+            .unwrap();
+        assert!(sends(&out).iter().any(|frame| frame["type"] == "entry"));
+        assert_eq!(shown.doc().unwrap().wb.sheet(0).unwrap().value(CellRef::parse("A1").unwrap()), Value::Number(7.0), "shown at once");
+        core.seat().borrow_mut().set_editing(true);
+        core.give_back(&mut shown);
+
+        core.hear(LivePageMsg::Stop, 40);
+        let mut after = Session::new();
+        core.lend(&mut after);
+        assert!(!core.is_lent(), "nothing is shared any more");
+        assert!(!after.is_coauthoring() && after.doc().is_ok(), "the app shows the document, unshared");
+    }
+
+    #[test]
+    fn others_come_from_the_page_names_and_presence_notes() {
+        let (mut alice, _) = opened(Arc::default(), 10);
+        join_live(&mut alice, 2, 10);
+        let coauthor = alice.coauthor_mut().unwrap();
+        coauthor.editor_mut().session_mut().execute("selection.set", json!({"range":"B3"})).unwrap();
+        let note = coauthor.presence(5_000).unwrap();
+        let (mut bob, _) = opened(Arc::default(), 10);
+        join_live(&mut bob, 3, 10);
+        let people = vec![PagePerson { participant: 2, name: "Ann".into(), initials: "A".into(), colour: "#336699".into(), connected: true }];
+        bob.handle(LivePageMsg::People(people), 60);
+        assert!(bob.others().is_empty(), "no place without a presence note (presence is still a stand-in on the wire)");
+        bob.presence.insert(2, note);
+        let others = bob.others();
+        assert_eq!(others.len(), 1);
+        assert_eq!(others[0].colour, egui::Color32::from_rgb(0x33, 0x66, 0x99));
+        assert_eq!((others[0].sheet, others[0].active), (0, (2, 1)));
+        assert!(others[0].can_edit, "an editor unless the room says otherwise");
+        let room = json!({"type":"people","people":[{"participant":2,"client":"00000000-0000-0000-0000-000000000002","user":"00000000-0000-0000-0000-000000000009","name":"Ann","can_edit":false,"connected":false}]});
+        bob.handle(LivePageMsg::Frame(room.to_string()), 70);
+        assert!(bob.others().is_empty(), "a dropped connection takes the place away at once");
+        assert_eq!(colour("blue"), egui::Color32::GRAY);
+        assert!(bob.take_finished().is_none());
     }
 }

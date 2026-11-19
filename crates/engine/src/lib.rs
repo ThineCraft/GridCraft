@@ -1122,6 +1122,12 @@ impl Session {
     }
 
     pub fn run(&mut self, id: &str, params: Json) -> std::result::Result<Json, String> {
+        // A shared session (edited together) changes only through the live client: the UI's
+        // entry point runs personal commands on it and refuses the rest, so no screen path can
+        // write the shared workbook behind the log.
+        if self.coauthoring && !coauthor::is_local_command(id) {
+            return Err(coauthor::UNSHARED_REASON.to_string());
+        }
         self.execute(id, params).map_err(|e| e.to_string())
     }
 

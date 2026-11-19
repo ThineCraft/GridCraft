@@ -92,6 +92,15 @@ pub(crate) struct SelectionPaintInput<'a> {
 
 pub(crate) fn paint_selection(input: SelectionPaintInput<'_>) {
     let SelectionPaintInput { painter: p, geo, sheet: sh, selection: sel, outline, tokens: t, app, rows, cols } = input;
+    // Other people's places, under the person's own selection.
+    if let Some(link) = &app.live
+        && let Some(d) = app.session.active()
+    {
+        let places = link.others();
+        crate::live::paint_places(p, &places, d.wb.active_sheet(), &|r| {
+            if range_in_pane(r, rows, cols) { geo.range_rect(sh, r) } else { Rect::NOTHING }
+        });
+    }
     // Fill all areas except the active cell.
     for rect in selection_fill_where(geo, sh, sel, outline, |r| range_in_pane(*r, rows, cols)) {
         p.rect_filled(rect, 0.0, t.sel_fill);

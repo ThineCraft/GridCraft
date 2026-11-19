@@ -16,19 +16,7 @@ pub(super) fn filter_menu(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_
     if sh.autofilter.is_none()
         && let Some(r) = table_range
     {
-        let _ = app.session.run("data.filter", json!({"range": r.a1()}));
-        let _ = app.session.run("data.filter", json!({"range": r.a1()}));
-        if let Some(sh2) = app.session.active().and_then(|d| d.wb.active()).map(|s| s.autofilter.is_some())
-            && !sh2
-        {
-            let d = app.session.active_mut();
-            if let Some(d) = d {
-                let wbm = Arc::make_mut(&mut d.wb);
-                if let Some(s) = wbm.sheet_mut(si) {
-                    s.autofilter = Some(gridcraft_engine::model::AutoFilter { range: r, criteria: vec![] });
-                }
-            }
-        }
+        install_table_filter(app, r, si);
     }
     let wb = app.session.active().map(|d| d.wb.clone()).unwrap_or(wb);
     let values = gridcraft_engine::cmd::data::filter_values(&wb, si, col);
@@ -575,4 +563,25 @@ fn insert_copied_item(app: &SheetApp) -> Option<(&'static str, &'static str)> {
 pub(super) fn is_checkbox(sh: &Sheet, app: &SheetApp) -> bool {
     let Some(d) = app.session.active() else { return false };
     d.wb.styles.get(sh.style_id(d.selection.active)).num_fmt.as_str() == "checkbox"
+}
+
+/// Gives a table the AutoFilter its header menu needs. A direct write, so not made while the
+/// workbook is edited together (the table's own filter, when it has one, still works).
+pub(crate) fn install_table_filter(app: &mut SheetApp, r: RangeRef, si: usize) {
+    if app.is_live() {
+        return;
+    }
+    let _ = app.session.run("data.filter", json!({"range": r.a1()}));
+    let _ = app.session.run("data.filter", json!({"range": r.a1()}));
+    if let Some(sh2) = app.session.active().and_then(|d| d.wb.active()).map(|s| s.autofilter.is_some())
+        && !sh2
+    {
+        let d = app.session.active_mut();
+        if let Some(d) = d {
+            let wbm = Arc::make_mut(&mut d.wb);
+            if let Some(s) = wbm.sheet_mut(si) {
+                s.autofilter = Some(gridcraft_engine::model::AutoFilter { range: r, criteria: vec![] });
+            }
+        }
+    }
 }

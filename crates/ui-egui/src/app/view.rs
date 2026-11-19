@@ -38,6 +38,11 @@ impl SheetApp {
     /// cell to the engine so a save writes them (`sheetView topLeftCell`). Normal view only:
     /// Page Layout view scrolls over pages, not cells.
     pub fn store_view_state(&mut self) {
+        // Editing together, the view is personal (C11): it is never written into the shared
+        // workbook, whose stored view comes back only in checkpoints.
+        if self.is_live() {
+            return;
+        }
         let window = self.session.active_window();
         let Some(d) = self.session.active_mut() else { return };
         let mut tops = Vec::new();

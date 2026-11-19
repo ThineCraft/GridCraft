@@ -216,16 +216,26 @@ pub fn look(app: &SheetApp, geo: &Geo, c: &FormControl, r: Rect, hover: Option<P
     Look { hover, pressed, focused: app.grid.focused_control == Some(c.id) && !selected, show_value: gesture.is_some_and(|g| g.part == Part::Thumb) }
 }
 
+/// Keeps a slider or spin-button gesture one undo step. Not while the workbook is edited
+/// together: the undo list is then not the screen's to trim.
+pub(crate) fn trim_control_undo(app: &mut SheetApp, start: usize) {
+    if app.is_live() {
+        return;
+    }
+    if let Some(d) = app.session.active_mut()
+        && d.undo.len() > start + 1
+    {
+        d.undo.truncate(start + 1);
+    }
+}
+
 impl SheetApp {
     /// Sets a slider or spin button's value; inside a gesture, keeps it one undo step.
     fn control_set(&mut self, id: u32, value: f64) -> bool {
         match self.session.run("control.setValue", json!({"id": id, "value": value})) {
             Ok(_) => {
-                if let Some(start) = self.grid.control.as_ref().map(|g| g.undo_start)
-                    && let Some(d) = self.session.active_mut()
-                    && d.undo.len() > start + 1
-                {
-                    d.undo.truncate(start + 1);
+                if let Some(start) = self.grid.control.as_ref().map(|g| g.undo_start) {
+                    trim_control_undo(self, start);
                 }
                 true
             }

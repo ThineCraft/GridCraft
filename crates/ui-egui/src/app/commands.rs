@@ -83,6 +83,10 @@ impl SheetApp {
         if let Some(r) = self.run_ui_command(id, &params) {
             return r;
         }
+        // Editing together: shared commands go through the live seat, unshared ones are refused.
+        if let Some(r) = self.run_live(id, &params) {
+            return r;
+        }
         // The macro editor's unsaved draft is part of its workbook: closing the workbook asks
         // about it first, and goes on once the editor has closed. A close asked while it is
         // asking waits for the answer, or is refused when it asks for a different close.
@@ -175,7 +179,11 @@ impl SheetApp {
     pub(super) fn alert(&mut self, e: String) {
         // Shown in the window the user ends up in, also after a command that switched windows.
         self.follow_active_window();
-        if e.contains("is not available right now") || e == FILES_LOCKED {
+        if e.contains("is not available right now")
+            || e == FILES_LOCKED
+            || e == gridcraft_engine::coauthor::UNSHARED_REASON
+            || e == crate::live::READ_ONLY_REASON
+        {
             self.toast = Some((e, now_ms()));
         } else {
             self.message = Some(("GridCraft".into(), clean_error(&e)));

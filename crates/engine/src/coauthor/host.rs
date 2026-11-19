@@ -88,6 +88,8 @@ pub const LOCAL_QUERIES: &[&str] = &[
     "macro.list",
     "macro.get",
     "control.list",
+    // Export as PDF writes a file from the shown workbook and leaves the workbook alone.
+    "file.exportPdf",
 ];
 
 /// Whether `id` is personal: a view command in [`LOCAL_COMMANDS`] or a checked read-only query
