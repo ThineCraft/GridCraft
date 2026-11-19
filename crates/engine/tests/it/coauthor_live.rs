@@ -3,7 +3,8 @@ use collab_live::client::{Crash, Effect, EntryView, Event, LiveConfig, LiveEdito
 use collab_live::ids::{LiveId, Lookup};
 use gridcraft_core::{CellRef, MAX_COLS, MAX_ROWS, Value};
 use gridcraft_engine::coauthor::{
-    CellId, GRIDCRAFT_LIVE_FORMAT, GridCoauthor, GridLiveEditor, IdentityInsert, IdentityPosition, SharedCommand, WorkbookIds, decode_entry, mode_for,
+    CellId, GRIDCRAFT_LIVE_FORMAT, GridCoauthor, GridLiveEditor, IdentityInsert, IdentityPosition, LiveNotice, NotAppliedReason, SharedCommand,
+    TicketAnswer, WorkbookIds, decode_entry, mode_for,
 };
 use gridcraft_engine::fingerprint::{DocId, fingerprint, workbook_fingerprint};
 use gridcraft_engine::{DocState, EngineError, Session, Trust, UiRequest, io};
@@ -12,7 +13,9 @@ use protocol::live::{LiveBuild, LiveClientMsg};
 use serde_json::json;
 use std::sync::Arc;
 
-use crate::live::{DeterministicServer, OrderedEntry, ProposedEntry, SimulatedServer, prepare, remote_entry, select, session_with_sheets};
+use crate::live::{
+    ClientPlace, DeterministicServer, OrderedEntry, ProposedEntry, SimulatedServer, prepare, remote_entry, select, session_with_sheets,
+};
 
 fn active_view(editor: &GridLiveEditor) -> (String, CellRef) {
     let document = editor.session().doc().expect("document exists");
@@ -1018,4 +1021,121 @@ fn the_macro_debugger_cannot_lock_a_shared_workbook() {
     let mut debugging = debuggable_session();
     debugging.execute("macro.debug", json!({"name":"M"})).expect("debugging starts before sharing");
     assert!(GridLiveEditor::new(debugging).is_err(), "a workbook being debugged cannot start sharing");
+}
+
+/// The same client joins again after its place ended (C22): a new participant number, its
+/// waiting batch held until the room's version before it is stored, then sent.
+fn rejoin_returning(client: &mut GridCoauthor, previous: u32, participant: u32, head: u64, now_ms: u64) -> u64 {
+    let join = client.connected(now_ms);
+    let join: serde_json::Value = serde_json::from_str(&join[0]).expect("join is JSON");
+    assert!(join["returning_through"].is_number(), "the join names the end of the waiting batch: {join}");
+    let joined = json!({
+        "type":"live_joined",
+        "session":"00000000-0000-0000-0000-00000000005e",
+        "participant":participant,
+        "place":{"is":"returning","previous":previous},
+        "can_edit":true,
+        "heartbeat_ms":60_000,
+        "people":[]
+    });
+    client.receive(&joined.to_string(), now_ms + 1).expect("the returning join is accepted");
+    client.receive(&json!({"type":"catchup","base":0,"revision":null,"from":0,"head":head}).to_string(), now_ms + 2).expect("catch-up is accepted");
+    join["returning_through"].as_u64().expect("a local number")
+}
+
+/// A returning person's waiting cell edit lands on a row someone else deleted while they were
+/// away: it does nothing on every machine, and its author is told, with the text they typed.
+#[test]
+fn returning_deleted_target_is_no_effect_and_kept_for_the_author() {
+    let mut server = DeterministicServer::new();
+    let mut alice = GridCoauthor::new(live_config(), GridLiveEditor::new(session_with_sheets(&["Data"])).expect("editor builds"));
+    let mut bob = GridCoauthor::new(live_config(), GridLiveEditor::new(session_with_sheets(&["Data"])).expect("editor builds"));
+    let alice_place = server.join(&mut alice, 10);
+    let bob_place = server.join(&mut bob, 10);
+    let _ = alice.take_notices();
+
+    // Alice types into B5; the frame never reaches the room before her connection drops.
+    let lost = alice.submit("cell.set", json!({"sheet":0,"cell":"B5","input":"kept text"}), 2026, 20).expect("the edit is made");
+    assert_eq!(server.proposals(&alice_place, &lost).len(), 1);
+    alice.disconnected(30);
+
+    // Meanwhile Bob deletes row 5, and Alice's place ends.
+    let delete = server.one_proposal(&bob_place, &bob.submit("home.deleteRows", json!({"sheet":0,"rows":"5:5"}), 2026, 40).expect("delete"));
+    let ordered = server.order(&delete, 1_795_219_200_000, 3);
+    server.deliver(&mut bob, &ordered, 41);
+
+    let through = rejoin_returning(&mut alice, alice_place.participant.0, 7, 1, 100);
+    server.deliver(&mut alice, &ordered, 103);
+    let ready = alice.receive(&json!({"type":"return_ready","through":through}).to_string(), 104).expect("the batch may go");
+    let returned = ClientPlace { client: alice_place.client, participant: protocol::live::ParticipantNo(7) };
+    let batch = server.one_proposal(&returned, &ready);
+    let stored = server.order(&batch, 1_795_219_201_000, 4);
+    let (alice_step, _) = server.deliver_both(&mut alice, &mut bob, &stored, 110);
+
+    assert!(
+        alice_step.events.iter().any(|event| matches!(event, Event::Applied { own: true, effect: Effect::NoEffect { .. }, .. })),
+        "the returning change does nothing: {alice_step:?}"
+    );
+    assert_eq!(fingerprint(alice.editor().session(), DocId(0)).entered, fingerprint(bob.editor().session(), DocId(0)).entered, "both copies agree");
+    let notices = alice.take_notices();
+    let kept = notices.iter().find_map(|notice| match notice {
+        LiveNotice::NotApplied { kept_text, reason, .. } => Some((kept_text.clone(), *reason)),
+        _ => None,
+    });
+    assert_eq!(kept, Some((Some("kept text".to_string()), NotAppliedReason::RowDeleted)), "the author keeps what they typed: {notices:?}");
+}
+
+/// A return older than the retention: the room asks the returning editor for its old shown copy
+/// (`ArchiveReturn`, then an archive ticket) and stores it below the current file. The copy is
+/// what the person saw before the current base loaded, written as deterministic bytes.
+#[test]
+fn archive_return_writes_the_old_shown_copy() {
+    let mut server = DeterministicServer::new();
+    let mut alice = GridCoauthor::new(live_config(), GridLiveEditor::new(session_with_sheets(&["Data"])).expect("editor builds"));
+    let place = server.join(&mut alice, 10);
+    let _ = alice.submit("cell.set", json!({"sheet":0,"cell":"A1","input":"old copy"}), 2026, 20).expect("the edit is made");
+    alice.disconnected(30);
+
+    let join = alice.connected(100);
+    assert!(join[0].contains("returning_through"));
+    let joined = json!({"type":"live_joined","session":"00000000-0000-0000-0000-00000000005e","participant":8,
+        "place":{"is":"returning","previous":place.participant.0},"can_edit":true,"heartbeat_ms":60_000,"people":[]});
+    alice.receive(&joined.to_string(), 101).expect("join");
+    let archive = alice.receive(&json!({"type":"archive_return","current":"r9"}).to_string(), 102).expect("archive return");
+    assert!(archive.events.iter().any(|event| matches!(event, Event::ArchiveReturn { .. })));
+    let catchup = alice.receive(&json!({"type":"catchup","base":4,"revision":"r9","from":4,"head":4}).to_string(), 103).expect("catch-up");
+    assert!(catchup.events.iter().any(|event| matches!(event, Event::LoadBase { .. })));
+    alice.load_base(gridcraft_engine::coauthor::LiveBase::Empty).expect("the current base loads");
+    alice.base_ready(104).expect("live on the current base");
+
+    let ticket = json!({"type":"checkpoint_ticket","ticket":"00000000-0000-0000-0000-0000000000b1","purpose":"write","at":4,"base":"r9","major":"returning_client_archive"});
+    let step = alice.receive(&ticket.to_string(), 105).expect("ticket");
+    let event = step.events.iter().find(|event| matches!(event, Event::CheckpointRequested { .. })).expect("an archive ticket");
+    let Some(TicketAnswer::Write { checkpoint, .. }) = alice.answer_ticket(event) else { panic!("the archive ticket is answered") };
+    assert!(checkpoint.session_data.is_empty(), "the old copy is never a base: no identities");
+    let (workbook, _) = io::open_bytes("archive.xlsx", &checkpoint.bytes).expect("the copy opens");
+    let a1 = workbook.sheet(0).expect("sheet").value(CellRef::parse("A1").expect("cell"));
+    assert_eq!(a1, Value::Text("old copy".into()), "the copy is what the person saw, waiting change included");
+    let again = alice.answer_ticket(event);
+    assert!(matches!(again, Some(TicketAnswer::Write { checkpoint: ref c, .. }) if c.bytes == checkpoint.bytes), "deterministic bytes");
+
+    // An ordinary ticket still writes the agreed state.
+    let ordinary =
+        json!({"type":"checkpoint_ticket","ticket":"00000000-0000-0000-0000-0000000000b2","purpose":"write","at":4,"base":"r9","major":null});
+    let step = alice.receive(&ordinary.to_string(), 106).expect("ticket");
+    let event = step.events.iter().find(|event| matches!(event, Event::CheckpointRequested { .. })).expect("a write ticket");
+    let Some(TicketAnswer::Write { checkpoint, .. }) = alice.answer_ticket(event) else { panic!("answered") };
+    let (workbook, _) = io::open_bytes("current.xlsx", &checkpoint.bytes).expect("opens");
+    assert_eq!(workbook.sheet(0).expect("sheet").value(CellRef::parse("A1").expect("cell")), Value::Empty, "the current state");
+}
+
+#[test]
+fn an_over_limit_room_is_a_recoverable_pause() {
+    let mut server = DeterministicServer::new();
+    let mut alice = GridCoauthor::new(live_config(), GridLiveEditor::new(session_with_sheets(&["Data"])).expect("editor builds"));
+    server.join(&mut alice, 10);
+    let step = alice.receive(&json!({"type":"unavailable","reason":"log_over_limit"}).to_string(), 20).expect("not a fault");
+    assert!(step.events.iter().any(|event| matches!(event, Event::Unavailable { .. })));
+    assert_eq!(alice.phase(), gridcraft_engine::coauthor::Phase::Offline, "it waits to join again");
+    assert!(!alice.connected(30).is_empty(), "and can join again");
 }

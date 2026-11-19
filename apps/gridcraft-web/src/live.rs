@@ -249,10 +249,14 @@ fn base(data: &Json, binaries: PageBinaries) -> Result<PageBase, LiveMsgError> {
             Some((at_ms, seed))
         }
     };
-    if binaries.session_data.is_some() != stamp.is_some() {
+    // Empty session data is a re-stored file with no identities (G4 task 11): a file base, which
+    // needs no stamp.
+    let session_data = binaries.session_data.filter(|data| !data.is_empty());
+    if session_data.is_some() && stamp.is_none() {
         return Err(LiveMsgError::Invalid("stamp"));
     }
-    Ok(PageBase { revision, at, bytes, session_data: binaries.session_data, stamp })
+    let stamp = if session_data.is_some() { stamp } else { None };
+    Ok(PageBase { revision, at, bytes, session_data, stamp })
 }
 
 fn people(data: &Json) -> Result<Vec<PagePerson>, LiveMsgError> {
@@ -643,7 +647,9 @@ impl LiveSeat {
                 }
                 coauthor.load_base(LiveBase::Empty)
             }
-            (Some(_), Some(session_data), Some((at_ms, seed))) => {
+            // A re-stored file (an outside replacement, a major mark) carries no identities: it
+            // is a file base, with fresh identities alike on every machine.
+            (Some(_), Some(session_data), Some((at_ms, seed))) if !session_data.is_empty() => {
                 coauthor.load_base(LiveBase::Checkpoint { bytes: &base.bytes, session_data, stamp: Stamp { at_ms, seed } })
             }
             (Some(_), _, _) => coauthor.load_base(LiveBase::File { bytes: &base.bytes }),
@@ -683,6 +689,9 @@ impl LiveSeat {
                     }
                 }
                 Event::Expired => out.push(LiveEditorMsg::Reset { kind: "expired" }),
+                // The room cannot take this join now (its unsaved log is over the limit): the
+                // client is offline with its waiting work kept; the page waits and joins again.
+                Event::Unavailable { .. } => out.push(LiveEditorMsg::Reset { kind: "unavailable" }),
                 Event::People(people) => {
                     self.room_can_edit = people.iter().map(|person| (person.participant.0, person.can_edit)).collect();
                     // A person whose connection dropped is shown nowhere at once.
@@ -1952,5 +1961,48 @@ mod tests {
         assert!(seat.undo_labels().is_empty() && !seat.history_waiting());
         let id = seat.cell_identity(0, CellRef::parse("B5").unwrap()).unwrap();
         assert_eq!(seat.find_cell(id), Some((0, CellRef::parse("B5").unwrap())));
+    }
+
+    #[test]
+    fn an_over_limit_room_asks_the_page_to_wait_and_rejoin() {
+        let (mut seat, _) = opened(Arc::default(), 10);
+        join_live(&mut seat, 3, 10);
+        let out = seat.handle(LivePageMsg::Frame(json!({"type":"unavailable","reason":"log_over_limit"}).to_string()), 20);
+        assert!(
+            out.iter().any(|message| matches!(message, LiveEditorMsg::Reset { kind: "unavailable" })),
+            "the page backs off and joins again: {out:?}"
+        );
+        assert!(seat.is_active(), "the session is kept");
+        let out = seat.handle(LivePageMsg::Open, 30);
+        assert!(sends(&out).iter().any(|frame| frame["type"] == "live_join"), "the same client joins again");
+    }
+
+    #[test]
+    fn a_base_with_empty_session_data_is_the_stored_file() {
+        let parsed = parse_page_msg(
+            &json!({"type":"gridcraft:live-base","revision":"r3","at":0}),
+            PageBinaries { bytes: Some(vec![1]), session_data: Some(Vec::new()) },
+        )
+        .unwrap();
+        assert!(matches!(parsed, Some(LivePageMsg::Base(PageBase { session_data: None, stamp: None, .. }))), "no stamp is needed");
+        let (mut seat, _) = opened(Arc::default(), 10);
+        awaiting_base(&mut seat, 3, Some("r3"), 10);
+        let base = PageBase { revision: Some("r3".into()), at: 0, bytes: base_bytes(), session_data: Some(Vec::new()), stamp: Some((1, 2)) };
+        let out = seat.handle(LivePageMsg::Base(base), 20);
+        assert!(!out.iter().any(|message| matches!(message, LiveEditorMsg::Reset { .. })), "{out:?}");
+        assert_eq!(phase(&mut seat, 21), "live", "a re-stored file (no identities) loads as the file base");
+    }
+
+    #[test]
+    fn a_replaced_base_at_the_same_position_is_loaded() {
+        let (mut seat, _) = opened(Arc::default(), 10);
+        join_live(&mut seat, 3, 10);
+        seat.handle(LivePageMsg::Closed, 20);
+        seat.handle(LivePageMsg::Open, 21);
+        let joined = json!({"type":"live_joined","session":"00000000-0000-0000-0000-00000000005e","participant":3,"place":{"is":"kept"},
+            "can_edit":true,"heartbeat_ms":60_000,"people":[]});
+        seat.handle(LivePageMsg::Frame(joined.to_string()), 22);
+        let out = seat.handle(LivePageMsg::Frame(json!({"type":"catchup","base":0,"revision":"r-outside","from":0,"head":0}).to_string()), 23);
+        assert!(out.iter().any(|message| matches!(message, LiveEditorMsg::Load { revision: Some(r), at: 0 } if r == "r-outside")), "{out:?}");
     }
 }

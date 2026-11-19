@@ -7,14 +7,14 @@ mod ids;
 mod presence;
 mod undo;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 
 pub use collab_core::ids::Seq;
 use collab_live::client::{AgreedSnapshot, Effect, LiveClient, Mode};
 /// The live client's types a host names, so it needs no dependency of its own on ShareCraft's crates.
 pub use collab_live::client::{ClientError, Event, LiveConfig, LocalError, MAX_ENTRIES_PER_WINDOW, Phase, Stamp, Step};
 use collab_live::ids::IdError;
-use protocol::live::{LiveBuild, MAX_PAYLOAD_BYTES, RefusedReason};
+use protocol::live::{LiveBuild, MAX_PAYLOAD_BYTES, MajorReason, RefusedReason};
 use serde_json::Value as Json;
 use sha2::{Digest, Sha256};
 use thiserror::Error;
@@ -87,6 +87,7 @@ pub struct PreparedChange {
 }
 
 /// One exact agreed checkpoint result ready for the live host to upload.
+#[derive(Clone)]
 pub struct GridCheckpoint {
     pub bytes: Vec<u8>,
     pub session_data: Vec<u8>,
@@ -152,7 +153,14 @@ pub struct GridCoauthor {
     outbox: Vec<String>,
     history: PersonalHistory,
     pending_history: BTreeMap<u64, PendingHistory>,
-    discarded_history_settlements: usize,
+    /// Own actions whose personal history a lifecycle event discarded, oldest first, with whether
+    /// each was an Undo or Redo. The client re-runs them, so each still settles in order: its
+    /// outcome reaches its author (a returning change that did nothing keeps its text), but no
+    /// history is recorded for it.
+    discarded_history_settlements: VecDeque<(u64, bool)>,
+    /// The person's old shown copy, written when the room archives an expired return
+    /// (`ArchiveReturn`), for the archive ticket that follows.
+    archived: Option<GridCheckpoint>,
     highest_applied_seq: u64,
     last_undo_report: Option<UndoReport>,
     /// The text the person typed for each of their pending cell edits, by action, so a change
@@ -189,7 +197,8 @@ impl GridCoauthor {
             outbox,
             history: PersonalHistory::default(),
             pending_history: BTreeMap::new(),
-            discarded_history_settlements: 0,
+            discarded_history_settlements: VecDeque::new(),
+            archived: None,
             highest_applied_seq: 0,
             last_undo_report: None,
             pending_texts: BTreeMap::new(),
@@ -303,6 +312,21 @@ impl GridCoauthor {
             AgreedSnapshot::Editor(editor) => editor.checkpoint_state()?,
             AgreedSnapshot::Saved(snapshot) => snapshot.checkpoint_state(),
         };
+        write_checkpoint(&state)
+    }
+
+    /// The copy the person sees now, waiting changes included, as deterministic checkpoint bytes
+    /// with no identity data: an archived copy is never loaded as a base.
+    fn shown_copy(&self) -> Result<GridCheckpoint, GridLiveError> {
+        let state = self.editor.checkpoint_state()?;
+        let mut copy = write_checkpoint(&state)?;
+        copy.session_data = Vec::new();
+        Ok(copy)
+    }
+}
+
+fn write_checkpoint(state: &editor::GridCheckpointState<'_>) -> Result<GridCheckpoint, GridLiveError> {
+    {
         let mut workbook = state.workbook.clone();
         state.stored_view.apply(&mut workbook, state.ids);
         state.ids.restore_file_ids(&mut workbook)?;
@@ -312,10 +336,21 @@ impl GridCoauthor {
         let entered = crate::fingerprint::workbook_fingerprint(&workbook).entered;
         Ok(GridCheckpoint { bytes, session_data, sha256, entered })
     }
+}
 
+impl GridCoauthor {
     /// Answers a checkpoint or verify ticket from the exact agreed state at its position; `None`
     /// for any other event. A failure is answered with the `checkpoint_failed` frame only.
     pub fn answer_ticket(&self, event: &Event) -> Option<TicketAnswer> {
+        let failed = |ticket| TicketAnswer::Failed { send: serde_json::to_string(&protocol::live::LiveClientMsg::CheckpointFailed { ticket }).ok() };
+        if let Event::CheckpointRequested { ticket, at, base, major: Some(MajorReason::ReturningClientArchive) } = event {
+            // The room keeps the person's old copy below the current file (C23): answer with
+            // the copy written when the return was archived, never the agreed state.
+            return Some(match self.archived.clone() {
+                Some(checkpoint) => TicketAnswer::Write { ticket: ticket.to_string(), at: *at, base: base.clone(), checkpoint },
+                None => failed(*ticket),
+            });
+        }
         let (ticket, at, write, base) = match event {
             Event::CheckpointRequested { ticket, at, base, .. } => (*ticket, *at, true, base.clone()),
             Event::VerifyRequested { ticket, at, base } => (*ticket, *at, false, base.clone()),
@@ -516,14 +551,31 @@ impl GridCoauthor {
     }
 
     fn reconcile_history(&mut self, step: &Step) {
+        if step.events.iter().any(|event| matches!(event, Event::ArchiveReturn { .. })) {
+            // The room archives the person's old copy and the client drops its waiting changes:
+            // no acknowledgement will come for them. Keep the copy for the archive ticket.
+            match self.shown_copy() {
+                Ok(copy) => self.archived = Some(copy),
+                Err(_) => self.archived = None,
+            }
+            self.discarded_history_settlements.clear();
+            self.pending_history.clear();
+            self.pending_texts.clear();
+        }
         if step.events.iter().any(|event| matches!(event, Event::LoadBase { .. } | Event::Returned { .. })) {
             self.history.clear();
             // LiveClient intentionally keeps and re-runs its queued entries across these
             // lifecycle events. Keep one inert FIFO slot per discarded history move so an old
-            // acknowledgement cannot settle a newer action submitted after the reconnect.
-            self.discarded_history_settlements = self.discarded_history_settlements.saturating_add(self.pending_history.len());
+            // acknowledgement cannot settle a newer action submitted after the reconnect; the
+            // slot keeps its action, so the author still hears what the change did, with the
+            // text they typed (a returning change on a deleted target, C22).
+            let discarded: Vec<(u64, bool)> = self
+                .pending_history
+                .iter()
+                .map(|(action, pending)| (*action, matches!(pending, PendingHistory::Undo | PendingHistory::Redo)))
+                .collect();
+            self.discarded_history_settlements.extend(discarded);
             self.pending_history.clear();
-            self.pending_texts.clear();
             self.last_undo_report = None;
             self.forget_presence();
             self.editor.clear_history_results();
@@ -614,9 +666,12 @@ impl GridCoauthor {
     }
 
     fn settle_next_history(&mut self, accepted: bool) -> Option<Settled> {
-        if self.discarded_history_settlements > 0 {
-            self.discarded_history_settlements -= 1;
-            return None;
+        if let Some((action, history_move)) = self.discarded_history_settlements.pop_front() {
+            // Its history went with the lifecycle event; only its outcome is reported.
+            if history_move {
+                self.last_undo_report = None;
+            }
+            return Some(Settled { action, history_move });
         }
         self.settle_first_history(accepted)
     }
