@@ -1412,3 +1412,38 @@ fn filter_criteria_without_year_less_dates_read_no_stamp() {
     assert!(!outcome.read_stamp);
     assert!(row_hidden(&editor, 1));
 }
+
+#[test]
+fn rows_hidden_by_a_filter_are_not_entered_content() {
+    let mut session = session_with_sheets(&["Data"]);
+    for (cell, input) in [("A1", "Value"), ("A2", "=1+1"), ("A3", "=2+2"), ("A4", "7")] {
+        session.execute("cell.set", json!({"sheet":"Data","cell":cell,"input":input})).expect("cell is set");
+    }
+    session.execute("data.filterSet", json!({"sheet":"Data","range":"A1:A4"})).expect("filter is set");
+    session.execute("data.filterBy", json!({"sheet":"Data","range":"A1:A4","column":"A","custom":{"op":">","value":"3"}})).expect("filter applies");
+    assert!(session.doc().expect("document exists").wb.sheet(0).expect("Data exists").is_row_hidden(1), "the filter hides row 2");
+    let filtered = fingerprint(&session, DocId(0));
+
+    // The same entered content where the calculation put the filtered row the other way.
+    let mut other = session_with_sheets(&["Data"]);
+    other.doc_mut().expect("document exists").wb = session.doc().expect("document exists").wb.clone();
+    {
+        let document = other.doc_mut().expect("document exists");
+        let sheet = Arc::make_mut(&mut document.wb).sheets.get_mut(0).map(Arc::make_mut).expect("Data exists");
+        sheet.rows.entry(1).or_default().hidden = false;
+        sheet.rows.entry(2).or_default().hidden = true;
+    }
+    let shown = fingerprint(&other, DocId(0));
+    assert_eq!(filtered.entered, shown.entered, "filter results are not entered content");
+    assert_ne!(filtered.computed, shown.computed, "filter results are computed content");
+
+    // A row hidden by hand outside the filter stays entered content.
+    let mut manual = session_with_sheets(&["Data"]);
+    manual.doc_mut().expect("document exists").wb = session.doc().expect("document exists").wb.clone();
+    {
+        let document = manual.doc_mut().expect("document exists");
+        let sheet = Arc::make_mut(&mut document.wb).sheets.get_mut(0).map(Arc::make_mut).expect("Data exists");
+        sheet.rows.entry(9).or_default().hidden = true;
+    }
+    assert_ne!(fingerprint(&manual, DocId(0)).entered, filtered.entered, "a row hidden by hand is entered content");
+}

@@ -9612,8 +9612,8 @@
     {
       "name": "random-008.json",
       "failed_steps": [],
-      "agreement": "2b7ebc94a14651da7de82744d45d56a240d11490f139e50e2d733a9cb50e54b9",
-      "diagnostic_computed": "58602f1a6903a5cef329aad1c4501d43e81c5a7329581ffc486d82ddcc41f7ef",
+      "agreement": "27446fdb0cd580a2e08868842821e2907d92f291554d775959021472907261ca",
+      "diagnostic_computed": "da16f6a9ce53cba874c03a8aed6ffdb7ec2711cfd1b266372137b97c20c85893",
       "items": [
         {
           "stream": "entered",
@@ -10212,51 +10212,6 @@
         },
         {
           "stream": "entered",
-          "key": "2026!row 192",
-          "canonical": "sha256 23fa3c6f7600186b17c11ed28762960fd7c6b352d222e09b56be52c2f79a9467"
-        },
-        {
-          "stream": "entered",
-          "key": "2026!row 193",
-          "canonical": "sha256 23fa3c6f7600186b17c11ed28762960fd7c6b352d222e09b56be52c2f79a9467"
-        },
-        {
-          "stream": "entered",
-          "key": "2026!row 194",
-          "canonical": "sha256 23fa3c6f7600186b17c11ed28762960fd7c6b352d222e09b56be52c2f79a9467"
-        },
-        {
-          "stream": "entered",
-          "key": "2026!row 195",
-          "canonical": "sha256 23fa3c6f7600186b17c11ed28762960fd7c6b352d222e09b56be52c2f79a9467"
-        },
-        {
-          "stream": "entered",
-          "key": "2026!row 196",
-          "canonical": "sha256 23fa3c6f7600186b17c11ed28762960fd7c6b352d222e09b56be52c2f79a9467"
-        },
-        {
-          "stream": "entered",
-          "key": "2026!row 197",
-          "canonical": "sha256 23fa3c6f7600186b17c11ed28762960fd7c6b352d222e09b56be52c2f79a9467"
-        },
-        {
-          "stream": "entered",
-          "key": "2026!row 198",
-          "canonical": "sha256 23fa3c6f7600186b17c11ed28762960fd7c6b352d222e09b56be52c2f79a9467"
-        },
-        {
-          "stream": "entered",
-          "key": "2026!row 199",
-          "canonical": "sha256 23fa3c6f7600186b17c11ed28762960fd7c6b352d222e09b56be52c2f79a9467"
-        },
-        {
-          "stream": "entered",
-          "key": "2026!row 200",
-          "canonical": "sha256 23fa3c6f7600186b17c11ed28762960fd7c6b352d222e09b56be52c2f79a9467"
-        },
-        {
-          "stream": "entered",
           "key": "2026!filter",
           "canonical": "sha256 aaf514aaafdde80e76a652a2ad6369c85053935ee0f05643a67732fb602c8d69"
         },
@@ -10284,6 +10239,51 @@
           "stream": "computed",
           "key": "2026!F33",
           "canonical": "num 0000000000000000 (0)"
+        },
+        {
+          "stream": "computed",
+          "key": "2026!row 192",
+          "canonical": "filtered out"
+        },
+        {
+          "stream": "computed",
+          "key": "2026!row 193",
+          "canonical": "filtered out"
+        },
+        {
+          "stream": "computed",
+          "key": "2026!row 194",
+          "canonical": "filtered out"
+        },
+        {
+          "stream": "computed",
+          "key": "2026!row 195",
+          "canonical": "filtered out"
+        },
+        {
+          "stream": "computed",
+          "key": "2026!row 196",
+          "canonical": "filtered out"
+        },
+        {
+          "stream": "computed",
+          "key": "2026!row 197",
+          "canonical": "filtered out"
+        },
+        {
+          "stream": "computed",
+          "key": "2026!row 198",
+          "canonical": "filtered out"
+        },
+        {
+          "stream": "computed",
+          "key": "2026!row 199",
+          "canonical": "filtered out"
+        },
+        {
+          "stream": "computed",
+          "key": "2026!row 200",
+          "canonical": "filtered out"
         },
         {
           "stream": "entered",

@@ -737,7 +737,11 @@ fn explicit_targets_leave_the_active_sheet_alone() {
         if keeps_selection && (d.selection.a1() != "B2:C3" || d.selection.active.a1() != "C3") {
             failures.push(format!("`{}` on Other moved the selection to {} (active {})", step.id, d.selection.a1(), d.selection.active.a1()));
         }
-        if fingerprint(&s, DocId(0)).entered == fp.entered {
+        // Re-applying a filter changes which rows it hides, and those follow from the values: they
+        // are computed content, not entered content.
+        let now = fingerprint(&s, DocId(0));
+        let changed = if step.id == "data.reapply" { now != fp } else { now.entered != fp.entered };
+        if !changed {
             failures.push(format!("`{}` changed nothing", step.id));
         }
         // Sheet1 changes only where its formula follows Other (a deleted sheet gives #REF!).

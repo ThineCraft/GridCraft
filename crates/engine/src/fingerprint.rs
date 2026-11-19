@@ -7,9 +7,11 @@
 //!   formula (as the formula printer prints it) or literal value, and its style resolved to
 //!   values (number format, font, fill, borders, alignment, protection), never a style id; row
 //!   heights and column widths that differ from the default, hidden rows and
-//!   columns and whole-row or whole-column styles; merges, sorted; the filter range and its
+//!   columns (except rows an applied filter hides, see `computed`) and whole-row or whole-column
+//!   styles; merges, sorted; the filter range and its
 //!   criteria; and the defined names, sorted.
-//! - `computed` covers what the cells calculate to: each cell's value and each spilled value.
+//! - `computed` covers what the cells calculate to: each cell's value, each spilled value, and
+//!   the rows an applied filter hides (they follow from the values, often calculated ones).
 //!   Numbers are written as their IEEE-754 bits and errors by code.
 //!
 //! View state is left out: the active sheet, the selection, the scroll position, the zoom,
@@ -288,20 +290,20 @@ fn entered_sheet(wb: &Workbook, si: usize, sheet: &Sheet, out: &mut dyn FnMut(St
         let style = style_text(wb.styles.get(cell.style));
         out(Stream::Entered, &cell_key(sheet, c), &format!("{} style {style}", content_text(wb, si, sheet, c, cell)));
     }
+    // Rows an applied filter hides follow from the cells' values (often calculated ones), not
+    // from what anyone entered: they are in the computed stream (`computed_sheet`).
+    let filter_spans = sheet.filter_row_spans();
     for (what, lines, default) in [("row", &sheet.rows, sheet.default_row_height), ("column", &sheet.cols, sheet.default_col_width)] {
         for (index, info) in lines.iter() {
             let size = info.size.filter(|s| s.to_bits() != default.to_bits());
             let style = info.style.filter(|s| *s != gridcraft_model::StyleId::DEFAULT);
-            if size.is_none() && !info.hidden && style.is_none() {
+            let hidden = info.hidden && !(what == "row" && in_spans(&filter_spans, *index));
+            if size.is_none() && !hidden && style.is_none() {
                 continue;
             }
             let size = size.map_or_else(|| "default".to_string(), |s| format!("{:08x} ({s})", s.to_bits()));
             let style = style.map_or_else(|| "none".to_string(), |s| style_text(wb.styles.get(s)));
-            out(
-                Stream::Entered,
-                &format!("{}!{what} {}", sheet.name, u64::from(*index) + 1),
-                &format!("size {size} hidden {} style {style}", info.hidden),
-            );
+            out(Stream::Entered, &format!("{}!{what} {}", sheet.name, u64::from(*index) + 1), &format!("size {size} hidden {hidden} style {style}"));
         }
     }
     let mut merges: Vec<&RangeRef> = sheet.merges.iter().collect();
@@ -330,4 +332,14 @@ fn computed_sheet(sheet: &Sheet, out: &mut dyn FnMut(Stream, &str, &str)) {
     for (c, v) in sheet.spill.iter() {
         out(Stream::Computed, &format!("{} spilled", cell_key(sheet, *c)), &value_text(v));
     }
+    let filter_spans = sheet.filter_row_spans();
+    for (index, info) in sheet.rows.iter() {
+        if info.hidden && in_spans(&filter_spans, *index) {
+            out(Stream::Computed, &format!("{}!row {}", sheet.name, u64::from(*index) + 1), "filtered out");
+        }
+    }
+}
+
+fn in_spans(spans: &[(u32, u32)], row: u32) -> bool {
+    spans.iter().any(|&(first, last)| row >= first && row <= last)
 }
