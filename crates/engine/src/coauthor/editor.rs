@@ -10,7 +10,8 @@ use serde_json::Value as Json;
 
 use super::{
     CoauthorError, GuardedPatch, GuardedStructural, PreparedChange, SharedCommand, TargetGone, UndoAction, UndoReport, WorkbookIds,
-    apply_guarded_patch, build_undo_action, decode_entry, encode_command, mode_for, resolve_command, unrecorded_action,
+    allocates_only_own_identities, apply_guarded_patch, build_undo_action, decode_entry, encode_command, mode_for, resolve_command,
+    unrecorded_action,
 };
 use crate::fingerprint::{DocId, fingerprint};
 use crate::{Calc, EngineError, Selection, Session};
@@ -328,6 +329,11 @@ impl LiveEditor for GridLiveEditor {
             Ok(decoded) => decoded,
             Err(_) => return Ok(Self::no_effect("The shared change is not valid.", false)),
         };
+        // An entry may allocate only its sender's identities; the check reads nothing but the
+        // entry, so every client refuses the same entries.
+        if !allocates_only_own_identities(&decoded.command, entry.participant.0) {
+            return Ok(Self::no_effect("The shared change is not valid.", false));
+        }
         if let SharedCommand::Guarded { patch } = &decoded.command {
             let view = self.capture_view();
             let before = self.snapshot();
@@ -499,7 +505,7 @@ mod tests {
         let mut next = 0;
         let change = editor
             .prepare(1, "home.insertSheet", &json!({"name":"Payload"}), 2026, &mut |count| {
-                let first = LiveId(7, next);
+                let first = LiveId(2, next);
                 next = next.checked_add(count).ok_or(collab_live::ids::IdError::NoPlace)?;
                 Ok(first)
             })

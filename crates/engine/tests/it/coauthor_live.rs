@@ -672,3 +672,81 @@ fn undo_never_removes_the_other_participants_work() {
     assert_eq!(value_at(&alice, "A2"), Value::text("bob"));
     assert_eq!(value_at(&bob, "A2"), Value::text("bob"));
 }
+
+#[test]
+fn entry_cannot_allocate_another_participants_identities() {
+    let mut server = DeterministicServer::new();
+    let mut alice = convergence_client();
+    let mut bob = convergence_client();
+    let mut carol = convergence_client();
+    let alice_place = server.join(&mut alice, 10);
+    let bob_place = server.join(&mut bob, 20);
+    server.join(&mut carol, 25);
+    assert_ne!(alice_place.participant, bob_place.participant);
+
+    // Bob's client is hostile: it names Alice's next identities as its new rows. Alice and Carol
+    // are honest and receive it.
+    let honest = proposed(&server, &mut bob, &bob_place, "home.insertRows", json!({"sheet":"Data","rows":"2:2"}), 30);
+    let mut forged_payload: serde_json::Value = serde_json::from_str(&honest.payload).expect("payload is JSON");
+    forged_payload["command"]["rows"]["first"] = serde_json::to_value(LiveId(alice_place.participant.0, 0)).expect("identity serializes");
+    forged_payload["command"]["rows"]["count"] = json!(1_000);
+    let forged = ProposedEntry { payload: forged_payload.to_string(), ..honest };
+
+    let alice_insert = proposed(&server, &mut alice, &alice_place, "home.insertRows", json!({"sheet":"Data","rows":"3:3"}), 40);
+    let alice_first = match decode_entry(&alice_insert.payload).expect("Alice's payload decodes").command {
+        SharedCommand::InsertRows { rows, .. } => rows.first,
+        other => panic!("expected a row insert, got {other:?}"),
+    };
+    assert!(alice_first.1 < 1_000, "the forged block covers Alice's next identity");
+
+    let (forged_entry, alice_step, carol_step) = order_for_both(&mut server, &forged, &mut alice, &mut carol, 50);
+    for step in [&alice_step, &carol_step] {
+        assert_eq!(no_effect_reason(step, forged_entry.seq), "The shared change is not valid.");
+    }
+    let (alice_entry, alice_step, carol_step) = order_for_both(&mut server, &alice_insert, &mut alice, &mut carol, 60);
+    for step in [&alice_step, &carol_step] {
+        assert!(
+            step.events.iter().any(|event| matches!(event, Event::Applied { seq, effect: Effect::Applied, .. } if *seq == alice_entry.seq)),
+            "Alice's own insert still applies: {:?}",
+            step.events
+        );
+    }
+    assert_eq!(value_at(&alice, "A2"), Value::text("base"), "the forged rows were not inserted");
+    assert_eq!(value_at(&alice, "A3"), Value::Empty, "Alice's row was inserted");
+    assert_eq!(value_at(&alice, "A4"), Value::text("tail"));
+    assert_eq!(alice.editor().ids(), carol.editor().ids(), "identity tables agree");
+    assert_eq!(alice.editor().agreement_digest(), carol.editor().agreement_digest(), "entered content agrees");
+}
+
+#[test]
+fn every_identity_allocating_command_must_use_the_senders_identities() {
+    let commands = [
+        ("home.insertRows", json!({"sheet":"Data","rows":"2:2"})),
+        ("home.deleteRows", json!({"sheet":"Data","rows":"2:2"})),
+        ("home.insertColumns", json!({"sheet":"Data","cols":"B:B"})),
+        ("home.deleteColumns", json!({"sheet":"Data","cols":"B:B"})),
+        ("home.insertSheet", json!({"name":"Squatted"})),
+    ];
+    for (id, params) in commands {
+        let mut editor = GridLiveEditor::new(convergence_base()).expect("editor builds");
+        let before_ids = editor.ids().clone();
+        let before = fingerprint(editor.session(), DocId(0)).entered;
+        let mut next = 0u32;
+        // Participant 1's identities, in an entry that participant 2 sends.
+        let change = editor
+            .prepare(1, id, &params, 2026, &mut |count| {
+                let first = LiveId(1, next);
+                next = next.checked_add(count).ok_or(collab_live::ids::IdError::NoPlace)?;
+                Ok(first)
+            })
+            .expect("change prepares");
+        let outcome = editor.apply(&remote_entry(&change.payload, 1)).expect("entry is handled");
+        assert_eq!(outcome.effect, Effect::NoEffect { reason: "The shared change is not valid.".into() }, "{id}");
+        assert_eq!(editor.ids(), &before_ids, "{id} leaves the identity tables alone");
+        assert_eq!(fingerprint(editor.session(), DocId(0)).entered, before, "{id} leaves the workbook alone");
+
+        let own = prepare(&mut editor, 2, id, params.clone(), &mut next);
+        let outcome = editor.apply(&remote_entry(&own.payload, 2)).expect("entry is handled");
+        assert_eq!(outcome.effect, Effect::Applied, "{id} with the sender's own identities applies");
+    }
+}

@@ -14,8 +14,8 @@ use serde_json::Value as Json;
 use thiserror::Error;
 
 pub use command::{
-    IdentityAnchor, IdentityRefKind, IdentityReference, IdentitySheetSel, ResolvedCommand, SharedCommand, SharedEntry, StylePatch, decode_entry,
-    encode_command, is_shared_command, resolve_command,
+    IdentityAnchor, IdentityRefKind, IdentityReference, IdentitySheetSel, ResolvedCommand, SharedCommand, SharedEntry, StylePatch,
+    allocates_only_own_identities, decode_entry, encode_command, is_shared_command, resolve_command,
 };
 pub use editor::{GridLiveEditor, GridSnapshot, SharedDocumentSnapshot};
 pub use ids::{

@@ -25,7 +25,7 @@ pub fn select(session: &mut Session, sheet: &str, cell: &str) {
 pub fn prepare(editor: &mut GridLiveEditor, action: u64, id: &str, params: Json, next: &mut u32) -> PreparedChange {
     editor
         .prepare(action, id, &params, 2026, &mut |count| {
-            let first = LiveId(7, *next);
+            let first = LiveId(2, *next);
             *next = next.checked_add(count).ok_or(collab_live::ids::IdError::NoPlace)?;
             Ok(first)
         })

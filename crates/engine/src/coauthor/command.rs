@@ -924,6 +924,20 @@ pub(crate) fn guarded_entry(action: u64, patch: GuardedPatch) -> SharedEntry {
     SharedEntry { version: 1, action, command: SharedCommand::Guarded { patch } }
 }
 
+/// Whether every identity this command allocates belongs to `participant`, the sender of the
+/// ordered entry. Identities are `(participant, counter)` pairs: an entry that names another
+/// participant's identities as its new rows, columns or sheet could reserve that person's future
+/// counters and make their later structural changes fail on every client. Guarded patches only
+/// move identities that already exist, so they allocate none.
+pub fn allocates_only_own_identities(command: &SharedCommand, participant: u32) -> bool {
+    match command {
+        SharedCommand::InsertRows { rows: insert, .. } | SharedCommand::InsertColumns { cols: insert, .. } => insert.first.0 == participant,
+        SharedCommand::DeleteRows { rows: delete, .. } | SharedCommand::DeleteColumns { cols: delete, .. } => delete.first.0 == participant,
+        SharedCommand::InsertSheet { before, .. } => before.id.0 == participant,
+        _ => true,
+    }
+}
+
 pub fn resolve_command(ids: &WorkbookIds, session: &crate::Session, entry: &SharedEntry) -> Result<ResolvedCommand, TargetGone> {
     let mut value = serde_json::to_value(&entry.command).map_err(|error| TargetGone::Malformed(error.to_string()))?;
     let object = value.as_object_mut().ok_or_else(|| TargetGone::Malformed("command did not serialize as an object".into()))?;

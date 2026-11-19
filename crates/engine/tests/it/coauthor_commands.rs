@@ -293,7 +293,7 @@ fn first_local_insert_follows_the_new_sheet_but_remote_view_does_not() {
     let mut next = 0;
     let change = sender
         .prepare(44, "home.insertSheet", &json!({"name":"Local"}), 2026, &mut |count| {
-            let first = collab_live::ids::LiveId(7, next);
+            let first = collab_live::ids::LiveId(1, next);
             next = next.checked_add(count).ok_or(collab_live::ids::IdError::NoPlace)?;
             Ok(first)
         })
