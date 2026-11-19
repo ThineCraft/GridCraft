@@ -32,7 +32,6 @@ use gridcraft_core::{CellRef, RangeRef};
 use gridcraft_model::Workbook;
 use serde::Serialize;
 use serde_json::Value as Json;
-use sha2::{Digest as _, Sha256};
 
 use crate::{DocState, EngineError, Result, Selection, Session};
 
@@ -379,8 +378,9 @@ pub struct Ctx<'a> {
 }
 
 pub(crate) fn edit<R>(s: &mut Session, f: impl FnOnce(&mut Ctx) -> Result<R>) -> Result<R> {
+    let coauthoring = s.coauthoring;
     let d = s.doc_mut()?;
-    commit(d, |cx| {
+    commit(d, coauthoring, |cx| {
         let r = f(cx)?;
         crate::tables::sync_headers(cx);
         Ok(r)
@@ -391,7 +391,7 @@ fn wall_clock() -> std::time::Duration {
     std::time::SystemTime::UNIX_EPOCH.elapsed().unwrap_or_default()
 }
 
-pub(crate) fn commit<R>(d: &mut DocState, f: impl FnOnce(&mut Ctx) -> Result<R>) -> Result<R> {
+pub(crate) fn commit<R>(d: &mut DocState, coauthoring: bool, f: impl FnOnce(&mut Ctx) -> Result<R>) -> Result<R> {
     // `GRIDCRAFT_PROFILE` timing, never on wasm where the clock traps. `elapsed` on the epoch
     // reads the wall clock without the (disallowed) `now`.
     let t0 = if cfg!(target_arch = "wasm32") { None } else { std::env::var_os("GRIDCRAFT_PROFILE").map(|_| wall_clock()) };
@@ -433,62 +433,24 @@ pub(crate) fn commit<R>(d: &mut DocState, f: impl FnOnce(&mut Ctx) -> Result<R>)
     if changed.len() <= 200_000 {
         fit_rows.extend(changed.iter().map(|(s, c)| (*s, c.row)));
     }
-    // Recalculation can change a formula cell that the edit did not touch. Capture a fixed-size
-    // digest of displayed text, rather than cloning that text: many formulas can cheaply share
-    // one long Arc<str>, and expanding every display would make a count cap no memory bound.
-    // Only wrapped or oversized-font formulas can affect automatic row height.
-    let formula_displays = if structural || !changed.is_empty() {
-        let affects_height = |cell: &gridcraft_model::Cell| {
-            let style = wb.styles.get(cell.style);
-            cell.formula.is_some() && (style.align.wrap || style.font.size > gridcraft_model::DEFAULT_FONT_SIZE)
-        };
-        let formula_count =
-            wb.sheets.iter().fold(0usize, |count, sheet| count.saturating_add(sheet.cells.iter().filter(|(_, cell)| affects_height(cell)).count()));
-        if formula_count <= 200_000 {
-            let mut displays = Vec::with_capacity(formula_count);
-            for (sheet_index, sheet) in wb.sheets.iter().enumerate() {
-                displays.extend(sheet.cells.iter().filter(|(_, cell)| affects_height(cell)).map(|(cell_ref, _)| {
-                    let digest: [u8; 32] = Sha256::digest(crate::display::cell_text(&wb, sheet, cell_ref).as_bytes()).into();
-                    (sheet_index, cell_ref, digest)
-                }));
-            }
-            Some(displays)
-        } else {
-            // Above the fixed-size snapshot limit, fit each relevant row once. This keeps memory
-            // bounded by distinct rows and never drops correctness merely because a workbook has
-            // many formulas. CellStore iteration is row-major, so no set is needed.
-            for (sheet_index, sheet) in wb.sheets.iter().enumerate() {
-                let mut last_row = None;
-                for (cell_ref, _) in sheet.cells.iter().filter(|(_, cell)| affects_height(cell)) {
-                    if last_row != Some(cell_ref.row) {
-                        fit_rows.push((sheet_index, cell_ref.row));
-                        last_row = Some(cell_ref.row);
-                    }
-                }
-            }
-            None
-        }
-    } else {
-        None
-    };
     if let Some(t0) = t0 {
         eprintln!("commit: edit {:?}, {} changed", since(t0), changed.len());
     }
+    let mut fit_recalculated = |wb: &mut Workbook, cells: &[gridcraft_calc::Key]| fit_recalculated_formula_rows(wb, cells);
     if structural {
-        d.calc.recalc_all(&mut wb);
+        if coauthoring {
+            d.calc.recalc_all_reporting(&mut wb, &mut fit_recalculated);
+        } else {
+            d.calc.recalc_all(&mut wb);
+        }
     } else if !changed.is_empty() {
-        d.calc.cells_changed(&mut wb, &changed);
-    }
-    controls::sync_linked_values(&mut wb);
-    if let Some(formula_displays) = formula_displays {
-        for (sheet_index, cell_ref, before) in formula_displays {
-            let Some(sheet) = wb.sheet(sheet_index) else { continue };
-            let after: [u8; 32] = Sha256::digest(crate::display::cell_text(&wb, sheet, cell_ref).as_bytes()).into();
-            if sheet.cell(cell_ref).is_some_and(|cell| cell.formula.is_some()) && after != before {
-                fit_rows.push((sheet_index, cell_ref.row));
-            }
+        if coauthoring {
+            d.calc.cells_changed_reporting(&mut wb, &changed, &mut fit_recalculated);
+        } else {
+            d.calc.cells_changed(&mut wb, &changed);
         }
     }
+    controls::sync_linked_values(&mut wb);
     if let Some(t0) = t0 {
         eprintln!("commit: + recalc {:?}", since(t0));
     }
@@ -761,6 +723,25 @@ fn wrapped_line_count(line: &str, width: f32, size: f32, bold: bool) -> f32 {
         }
     }
     lines
+}
+
+/// Fits rows whose evaluated formulas can affect their automatic height. Calculation calls this
+/// with at most [`gridcraft_calc::RECALC_REPORT_BATCH_CELLS`] cells, so this row list never grows
+/// with the whole workbook.
+pub(crate) fn fit_recalculated_formula_rows(wb: &mut Workbook, cells: &[gridcraft_calc::Key]) {
+    let mut rows = Vec::with_capacity(cells.len());
+    for &(sheet_index, cell_ref) in cells {
+        let Some(cell) = wb.sheet(sheet_index).and_then(|sheet| sheet.cell(cell_ref)) else { continue };
+        let style = wb.styles.get(cell.style);
+        if cell.formula.is_some() && (style.align.wrap || style.font.size > gridcraft_model::DEFAULT_FONT_SIZE) {
+            rows.push((sheet_index, cell_ref.row));
+        }
+    }
+    rows.sort_unstable();
+    rows.dedup();
+    for (sheet_index, row) in rows {
+        auto_row_height(wb, sheet_index, row);
+    }
 }
 
 /// Recomputes an automatic row height from its content: the largest font, and wrapped text.

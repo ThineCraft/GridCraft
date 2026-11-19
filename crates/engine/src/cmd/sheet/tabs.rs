@@ -9,9 +9,10 @@ pub(super) fn insert_sheet(s: &mut Session, p: &Json) -> Result<Json> {
         None => s.doc()?.wb.next_sheet_name(),
     };
     s.doc()?.wb.check_sheet_name(&name, None).map_err(EngineError::Other)?;
+    let coauthoring = s.coauthoring;
     let d = s.doc_mut()?;
     let before = p.get("before").and_then(Json::as_u64).map(|v| v as usize);
-    let idx = edit_doc(d, |cx| {
+    let idx = edit_doc(d, coauthoring, |cx| {
         // Excel inserts before the active sheet; the "+" button appends after it.
         let at = before.unwrap_or(cx.wb.active_sheet() + 1).min(cx.wb.sheets.len());
         cx.wb.sheets.insert(at, Arc::new(Sheet::new(name.clone())));
@@ -32,8 +33,8 @@ pub(super) fn insert_sheet(s: &mut Session, p: &Json) -> Result<Json> {
     Ok(json!({"index": idx, "name": name}))
 }
 
-fn edit_doc<R>(d: &mut crate::DocState, f: impl FnOnce(&mut Ctx) -> Result<R>) -> Result<R> {
-    crate::cmd::commit(d, f)
+fn edit_doc<R>(d: &mut crate::DocState, coauthoring: bool, f: impl FnOnce(&mut Ctx) -> Result<R>) -> Result<R> {
+    crate::cmd::commit(d, coauthoring, f)
 }
 
 pub(super) fn delete_sheet(s: &mut Session, p: &Json) -> Result<Json> {
@@ -47,8 +48,9 @@ pub(super) fn delete_sheet(s: &mut Session, p: &Json) -> Result<Json> {
     }
     let name = d.wb.sheet(i).map(|s| s.name.clone()).unwrap_or_default();
     let order: Vec<String> = d.wb.sheets.iter().map(|s| s.name.clone()).collect();
+    let coauthoring = s.coauthoring;
     let d = s.doc_mut()?;
-    edit_doc(d, |cx| {
+    edit_doc(d, coauthoring, |cx| {
         cx.wb.sheets.remove(i);
         for si in 0..cx.wb.sheets.len() {
             let keys: Vec<(CellRef, Arc<gridcraft_model::Formula>)> =

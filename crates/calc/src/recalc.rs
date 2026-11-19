@@ -38,6 +38,12 @@ pub use graph::{FxHasher, Graph, Key};
 use graph::{HashMap, HashSet, Node, Taken};
 use pass_host::{PassHost, spills_as_before};
 
+/// Maximum evaluated cells passed to one recalculation observer call. Observers can do bounded
+/// per-cell work without copying a workbook-wide dirty set.
+pub const RECALC_REPORT_BATCH_CELLS: usize = 4_096;
+
+type RecalcReporter<'a> = dyn FnMut(&mut Workbook, &[Key]) + 'a;
+
 /// Calculation state kept beside a workbook.
 #[derive(Clone, Debug)]
 pub struct Calc {
@@ -48,6 +54,8 @@ pub struct Calc {
     /// Cells whose formulas have errors from cycles.
     pub circular: Vec<Key>,
     pub last_recalc_cells: usize,
+    /// Largest evaluated-cell batch reported by the most recent recalculation.
+    pub last_recalc_report_batch: usize,
     /// Whether formula evaluation has read the clock or random stream since tracking was reset.
     stamp_read: bool,
     /// The cells whose value is `#SPILL!`, kept so that finding the formulas an emptied cell or a
@@ -110,6 +118,7 @@ impl Default for Calc {
             fixed_now: None,
             circular: vec![],
             last_recalc_cells: 0,
+            last_recalc_report_batch: 0,
             stamp_read: false,
             spill_errors: SpillErrors::default(),
         }
@@ -301,6 +310,16 @@ impl Calc {
 
     /// Recalculates every formula (F9 / Ctrl+Alt+F9, and after loading).
     pub fn recalc_all(&mut self, wb: &mut Workbook) {
+        self.recalc_all_inner(wb, None);
+    }
+
+    /// Recalculates every formula and reports evaluated cells in fixed-size batches after their
+    /// values and spills have been written back.
+    pub fn recalc_all_reporting(&mut self, wb: &mut Workbook, report: &mut dyn FnMut(&mut Workbook, &[Key])) {
+        self.recalc_all_inner(wb, Some(report));
+    }
+
+    fn recalc_all_inner(&mut self, wb: &mut Workbook, report: Option<&mut RecalcReporter<'_>>) {
         self.rebuild(wb);
         // Spills are laid out again from the formulas where they are now (a structural edit moves
         // or deletes the formulas, not the values they spilled).
@@ -313,11 +332,21 @@ impl Calc {
             }
         }
         let all: Vec<Key> = self.graph.nodes.keys().copied().collect();
-        self.run(wb, all, true);
+        self.run(wb, all, true, report);
     }
 
     /// Updates the graph for cells whose content changed and recalculates what depends on them.
     pub fn cells_changed(&mut self, wb: &mut Workbook, changed: &[Key]) {
+        self.cells_changed_inner(wb, changed, None);
+    }
+
+    /// Updates the graph, recalculates dependents and reports evaluated cells in fixed-size
+    /// batches after their values and spills have been written back.
+    pub fn cells_changed_reporting(&mut self, wb: &mut Workbook, changed: &[Key], report: &mut dyn FnMut(&mut Workbook, &[Key])) {
+        self.cells_changed_inner(wb, changed, Some(report));
+    }
+
+    fn cells_changed_inner(&mut self, wb: &mut Workbook, changed: &[Key], report: Option<&mut RecalcReporter<'_>>) {
         let mut cleared: Vec<(usize, RangeRef)> = Vec::new();
         for &k in changed {
             if wb.sheet(k.0).and_then(|s| s.cell(k.1)).is_some_and(|c| c.value == Value::Error(CellError::Spill)) {
@@ -374,7 +403,7 @@ impl Calc {
         if wb.calc.mode == CalcMode::Manual {
             // Only the edited formulas themselves are evaluated.
             let own: Vec<Key> = changed.iter().copied().filter(|k| self.graph.nodes.contains_key(k)).collect();
-            self.run(wb, own, false);
+            self.run(wb, own, false, report);
             return;
         }
         let mut seeds: Vec<Key> = changed.to_vec();
@@ -440,7 +469,7 @@ impl Calc {
         let dirty = self.dirty_closure(wb, &seeds, &areas);
         let t1 = prof_now();
         let n = dirty.len();
-        self.run(wb, dirty, false);
+        self.run(wb, dirty, false, report);
         if std::env::var_os("GRIDCRAFT_PROFILE").is_some() {
             eprintln!("recalc: {} seeds, closure {} cells {:.1} ms, run {:.1} ms", seeds.len(), n, t1 - t0, prof_now() - t1);
         }
@@ -502,9 +531,10 @@ impl Calc {
     }
 
     /// Evaluates the dirty set and writes results (and spills) back.
-    fn run(&mut self, wb: &mut Workbook, mut dirty: Vec<Key>, full: bool) {
+    fn run(&mut self, wb: &mut Workbook, mut dirty: Vec<Key>, full: bool, mut report: Option<&mut RecalcReporter<'_>>) {
         let mut dynamic_again = !self.graph.dynamic.is_empty();
         self.last_recalc_cells = 0;
+        self.last_recalc_report_batch = 0;
         for _round in 0..8 {
             if dirty.is_empty() {
                 break;
@@ -560,6 +590,24 @@ impl Calc {
             }
             if full {
                 // Everything was already evaluated once; spill dependents need another pass.
+            }
+            if let Some(observer) = report.as_deref_mut() {
+                let mut batch = Vec::with_capacity(RECALC_REPORT_BATCH_CELLS);
+                for &key in &dirty {
+                    if !wb.sheet(key.0).and_then(|sheet| sheet.cell(key.1)).is_some_and(|cell| cell.formula.is_some()) {
+                        continue;
+                    }
+                    batch.push(key);
+                    if batch.len() == RECALC_REPORT_BATCH_CELLS {
+                        self.last_recalc_report_batch = self.last_recalc_report_batch.max(batch.len());
+                        observer(wb, &batch);
+                        batch.clear();
+                    }
+                }
+                if !batch.is_empty() {
+                    self.last_recalc_report_batch = self.last_recalc_report_batch.max(batch.len());
+                    observer(wb, &batch);
+                }
             }
             if std::env::var_os("GRIDCRAFT_PROFILE").is_some() {
                 eprintln!("  write-back {:.1} ms", prof_now() - tw);

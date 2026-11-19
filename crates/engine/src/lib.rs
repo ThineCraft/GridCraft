@@ -298,12 +298,24 @@ impl DocState {
         Self::new_configured(wb, path, title, trust, |_| {})
     }
     /// A fully calculated document whose calculation state is configured before its first pass.
-    /// Checkpoint loading uses this so volatile and iterative formulas never observe an
-    /// unstamped calculation first.
     pub(crate) fn new_configured(mut wb: Workbook, path: Option<String>, title: String, trust: Trust, configure: impl FnOnce(&mut Calc)) -> DocState {
         let mut calc = Calc::new();
         configure(&mut calc);
         calc.recalc_all(&mut wb);
+        Self::with_calc(wb, calc, path, title, trust)
+    }
+    /// A checkpoint document calculated under its shared stamp, fitting only rows of formulas
+    /// evaluated by that first pass.
+    pub(crate) fn new_checkpoint_configured(
+        mut wb: Workbook,
+        path: Option<String>,
+        title: String,
+        trust: Trust,
+        configure: impl FnOnce(&mut Calc),
+    ) -> DocState {
+        let mut calc = Calc::new();
+        configure(&mut calc);
+        calc.recalc_all_reporting(&mut wb, &mut cmd::fit_recalculated_formula_rows);
         Self::with_calc(wb, calc, path, title, trust)
     }
     /// A workbook as its file saved it: the dependency graph is built but nothing is

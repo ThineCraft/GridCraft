@@ -324,6 +324,21 @@ fn build(c: &Case) -> Result<Session, String> {
     Ok(s)
 }
 
+/// Applies a checkpoint case after the session has entered live mode, so dependent formula-row
+/// fitting exercises the co-author path rather than changing ordinary editing semantics.
+fn build_live(c: &Case) -> Result<GridLiveEditor, String> {
+    let mut editor = GridLiveEditor::new(fresh_session(&c.seq)).map_err(|error| error.to_string())?;
+    let strict = c.name.starts_with("edge-");
+    for (i, st) in c.seq.steps.iter().enumerate() {
+        if let Err(e) = apply(editor.session_mut(), st)
+            && strict
+        {
+            return Err(format!("{}: step {i} `{}` {} failed: {e}", c.name, st.id, st.params));
+        }
+    }
+    Ok(editor)
+}
+
 /// The workbook's bytes as the engine saves it (`file.saveBytes`).
 fn save(s: &mut Session) -> Result<Vec<u8>, String> {
     let r = s.execute("file.saveBytes", json!({"format": "xlsx"})).map_err(|e| format!("save failed: {e}"))?;
@@ -431,11 +446,7 @@ fn lossless(c: &Case) -> Result<(), String> {
 /// Writes and loads the case through the host-facing checkpoint surface, then compares both the
 /// entered state and a full calculation under the sequence's deterministic clock and RAND seed.
 fn checkpoint_lossless(c: &Case) -> Result<(), String> {
-    let session = build(c)?;
-    let mut source = GridCoauthor::new(
-        LiveConfig { format: GRIDCRAFT_LIVE_FORMAT.to_string(), crashed_at: None },
-        GridLiveEditor::new(session).map_err(|error| error.to_string())?,
-    );
+    let mut source = GridCoauthor::new(LiveConfig { format: GRIDCRAFT_LIVE_FORMAT.to_string(), crashed_at: None }, build_live(c)?);
     let mut server = DeterministicServer::new();
     server.join(&mut source, 10);
     let checkpoint = source.checkpoint(Seq(0)).map_err(|error| error.to_string())?;
@@ -680,36 +691,55 @@ fn checkpoint_load_stamps_the_first_iterative_calculation() {
 }
 
 #[test]
-fn formula_row_fitting_is_not_dropped_above_two_hundred_thousand_formulas() {
+fn ordinary_edit_does_not_fit_unrelated_formulas_or_change_saved_rows() {
     const FORMULAS: u32 = 200_001;
     let mut workbook = Workbook::new();
-    let wrapped = workbook.styles.derive(gridcraft_engine::model::StyleId::DEFAULT, |style| style.align.wrap = true);
-    let formula = Arc::new(Formula::new("$A$1"));
-    let cached: Arc<str> = Arc::from("an old shared value cached by every formula");
+    let large = workbook.styles.derive(gridcraft_engine::model::StyleId::DEFAULT, |style| style.font.size = 20.0);
+    let formula = Arc::new(Formula::new("$A$1048576"));
     let sheet = workbook.sheet_mut(0).expect("Sheet1 exists");
-    for index in 0..=FORMULAS {
-        let cell_ref = CellRef::new(index / gridcraft_engine::core::MAX_COLS, index % gridcraft_engine::core::MAX_COLS);
-        if cell_ref == CellRef::new(0, 0) {
-            continue;
-        }
-        sheet.set_cell(
-            cell_ref,
-            Cell {
-                value: Value::Text(cached.clone()),
-                formula: Some(formula.clone()),
-                style: if cell_ref == CellRef::new(1, 1) { wrapped } else { Default::default() },
-                ..Cell::default()
-            },
-        );
+    for index in 0..FORMULAS {
+        let offset = index + gridcraft_engine::core::MAX_COLS;
+        let cell_ref = CellRef::new(offset / gridcraft_engine::core::MAX_COLS, offset % gridcraft_engine::core::MAX_COLS);
+        sheet.set_cell(cell_ref, Cell { value: Value::text("cached"), formula: Some(formula.clone()), style: large, ..Cell::default() });
     }
-    let before = sheet.row_height(1);
+    let mut expected = workbook.clone();
+    expected.sheet_mut(0).expect("Sheet1 exists").set_value(CellRef::new(0, 0), Value::text("ordinary edit"));
+    let expected = io::save_bytes(&expected, "ordinary.xlsx").expect("expected workbook saves");
+
     let mut session = Session::new();
-    session.add_document(DocState::from_saved(workbook, None, "many-formulas.xlsx".into(), Trust::Local));
-    session
-        .execute("cell.set", json!({"cell":"A1","input":"a long shared value that wraps in the dependent formula row and must make that row taller"}))
-        .expect("precedent changes");
-    let after = session.doc().expect("document exists").wb.sheet(0).expect("Sheet1 exists").row_height(1);
-    assert!(after > before, "a formula-count allocation guard must not drop automatic row fitting");
+    session.add_document(DocState::from_saved(workbook, None, "ordinary.xlsx".into(), Trust::Local));
+    session.execute("cell.set", json!({"cell":"A1","input":"ordinary edit"})).expect("ordinary cell changes");
+    let actual = io::save_bytes(&session.doc().expect("document exists").wb, "ordinary.xlsx").expect("edited workbook saves");
+
+    assert!(actual == expected, "a non-live edit must keep unrelated formula rows exactly as the fork base did: {}", byte_diff(&actual, &expected));
+}
+
+#[test]
+fn coauthor_sparse_formula_row_fitting_stays_bounded_past_two_hundred_thousand_rows() {
+    const FORMULAS: u32 = 200_001;
+    let mut workbook = Workbook::new();
+    let large = workbook.styles.derive(gridcraft_engine::model::StyleId::DEFAULT, |style| style.font.size = 20.0);
+    let formula = Arc::new(Formula::new("$A$1"));
+    let sheet = workbook.sheet_mut(0).expect("Sheet1 exists");
+    sheet.set_value(CellRef::new(0, 0), Value::text("old"));
+    for row in 1..=FORMULAS {
+        sheet.set_cell(CellRef::new(row, 1), Cell { value: Value::text("old"), formula: Some(formula.clone()), style: large, ..Cell::default() });
+    }
+
+    let mut session = Session::new();
+    session.add_document(DocState::from_saved(workbook, None, "sparse-formulas.xlsx".into(), Trust::Local));
+    let mut editor = GridLiveEditor::new(session).expect("live editor builds");
+    editor.session_mut().execute("cell.set", json!({"cell":"A1","input":"new"})).expect("live precedent changes");
+
+    let document = editor.session().doc().expect("document exists");
+    let sheet = document.wb.sheet(0).expect("Sheet1 exists");
+    let last = CellRef::new(FORMULAS, 1);
+    assert_eq!(sheet.value(last), Value::text("new"), "the final sparse formula recalculates");
+    assert!(sheet.row_height(FORMULAS) > sheet.default_row_height, "the final changed formula row is fitted");
+    assert!(
+        document.calc.last_recalc_report_batch <= gridcraft_calc::RECALC_REPORT_BATCH_CELLS,
+        "reported evaluated formulas stay within the fixed batch bound"
+    );
 }
 
 #[test]
@@ -878,8 +908,8 @@ fn checkpoint_reload_preserves_wrapped_formula_row_height() {
         set("Sheet1", "A3", "a long line of text that wraps in a narrow column and goes on and on and on"),
     ];
     let case = case("wrapped-formula-grows", 1, steps);
-    let session = build(&case).expect("wrapped formula case builds");
-    let sheet = session.doc().expect("document exists").wb.sheet(0).expect("Sheet1 exists");
+    let editor = build_live(&case).expect("wrapped formula case builds");
+    let sheet = editor.session().doc().expect("document exists").wb.sheet(0).expect("Sheet1 exists");
     assert!(sheet.row_height(0) > sheet.default_row_height, "the live wrapped-formula row is fitted before checkpointing");
     checkpoint_lossless(&case).expect("wrapped formula row height survives checkpoint reload");
 }
