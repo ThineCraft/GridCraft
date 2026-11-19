@@ -118,8 +118,12 @@ pub struct GridLiveEditor {
 }
 
 impl GridLiveEditor {
-    pub fn new(session: Session) -> Result<Self, super::CoauthorError> {
+    pub fn new(mut session: Session) -> Result<Self, super::CoauthorError> {
+        if let Some(debugger) = &session.macro_debug {
+            return Err(EngineError::Other(format!("Macro '{}' is being debugged. Stop it before sharing this workbook.", debugger.name)).into());
+        }
         let ids = WorkbookIds::from_workbook(&session.doc()?.wb)?;
+        session.coauthoring = true;
         Ok(Self {
             session,
             ids,
@@ -184,6 +188,19 @@ impl GridLiveEditor {
     pub(super) fn clear_history_results(&mut self) {
         self.history_updates.clear();
         self.undo_reports.clear();
+    }
+
+    /// Runs a shared apply against shared state only. Edit ranges this person unlocked with a
+    /// password are personal: the other clients cannot see the unlock, so a shared change honours
+    /// the sheet protection as if no range were unlocked, and every client gives the entry the
+    /// same outcome. The person's unlocks are kept for their own unshared work.
+    fn with_shared_gates<T>(&mut self, apply: impl FnOnce(&mut Self) -> T) -> T {
+        let unlocked = self.session.doc_mut().map(|document| std::mem::take(&mut document.unlocked_ranges)).unwrap_or_default();
+        let result = apply(self);
+        if let Ok(document) = self.session.doc_mut() {
+            document.unlocked_ranges = unlocked;
+        }
+        result
     }
 
     /// Starts tracking clock and random reads and, for an ordered entry, puts its stamp in
@@ -368,7 +385,7 @@ impl LiveEditor for GridLiveEditor {
             // A guarded patch can bring back `=NOW()` or `=RAND()`: it calculates under the
             // entry's stamp exactly as an ordinary command does.
             let prior_stamp = self.begin_stamp(entry.stamp);
-            let result = execute_guarded_apply(&mut self.session, &mut self.ids, patch, entry.participant.0);
+            let result = self.with_shared_gates(|editor| execute_guarded_apply(&mut editor.session, &mut editor.ids, patch, entry.participant.0));
             let stamp_was_read = self.session.doc().is_ok_and(|document| document.calc.stamp_was_read());
             let read_stamp = entry.stamp.is_none() && stamp_was_read;
             let report = match result {
@@ -414,7 +431,7 @@ impl LiveEditor for GridLiveEditor {
         let command_id = self.test_command_override.unwrap_or(resolved.id.as_str());
         #[cfg(not(test))]
         let command_id = resolved.id.as_str();
-        let result = self.session.execute(command_id, resolved.params);
+        let result = self.with_shared_gates(|editor| editor.session.execute(command_id, resolved.params));
         let stamp_was_read = self.session.doc().is_ok_and(|document| document.calc.stamp_was_read());
         if let Err(error) = result {
             self.restore_shared(&before, view.as_ref(), true);

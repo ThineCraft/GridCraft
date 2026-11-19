@@ -760,3 +760,72 @@ fn every_identity_allocating_command_must_use_the_senders_identities() {
         assert_eq!(outcome.effect, Effect::Applied, "{id} with the sender's own identities applies");
     }
 }
+
+fn protected_budget_session() -> Session {
+    let mut session = session_with_sheets(&["Data"]);
+    session
+        .execute("review.allowEditRanges", json!({"sheet":"Data","action":"add","title":"Budget","range":"B1:B3","password":"pa55"}))
+        .expect("password range is added");
+    session.execute("review.protectSheet", json!({"sheet":"Data"})).expect("sheet is protected");
+    session
+}
+
+fn session_on(workbook: &gridcraft_model::Workbook) -> Session {
+    let mut session = Session::new();
+    session.add_document(gridcraft_engine::DocState::new(workbook.clone(), None, "Book1".into(), gridcraft_engine::Trust::Local));
+    session
+}
+
+#[test]
+fn a_locally_unlocked_edit_range_does_not_split_shared_content() {
+    let base = protected_budget_session();
+    let workbook = base.doc().expect("document exists").wb.as_ref().clone();
+    let mut alice_session = session_on(&workbook);
+    alice_session
+        .execute("review.allowEditRanges", json!({"sheet":"Data","action":"unlock","title":"Budget","password":"pa55"}))
+        .expect("Alice unlocks the range on her own client");
+    let mut alice = GridLiveEditor::new(alice_session).expect("Alice's editor builds");
+    let mut bob = GridLiveEditor::new(session_on(&workbook)).expect("Bob's editor builds");
+
+    let mut next = 0;
+    let change = prepare(&mut alice, 1, "cell.set", json!({"sheet":"Data","cell":"B1","input":"alice"}), &mut next);
+    let entry = remote_entry(&change.payload, 1);
+    let on_alice = alice.apply(&EntryView { own: true, ..entry }).expect("Alice handles her entry");
+    let on_bob = bob.apply(&remote_entry(&change.payload, 1)).expect("Bob handles Alice's entry");
+
+    assert_eq!(on_alice.effect, on_bob.effect, "every client gives the ordered entry the same outcome");
+    assert!(matches!(on_bob.effect, Effect::NoEffect { .. }), "a password range stays locked for shared changes");
+    assert_eq!(alice.agreement_digest(), bob.agreement_digest(), "entered content agrees");
+}
+
+fn debuggable_session() -> Session {
+    let mut session = session_with_sheets(&["Data"]);
+    let script = json!({"name":"M","output":{"onConflict":"overwrite"},"steps":[
+        {"command":"cell.set","params":{"cell":"C1","input":"x"}},
+        {"command":"cell.set","params":{"cell":"C2","input":"y"}}
+    ]});
+    let shared_macro = gridcraft_engine::macros::parse_macro(&script).expect("macro parses");
+    let document = session.doc_mut().expect("document exists");
+    Arc::make_mut(&mut document.wb).macros.push(shared_macro);
+    session
+}
+
+#[test]
+fn the_macro_debugger_cannot_lock_a_shared_workbook() {
+    let mut alice = GridLiveEditor::new(debuggable_session()).expect("Alice's editor builds");
+    let mut bob = GridLiveEditor::new(debuggable_session()).expect("Bob's editor builds");
+    let started = alice.session_mut().execute("macro.debug", json!({"name":"M"}));
+    assert!(started.is_err(), "a macro cannot be debugged on a shared workbook: {started:?}");
+
+    let mut next = 0;
+    let change = prepare(&mut bob, 1, "cell.set", json!({"sheet":"Data","cell":"A1","input":"bob"}), &mut next);
+    let on_alice = alice.apply(&remote_entry(&change.payload, 1)).expect("Alice handles Bob's entry");
+    let on_bob = bob.apply(&remote_entry(&change.payload, 1)).expect("Bob handles his entry");
+    assert_eq!(on_alice.effect, Effect::Applied);
+    assert_eq!(on_bob.effect, Effect::Applied);
+    assert_eq!(alice.agreement_digest(), bob.agreement_digest(), "entered content agrees");
+
+    let mut debugging = debuggable_session();
+    debugging.execute("macro.debug", json!({"name":"M"})).expect("debugging starts before sharing");
+    assert!(GridLiveEditor::new(debugging).is_err(), "a workbook being debugged cannot start sharing");
+}
