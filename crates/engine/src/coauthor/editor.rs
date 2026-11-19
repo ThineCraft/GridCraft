@@ -30,7 +30,14 @@ thread_local! {
 fn run_guarded_apply(session: &mut Session, _: &Json) -> crate::Result<Json> {
     let context = GUARDED_APPLY.with(|slot| slot.borrow_mut().take());
     let mut context = context.ok_or_else(|| EngineError::Other("the co-author guarded command is internal".into()))?;
+    let revision = session.doc()?.revision;
     let report = apply_guarded_patch(session, &mut context.ids, &context.patch)?;
+    if report.restored > 0 {
+        let document = session.doc_mut()?;
+        if document.revision == revision {
+            document.revision = document.revision.saturating_add(1);
+        }
+    }
     GUARDED_APPLY.with(|slot| {
         *slot.borrow_mut() = Some(context);
     });

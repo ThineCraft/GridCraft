@@ -5,7 +5,7 @@ use gridcraft_engine::coauthor::{
     GRIDCRAFT_LIVE_FORMAT, GridCoauthor, GridLiveEditor, GuardedPatch, GuardedStructural, PERSONAL_HISTORY_BYTES, PersonalHistory, SharedCommand,
     UndoAction, decode_entry,
 };
-use gridcraft_model::Style;
+use gridcraft_model::{SheetProtection, Style};
 use protocol::live::MAX_PAYLOAD_BYTES;
 use serde_json::json;
 use std::sync::Arc;
@@ -46,6 +46,20 @@ fn style(client: &GridCoauthor) -> Style {
     let document = client.editor().session().doc().expect("document exists");
     let sheet = document.wb.sheet(0).expect("sheet exists");
     document.wb.styles.get(sheet.style_id(CellRef::new(0, 0))).clone()
+}
+
+fn revision(client: &GridCoauthor) -> u64 {
+    client.editor().session().doc().expect("document exists").revision
+}
+
+fn protect_sheet(client: &mut GridCoauthor, protection: SheetProtection) {
+    let document = client.editor_mut().session_mut().doc_mut().expect("document exists");
+    Arc::make_mut(&mut document.wb).sheets.get_mut(0).map(Arc::make_mut).expect("sheet exists").protection = Some(protection);
+}
+
+fn protect_workbook_structure(client: &mut GridCoauthor) {
+    let document = client.editor_mut().session_mut().doc_mut().expect("document exists");
+    Arc::make_mut(&mut document.wb).protected_structure = true;
 }
 
 fn formula(client: &GridCoauthor, cell: &str) -> Option<String> {
@@ -205,6 +219,27 @@ fn formula_undo_resolves_references_after_a_row_is_inserted() {
 }
 
 #[test]
+fn formula_undo_turns_a_deleted_identity_into_ref() {
+    let mut server = DeterministicServer::new();
+    let mut alice = formula_client();
+    let mut bob = formula_client();
+    let alice_place = server.join(&mut alice, 10);
+    let bob_place = server.join(&mut bob, 20);
+
+    let replace = propose(&server, &mut alice, &alice_place, "cell.set", json!({"sheet":"Sheet1","cell":"B1","input":"replaced"}), 30);
+    order_and_deliver(&mut server, &replace, &mut alice, &mut bob, 40);
+    let delete = propose(&server, &mut bob, &bob_place, "home.deleteColumns", json!({"sheet":"Sheet1","cols":"A:A"}), 50);
+    order_and_deliver(&mut server, &delete, &mut bob, &mut alice, 60);
+
+    let undo = alice.undo(70).expect("formula undo submits");
+    let proposal = server.one_proposal(&alice_place, &undo);
+    order_and_deliver(&mut server, &proposal, &mut alice, &mut bob, 80);
+
+    assert_eq!(formula(&alice, "A1").as_deref(), Some("#REF!"));
+    assert_eq!(formula(&bob, "A1").as_deref(), Some("#REF!"));
+}
+
+#[test]
 fn content_undo_is_independent_of_later_number_formats() {
     let mut alice = numeric_client();
     let mut bob = numeric_client();
@@ -315,6 +350,7 @@ fn undo_is_personal_and_is_a_new_entry() {
     assert!(alice.history().has_undo_action(1));
     assert!(bob.history().has_undo_action(1));
 
+    let before_undo_revision = revision(&alice);
     let undo = alice.undo(70).expect("undo submits");
     let proposal = server.one_proposal(&alice_place, &undo);
     let third = order_and_deliver(&mut server, &proposal, &mut alice, &mut bob, 80);
@@ -322,13 +358,16 @@ fn undo_is_personal_and_is_a_new_entry() {
     assert_eq!(first.seq, Seq(1));
     assert_eq!(second.seq, Seq(2));
     assert_eq!(third.seq, Seq(3), "undo advances the shared log");
+    assert!(revision(&alice) > before_undo_revision, "a guarded undo advances the document revision used by caches");
     assert_eq!((alice.history().undo_len(), alice.history().redo_len()), (0, 1));
     assert_eq!((bob.history().undo_len(), bob.history().redo_len()), (1, 0), "Alice's undo never changes Bob's history");
 
+    let before_redo_revision = revision(&alice);
     let redo = alice.redo(90).expect("redo submits as a guarded entry");
     let proposal = server.one_proposal(&alice_place, &redo);
     let fourth = order_and_deliver(&mut server, &proposal, &mut alice, &mut bob, 100);
     assert_eq!(fourth.seq, Seq(4), "redo also advances the shared log");
+    assert!(revision(&alice) > before_redo_revision, "a guarded redo advances the document revision used by caches");
     assert_eq!(value(&alice), Value::text("alice"));
     assert!(style(&alice).font.bold, "redo changes content without removing Bob's format");
     assert_eq!((alice.history().undo_len(), alice.history().redo_len()), (1, 0));
@@ -457,7 +496,7 @@ fn guarded_payloads_are_closed_typed_and_bounded() {
     .to_string();
     assert!(decode_entry(&unknown_style).is_err(), "guarded styles accept only the typed StylePatch fields");
 
-    let duplicate = proposal.payload.replacen("\"version\":1", "\"version\":1,\"version\":1", 1);
+    let duplicate = proposal.payload.replacen("\"input\":", "\"input\":\"forged\",\"input\":", 1);
     assert!(decode_entry(&duplicate).is_err(), "duplicate keys must be refused before application");
 
     let mut nested = json!({"Cells":[]});
@@ -488,6 +527,247 @@ fn guarded_payloads_are_closed_typed_and_bounded() {
         "yearless forged literals are refused during application"
     );
     assert_eq!(value(&bob), Value::text("yearless-current"));
+}
+
+#[test]
+fn guarded_style_patches_obey_sheet_protection() {
+    let mut server = DeterministicServer::new();
+    let mut alice = client();
+    let mut bob = client();
+    let alice_place = server.join(&mut alice, 10);
+    server.join(&mut bob, 20);
+
+    let format = propose(&server, &mut alice, &alice_place, "home.fontSize", json!({"sheet":"Sheet1","range":"A1","size":18}), 30);
+    order_and_deliver(&mut server, &format, &mut alice, &mut bob, 40);
+    protect_sheet(&mut alice, SheetProtection::default());
+    protect_sheet(&mut bob, SheetProtection::default());
+    let before = alice.editor().session().doc().expect("document exists").wb.clone();
+    let undo = alice.undo(50).expect("format undo submits");
+    let proposal = server.one_proposal(&alice_place, &undo);
+    order_and_deliver(&mut server, &proposal, &mut alice, &mut bob, 60);
+    assert_eq!(alice.editor().session().doc().expect("document exists").wb, before);
+    assert_eq!(style(&alice).font.size, 18.0, "formatting forbidden by protection is left untouched");
+
+    let mut server = DeterministicServer::new();
+    let mut alice = client();
+    let mut bob = client();
+    let alice_place = server.join(&mut alice, 70);
+    server.join(&mut bob, 80);
+    let hide = propose(
+        &server,
+        &mut alice,
+        &alice_place,
+        "home.formatCells",
+        json!({"sheet":"Sheet1","range":"A1","style":{"protection":{"hidden":true}}}),
+        90,
+    );
+    order_and_deliver(&mut server, &hide, &mut alice, &mut bob, 100);
+    protect_sheet(&mut alice, SheetProtection { format_cells: true, ..SheetProtection::default() });
+    protect_sheet(&mut bob, SheetProtection { format_cells: true, ..SheetProtection::default() });
+    let before = alice.editor().session().doc().expect("document exists").wb.clone();
+    let undo = alice.undo(110).expect("hidden flag undo submits");
+    let proposal = server.one_proposal(&alice_place, &undo);
+    order_and_deliver(&mut server, &proposal, &mut alice, &mut bob, 120);
+    assert_eq!(alice.editor().session().doc().expect("document exists").wb, before);
+    assert!(style(&alice).protection.hidden, "a guarded patch cannot reveal a hidden formula");
+}
+
+#[test]
+fn guarded_content_patch_obeys_locked_cell_protection() {
+    let mut server = DeterministicServer::new();
+    let mut alice = client();
+    let mut bob = client();
+    let alice_place = server.join(&mut alice, 10);
+    server.join(&mut bob, 20);
+    let edit = propose(&server, &mut alice, &alice_place, "cell.set", json!({"sheet":"Sheet1","cell":"A1","input":"alice"}), 30);
+    order_and_deliver(&mut server, &edit, &mut alice, &mut bob, 40);
+    protect_sheet(&mut alice, SheetProtection::default());
+    protect_sheet(&mut bob, SheetProtection::default());
+    let before = alice.editor().session().doc().expect("document exists").wb.clone();
+    let undo = alice.undo(50).expect("content undo submits");
+    let proposal = server.one_proposal(&alice_place, &undo);
+    order_and_deliver(&mut server, &proposal, &mut alice, &mut bob, 60);
+    assert_eq!(alice.editor().session().doc().expect("document exists").wb, before);
+    assert_eq!(value(&alice), Value::text("alice"));
+}
+
+#[test]
+fn python_cell_does_not_match_an_empty_literal_guard() {
+    let mut server = DeterministicServer::new();
+    let mut alice = client();
+    let mut bob = client();
+    let alice_place = server.join(&mut alice, 10);
+    server.join(&mut bob, 20);
+    let edit = propose(&server, &mut alice, &alice_place, "cell.set", json!({"sheet":"Sheet1","cell":"A1","input":"alice"}), 30);
+    order_and_deliver(&mut server, &edit, &mut alice, &mut bob, 40);
+    let undo = alice.undo(50).expect("content undo submits");
+    let mut forged = server.one_proposal(&alice_place, &undo);
+    let mut payload: serde_json::Value = serde_json::from_str(&forged.payload).expect("guarded proposal is JSON");
+    payload["command"]["patch"]["Cells"][0]["expected"] = json!({"input":"","formula":false,"references":[]});
+    forged.payload = serde_json::to_string(&payload).expect("forged empty guard encodes");
+    bob.editor_mut()
+        .session_mut()
+        .execute("python.set", json!({"sheet":"Sheet1","cell":"A1","code":"secret = 1\nsecret"}))
+        .expect("later Python cell is set");
+    let ordered = server.order(&forged, 1_795_219_200_050, 43);
+    server.deliver(&mut bob, &ordered, 60);
+    let cell = bob
+        .editor()
+        .session()
+        .doc()
+        .expect("document exists")
+        .wb
+        .sheet(0)
+        .expect("sheet exists")
+        .cell(CellRef::new(0, 0))
+        .expect("Python cell remains");
+    assert_eq!(cell.py.as_ref().map(|python| python.code.as_str()), Some("secret = 1\nsecret"));
+}
+
+#[test]
+fn guarded_line_style_cannot_unlock_a_protected_column() {
+    let make_client = || {
+        let mut session = initial_session();
+        session
+            .execute("home.formatCells", json!({"sheet":"Sheet1","range":"A:A","style":{"protection":{"locked":false}}}))
+            .expect("column starts unlocked");
+        GridCoauthor::new(live_config(), GridLiveEditor::new(session).expect("editor builds"))
+    };
+    let mut server = DeterministicServer::new();
+    let mut alice = make_client();
+    let mut bob = make_client();
+    let alice_place = server.join(&mut alice, 10);
+    server.join(&mut bob, 20);
+    let lock = propose(
+        &server,
+        &mut alice,
+        &alice_place,
+        "home.formatCells",
+        json!({"sheet":"Sheet1","range":"A:A","style":{"protection":{"locked":true}}}),
+        30,
+    );
+    order_and_deliver(&mut server, &lock, &mut alice, &mut bob, 40);
+    protect_sheet(&mut alice, SheetProtection { format_cells: true, ..SheetProtection::default() });
+    protect_sheet(&mut bob, SheetProtection { format_cells: true, ..SheetProtection::default() });
+    let before = alice.editor().session().doc().expect("document exists").wb.clone();
+    let undo = alice.undo(50).expect("column lock undo submits");
+    let proposal = server.one_proposal(&alice_place, &undo);
+    order_and_deliver(&mut server, &proposal, &mut alice, &mut bob, 60);
+    assert_eq!(alice.editor().session().doc().expect("document exists").wb, before);
+    assert!(style(&alice).protection.locked, "the protected column stays locked");
+    assert!(
+        alice.editor_mut().session_mut().execute("cell.set", json!({"sheet":"Sheet1","cell":"A2","input":"forged"})).is_err(),
+        "a later cell edit cannot exploit a guarded line-style unlock"
+    );
+}
+
+#[test]
+fn guarded_structural_patches_obey_protection_gates() {
+    for (command, params) in [
+        ("home.insertRows", json!({"sheet":"Sheet1","rows":"1:1"})),
+        ("home.deleteRows", json!({"sheet":"Sheet1","rows":"1:1"})),
+        ("home.insertColumns", json!({"sheet":"Sheet1","cols":"A:A"})),
+        ("home.deleteColumns", json!({"sheet":"Sheet1","cols":"A:A"})),
+    ] {
+        let mut server = DeterministicServer::new();
+        let mut alice = client();
+        let mut bob = client();
+        let alice_place = server.join(&mut alice, 10);
+        server.join(&mut bob, 20);
+        let change = propose(&server, &mut alice, &alice_place, command, params, 30);
+        order_and_deliver(&mut server, &change, &mut alice, &mut bob, 40);
+        protect_sheet(&mut alice, SheetProtection::default());
+        protect_sheet(&mut bob, SheetProtection::default());
+        let before = alice.editor().session().doc().expect("document exists").wb.clone();
+        let undo = alice.undo(50).expect("structural undo submits");
+        let proposal = server.one_proposal(&alice_place, &undo);
+        order_and_deliver(&mut server, &proposal, &mut alice, &mut bob, 60);
+        assert_eq!(alice.editor().session().doc().expect("document exists").wb, before, "{command} reverse obeys protection");
+    }
+
+    for (command, params) in [("home.insertSheet", json!({"name":"Added"})), ("sheet.rename", json!({"sheet":"Sheet1","name":"Budget"}))] {
+        let mut server = DeterministicServer::new();
+        let mut alice = client();
+        let mut bob = client();
+        let alice_place = server.join(&mut alice, 10);
+        server.join(&mut bob, 20);
+        let change = propose(&server, &mut alice, &alice_place, command, params, 30);
+        order_and_deliver(&mut server, &change, &mut alice, &mut bob, 40);
+        protect_workbook_structure(&mut alice);
+        protect_workbook_structure(&mut bob);
+        let before = alice.editor().session().doc().expect("document exists").wb.clone();
+        let undo = alice.undo(50).expect("sheet undo submits");
+        let proposal = server.one_proposal(&alice_place, &undo);
+        order_and_deliver(&mut server, &proposal, &mut alice, &mut bob, 60);
+        assert_eq!(alice.editor().session().doc().expect("document exists").wb, before, "{command} reverse obeys structure protection");
+    }
+
+    let make_client = || {
+        let session = session_with_sheets(&["Deleted", "Other"]);
+        GridCoauthor::new(live_config(), GridLiveEditor::new(session).expect("editor builds"))
+    };
+    let mut server = DeterministicServer::new();
+    let mut alice = make_client();
+    let mut bob = make_client();
+    let alice_place = server.join(&mut alice, 10);
+    server.join(&mut bob, 20);
+    let deletion = propose(&server, &mut alice, &alice_place, "home.deleteSheet", json!({"sheet":"Deleted"}), 30);
+    order_and_deliver(&mut server, &deletion, &mut alice, &mut bob, 40);
+    protect_workbook_structure(&mut alice);
+    protect_workbook_structure(&mut bob);
+    let before = alice.editor().session().doc().expect("document exists").wb.clone();
+    let undo = alice.undo(50).expect("whole-action undo submits");
+    let proposal = server.one_proposal(&alice_place, &undo);
+    order_and_deliver(&mut server, &proposal, &mut alice, &mut bob, 60);
+    assert_eq!(alice.editor().session().doc().expect("document exists").wb, before, "WholeAction obeys workbook structure protection");
+}
+
+#[test]
+fn duplicate_guarded_line_leaves_are_refused_quickly_without_changes() {
+    let mut server = DeterministicServer::new();
+    let mut alice = client();
+    let mut bob = client();
+    let alice_place = server.join(&mut alice, 10);
+    server.join(&mut bob, 20);
+    let format = propose(&server, &mut alice, &alice_place, "home.fillColor", json!({"sheet":"Sheet1","range":"A:A","color":"#123456"}), 30);
+    order_and_deliver(&mut server, &format, &mut alice, &mut bob, 40);
+    let undo = alice.undo(50).expect("column format undo submits");
+    let mut forged = server.one_proposal(&alice_place, &undo);
+    let mut payload: serde_json::Value = serde_json::from_str(&forged.payload).expect("guarded proposal is JSON");
+    let leaf = payload["command"]["patch"]["Styles"][0].clone();
+    payload["command"]["patch"]["Styles"] = serde_json::Value::Array(vec![leaf; 500]);
+    forged.payload = serde_json::to_string(&payload).expect("forged duplicate guards encode");
+    assert!(forged.payload.len() <= MAX_PAYLOAD_BYTES, "the hostile entry stays within the wire limit");
+    let before = bob.editor().session().doc().expect("document exists").wb.clone();
+    let ordered = server.order(&forged, 1_795_219_200_050, 43);
+    let started = std::time::SystemTime::UNIX_EPOCH.elapsed().unwrap_or_default();
+    let step = server.deliver(&mut bob, &ordered, 60);
+    let elapsed = std::time::SystemTime::UNIX_EPOCH.elapsed().unwrap_or_default().saturating_sub(started);
+    assert!(elapsed < std::time::Duration::from_secs(1), "duplicate guards are rejected before repeated line scans");
+    assert!(step.events.iter().any(|event| matches!(event, Event::Applied { effect: Effect::NoEffect { .. }, .. })));
+    assert_eq!(bob.editor().session().doc().expect("document exists").wb, before);
+}
+
+#[test]
+fn duplicate_guards_inside_a_structural_patch_are_refused_without_changes() {
+    let mut server = DeterministicServer::new();
+    let mut alice = two_sheet_structural_client();
+    let mut bob = two_sheet_structural_client();
+    let alice_place = server.join(&mut alice, 10);
+    server.join(&mut bob, 20);
+    let deletion = propose(&server, &mut alice, &alice_place, "home.deleteRows", json!({"sheet":"Sheet1","rows":"2:2"}), 30);
+    order_and_deliver(&mut server, &deletion, &mut alice, &mut bob, 40);
+    let undo = alice.undo(50).expect("row delete undo submits");
+    let mut forged = server.one_proposal(&alice_place, &undo);
+    let mut payload: serde_json::Value = serde_json::from_str(&forged.payload).expect("structural guard is JSON");
+    let first = payload["command"]["patch"]["Structural"]["state"]["cells"][0].clone();
+    payload["command"]["patch"]["Structural"]["state"]["cells"].as_array_mut().expect("structural cell guards are an array").push(first);
+    forged.payload = serde_json::to_string(&payload).expect("duplicate structural guard encodes");
+    let before = bob.editor().session().doc().expect("document exists").wb.clone();
+    let ordered = server.order(&forged, 1_795_219_200_050, 43);
+    let step = server.deliver(&mut bob, &ordered, 60);
+    assert!(step.events.iter().any(|event| matches!(event, Event::Applied { effect: Effect::NoEffect { .. }, .. })));
+    assert_eq!(bob.editor().session().doc().expect("document exists").wb, before);
 }
 
 #[test]

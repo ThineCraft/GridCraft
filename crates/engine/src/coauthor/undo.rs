@@ -4,6 +4,7 @@ use std::sync::Arc;
 use collab_live::ids::{LiveId, Lookup};
 use gridcraft_core::{CellRef, RangeRef, Value};
 use gridcraft_model::{Cell, DefinedName, Formula, LineInfo, Sheet, Style, StyleId, Workbook};
+use protocol::live::MAX_PAYLOAD_BYTES;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value as Json;
 use sha2::{Digest, Sha256};
@@ -15,6 +16,10 @@ use crate::{EngineError, Session};
 
 pub const PERSONAL_HISTORY_ACTIONS: usize = 100;
 pub const PERSONAL_HISTORY_BYTES: usize = 128 * 1024 * 1024;
+/// Every guard needs substantially more than 64 wire bytes. Deriving the limit from the live
+/// payload ceiling keeps validation bounded even if a future compact representation gets close
+/// to that floor.
+const MAX_GUARDS_PER_ENTRY: usize = MAX_PAYLOAD_BYTES / 64;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
@@ -1019,7 +1024,7 @@ enum ResolvedGuard {
     Style { target: ResolvedStyleTarget, path: Vec<String>, expected: Json, restore: Json },
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 enum ResolvedStyleTarget {
     Cell { sheet: usize, cell: CellRef },
     Row { sheet: usize, row: u32 },
@@ -1027,21 +1032,27 @@ enum ResolvedStyleTarget {
 }
 
 pub(crate) fn apply_guarded_patch(session: &mut Session, ids: &mut WorkbookIds, patch: &GuardedPatch) -> Result<UndoReport, EngineError> {
+    validate_guarded_patch(patch)?;
     if let GuardedPatch::Structural(structural) = patch {
         return apply_structural_patch(session, ids, structural);
     }
     let mut guards = Vec::new();
     let mut left = 0usize;
     resolve_guards(ids, session, patch, &mut guards, &mut left)?;
+    check_guard_protection(session, &guards)?;
+    let line_cells = index_guarded_line_cells(&session.doc()?.wb, &guards);
     let restored = crate::cmd::edit(session, |cx| {
         let mut restored = 0usize;
+        let mut changed = BTreeSet::new();
+        let mut fit_rows = BTreeSet::new();
         for guard in &guards {
             match guard {
                 ResolvedGuard::CellContent { sheet, cell, expected, expected_formula, restore, restore_formula } => {
                     let current = cx.wb.sheet(*sheet).and_then(|sheet| sheet.cell(*cell));
+                    let current_is_python = current.is_some_and(|cell| cell.py.is_some());
                     let current_formula = current.is_some_and(|cell| cell.formula.is_some());
                     let current_input = current.filter(|cell| cell.py.is_none()).map(stable_content_input).unwrap_or_default();
-                    if current_formula != *expected_formula || &current_input != expected {
+                    if current_is_python || current_formula != *expected_formula || &current_input != expected {
                         left = left.saturating_add(1);
                         continue;
                     }
@@ -1056,7 +1067,7 @@ pub(crate) fn apply_guarded_patch(session: &mut Session, ids: &mut WorkbookIds, 
                             cx.sheet_mut(*sheet)?.remove_cell(*cell);
                         }
                     }
-                    cx.changed.push((*sheet, *cell));
+                    changed.insert((*sheet, *cell));
                     restored = restored.saturating_add(1);
                 }
                 ResolvedGuard::Style { target, path, expected, restore } => {
@@ -1070,14 +1081,201 @@ pub(crate) fn apply_guarded_patch(session: &mut Session, ids: &mut WorkbookIds, 
                     let style: Style = serde_json::from_value(current).map_err(|error| EngineError::Other(error.to_string()))?;
                     let style_id = cx.wb.styles.intern(style);
                     set_resolved_style(cx, *target, style_id)?;
+                    match target {
+                        ResolvedStyleTarget::Cell { sheet, cell } => {
+                            changed.insert((*sheet, *cell));
+                            fit_rows.insert((*sheet, cell.row));
+                        }
+                        ResolvedStyleTarget::Row { sheet, row } => {
+                            for cell in line_cells.get(target).into_iter().flatten() {
+                                changed.insert((*sheet, *cell));
+                            }
+                            fit_rows.insert((*sheet, *row));
+                        }
+                        ResolvedStyleTarget::Column { sheet, .. } => {
+                            for cell in line_cells.get(target).into_iter().flatten() {
+                                changed.insert((*sheet, *cell));
+                                fit_rows.insert((*sheet, cell.row));
+                            }
+                        }
+                    }
                     restored = restored.saturating_add(1);
                 }
             }
         }
+        cx.changed.extend(changed);
+        cx.fit_rows.extend(fit_rows);
         Ok(restored)
     })?;
     let reason = (left > 0).then(|| "Some fields were left because they changed after this action.".to_string());
     Ok(UndoReport { restored, left, reason })
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum GuardKey {
+    Content(CellId),
+    Style(StyleTarget, Vec<String>),
+    Line(StyleTarget),
+}
+
+#[derive(Default)]
+struct GuardValidator {
+    count: usize,
+    keys: BTreeSet<GuardKey>,
+}
+
+impl GuardValidator {
+    fn add(&mut self, key: GuardKey) -> Result<(), EngineError> {
+        self.count_items(1)?;
+        if !self.keys.insert(key) {
+            return Err(EngineError::Other("a guarded patch repeats a target and path".into()));
+        }
+        Ok(())
+    }
+
+    fn count_items(&mut self, count: usize) -> Result<(), EngineError> {
+        self.count = self.count.saturating_add(count);
+        if self.count > MAX_GUARDS_PER_ENTRY {
+            return Err(EngineError::Other(format!("a guarded patch may contain at most {MAX_GUARDS_PER_ENTRY} guards")));
+        }
+        Ok(())
+    }
+}
+
+fn validate_guarded_patch(patch: &GuardedPatch) -> Result<(), EngineError> {
+    let mut validator = GuardValidator::default();
+    validate_patch_fields(patch, &mut validator)
+}
+
+fn validate_patch_fields(patch: &GuardedPatch, validator: &mut GuardValidator) -> Result<(), EngineError> {
+    match patch {
+        GuardedPatch::Cells(values) => validate_cell_guards(values, validator)?,
+        GuardedPatch::Styles(values) => validate_style_guards(values, validator)?,
+        GuardedPatch::Composite(values) => {
+            for value in values {
+                validate_patch_fields(value, validator)?;
+            }
+        }
+        GuardedPatch::Structural(structural) => validate_structural_guards(structural, validator)?,
+    }
+    Ok(())
+}
+
+fn validate_structural_guards(structural: &GuardedStructural, validator: &mut GuardValidator) -> Result<(), EngineError> {
+    match structural {
+        GuardedStructural::InsertRows { state }
+        | GuardedStructural::DeleteRows { state }
+        | GuardedStructural::InsertColumns { state }
+        | GuardedStructural::DeleteColumns { state } => {
+            validator.count_items(state.affected.len().saturating_add(state.fillers.len()))?;
+            let affected: BTreeSet<LiveId> = state.affected.iter().copied().collect();
+            let fillers: BTreeSet<LiveId> = state.fillers.iter().copied().collect();
+            if affected.len() != state.affected.len() || fillers.len() != state.fillers.len() {
+                return Err(EngineError::Other("a structural guarded patch repeats an identity".into()));
+            }
+            validate_cell_guards(&state.cells, validator)?;
+            validate_style_guards(&state.styles, validator)?;
+            for line in &state.lines {
+                validator.add(GuardKey::Line(line.target))?;
+            }
+        }
+        GuardedStructural::AddSheet { snapshot, .. } => {
+            validator.count_items(1)?;
+            validate_snapshot_formula_guards(snapshot, validator)?;
+        }
+        GuardedStructural::RenameSheet { .. } => {
+            validator.count_items(1)?;
+        }
+        GuardedStructural::WholeAction { before_state, after_state, .. } => {
+            validate_whole_state_guards(before_state, validator)?;
+            validate_whole_state_guards(after_state, validator)?;
+        }
+    }
+    Ok(())
+}
+
+fn validate_cell_guards(values: &[GuardedCellContent], validator: &mut GuardValidator) -> Result<(), EngineError> {
+    for value in values {
+        validator.add(GuardKey::Content(value.target))?;
+    }
+    Ok(())
+}
+
+fn validate_style_guards(values: &[GuardedStyleLeaf], validator: &mut GuardValidator) -> Result<(), EngineError> {
+    for value in values {
+        validator.add(GuardKey::Style(value.target, value.path.clone()))?;
+    }
+    Ok(())
+}
+
+fn validate_whole_state_guards(state: &GuardedWholeState, validator: &mut GuardValidator) -> Result<(), EngineError> {
+    let mut sheets = BTreeSet::new();
+    for guarded in &state.sheets {
+        if !sheets.insert(guarded.sheet) {
+            return Err(EngineError::Other("a guarded whole-workbook state repeats a sheet".into()));
+        }
+        validator.count_items(1)?;
+        validate_snapshot_formula_guards(&guarded.snapshot, validator)?;
+    }
+    Ok(())
+}
+
+fn validate_snapshot_formula_guards(snapshot: &GuardedSheetSnapshot, validator: &mut GuardValidator) -> Result<(), EngineError> {
+    let mut targets = BTreeSet::new();
+    for formula in &snapshot.formulas {
+        if !targets.insert(formula.target) {
+            return Err(EngineError::Other("a guarded sheet snapshot repeats a formula target".into()));
+        }
+        validator.count_items(1)?;
+    }
+    Ok(())
+}
+
+fn check_guard_protection(session: &Session, guards: &[ResolvedGuard]) -> Result<(), EngineError> {
+    let wb = &session.doc()?.wb;
+    for guard in guards {
+        let ResolvedGuard::Style { target, path, .. } = guard else { continue };
+        let sheet = match target {
+            ResolvedStyleTarget::Cell { sheet, .. } | ResolvedStyleTarget::Row { sheet, .. } | ResolvedStyleTarget::Column { sheet, .. } => *sheet,
+        };
+        let Some(protection) = wb.sheet(sheet).and_then(|sheet| sheet.protection.as_ref()) else { continue };
+        if !protection.format_cells {
+            return Err(EngineError::Other("The cell or chart you're trying to change is on a protected sheet.".into()));
+        }
+        if path.first().is_some_and(|part| part == "protection") {
+            return Err(EngineError::Other("You can't change cell protection on a protected sheet. Unprotect it first.".into()));
+        }
+    }
+    Ok(())
+}
+
+fn index_guarded_line_cells(wb: &Workbook, guards: &[ResolvedGuard]) -> BTreeMap<ResolvedStyleTarget, Vec<CellRef>> {
+    let mut wanted: BTreeMap<usize, (BTreeSet<u32>, BTreeSet<u32>)> = BTreeMap::new();
+    for guard in guards {
+        let ResolvedGuard::Style { target, .. } = guard else { continue };
+        match target {
+            ResolvedStyleTarget::Row { sheet, row } => {
+                wanted.entry(*sheet).or_default().0.insert(*row);
+            }
+            ResolvedStyleTarget::Column { sheet, col } => {
+                wanted.entry(*sheet).or_default().1.insert(*col);
+            }
+            ResolvedStyleTarget::Cell { .. } => {}
+        }
+    }
+    let mut indexed = BTreeMap::new();
+    for (sheet_index, (rows, cols)) in wanted {
+        let Some(sheet) = wb.sheet(sheet_index) else { continue };
+        for (cell, _) in sheet.cells.iter() {
+            if rows.contains(&cell.row) {
+                indexed.entry(ResolvedStyleTarget::Row { sheet: sheet_index, row: cell.row }).or_insert_with(Vec::new).push(cell);
+            }
+            if cols.contains(&cell.col) {
+                indexed.entry(ResolvedStyleTarget::Column { sheet: sheet_index, col: cell.col }).or_insert_with(Vec::new).push(cell);
+            }
+        }
+    }
+    indexed
 }
 
 fn guarded_input_to_cell(input: &str, formula: bool, style: StyleId, wb: &mut Workbook) -> Result<Option<Cell>, EngineError> {
@@ -1535,28 +1733,12 @@ fn set_resolved_style(cx: &mut crate::cmd::Ctx<'_>, target: ResolvedStyleTarget,
     match target {
         ResolvedStyleTarget::Cell { sheet, cell } => {
             cx.sheet_mut(sheet)?.set_style(cell, style);
-            cx.changed.push((sheet, cell));
-            cx.fit_rows.push((sheet, cell.row));
         }
         ResolvedStyleTarget::Row { sheet, row } => {
-            let cells: Vec<CellRef> = cx
-                .wb
-                .sheet(sheet)
-                .map(|sheet| sheet.cells.row(row, 0, gridcraft_core::MAX_COLS - 1).map(|(col, _)| CellRef::new(row, col)).collect())
-                .unwrap_or_default();
             cx.sheet_mut(sheet)?.rows.entry(row).or_default().style = Some(style);
-            cx.changed.extend(cells.iter().map(|cell| (sheet, *cell)));
-            cx.fit_rows.push((sheet, row));
         }
         ResolvedStyleTarget::Column { sheet, col } => {
-            let cells: Vec<CellRef> = cx
-                .wb
-                .sheet(sheet)
-                .map(|sheet| sheet.cells.iter().filter(|(cell, _)| cell.col == col).map(|(cell, _)| cell).collect())
-                .unwrap_or_default();
             cx.sheet_mut(sheet)?.cols.entry(col).or_default().style = Some(style);
-            cx.changed.extend(cells.iter().map(|cell| (sheet, *cell)));
-            cx.fit_rows.extend(cells.iter().map(|cell| (sheet, cell.row)));
         }
     }
     Ok(())
