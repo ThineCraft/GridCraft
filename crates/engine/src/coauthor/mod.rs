@@ -19,14 +19,14 @@ pub use command::{
 };
 pub use editor::{GridLiveEditor, GridSnapshot, SharedDocumentSnapshot};
 pub use ids::{
-    CellId, IdentityDelete, IdentityInsert, IdentityPosition, IdentityRange, IdentityRangeKind, IdentityRanges, IdentitySheetInsert,
+    CellId, IdentityDelete, IdentityInsert, IdentityPosition, IdentityRange, IdentityRangeKind, IdentityRanges, IdentityRun, IdentitySheetInsert,
     IdentityStructural, SheetIds, TargetGone, WorkbookIds,
 };
 pub use undo::{
-    GuardedCellContent, GuardedCellInput, GuardedPatch, GuardedStructural, GuardedStyleLeaf, GuardedValue, HistoryError, PERSONAL_HISTORY_ACTIONS,
-    PERSONAL_HISTORY_BYTES, PersonalHistory, StyleTarget, UndoAction, UndoReport,
+    GuardedAxisState, GuardedCellContent, GuardedCellInput, GuardedLineFields, GuardedLineState, GuardedPatch, GuardedStructural, GuardedStyleLeaf,
+    GuardedValue, HistoryError, PERSONAL_HISTORY_ACTIONS, PERSONAL_HISTORY_BYTES, PersonalHistory, StyleTarget, UndoAction, UndoReport,
 };
-use undo::{apply_guarded_patch, build_undo_action};
+use undo::{apply_guarded_patch, build_undo_action, unrecorded_action};
 
 /// The format name negotiated with a live room.
 pub const GRIDCRAFT_LIVE_FORMAT: &str = "gridcraft/1";

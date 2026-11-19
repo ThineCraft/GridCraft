@@ -1,16 +1,16 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
-use std::sync::Arc;
 
 use collab_live::ids::{LiveId, Lookup};
 use gridcraft_core::{CellRef, RangeRef, Value};
-use gridcraft_model::{Cell, DefinedName, Formula, LineInfo, Sheet, Style, StyleId, Workbook};
+use gridcraft_model::{Cell, Formula, LineInfo, Style, StyleId, Workbook};
 use protocol::live::MAX_PAYLOAD_BYTES;
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use serde::{Deserialize, Serialize};
 use serde_json::Value as Json;
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 use super::command::{StylePatch, encode_formula_in_workbook, resolve_cell_input};
+use super::ids::{IdentityRun, compress_runs, live_block_position, tail_runs, validate_runs};
 use super::{CellId, CoauthorError, IdentityPosition, IdentityReference, SharedCommand, TargetGone, WorkbookIds};
 use crate::{EngineError, Session};
 
@@ -56,12 +56,81 @@ pub struct GuardedStyleLeaf {
     pub restore: StylePatch,
 }
 
+/// The settings of one row or column apart from its style. The style travels separately, as
+/// typed style leaves through the protection-checked style path, so no style index is shared.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct GuardedLineFields {
+    pub size: Option<f32>,
+    pub hidden: bool,
+    pub outline: u8,
+    pub collapsed: bool,
+    pub custom: bool,
+}
+
+impl GuardedLineFields {
+    fn of(info: Option<&LineInfo>) -> Self {
+        info.map_or_else(Self::default, |info| Self {
+            size: info.size,
+            hidden: info.hidden,
+            outline: info.outline,
+            collapsed: info.collapsed,
+            custom: info.custom,
+        })
+    }
+
+    fn write_to(self, info: &mut LineInfo) {
+        info.size = self.size;
+        info.hidden = self.hidden;
+        info.outline = self.outline;
+        info.collapsed = self.collapsed;
+        info.custom = self.custom;
+    }
+
+    /// The ranges the ordinary row-height, column-width and outline commands accept.
+    fn is_valid(self) -> bool {
+        self.size.is_none_or(|size| size.is_finite() && (0.0..=MAX_LINE_SIZE).contains(&size)) && self.outline <= MAX_OUTLINE_LEVEL
+    }
+}
+
+/// Guard digests travel as 64 lowercase hex characters, so a patch's size does not depend on
+/// the digest's bytes.
+mod digest_hex {
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S: Serializer>(digest: &[u8; 32], serializer: S) -> Result<S::Ok, S::Error> {
+        let mut text = String::with_capacity(64);
+        for byte in digest {
+            text.push_str(&format!("{byte:02x}"));
+        }
+        serializer.serialize_str(&text)
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<[u8; 32], D::Error> {
+        let text = String::deserialize(deserializer)?;
+        let bytes = text.as_bytes();
+        if bytes.len() != 64 || !bytes.iter().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(byte)) {
+            return Err(serde::de::Error::custom("a guard digest is 64 lowercase hex characters"));
+        }
+        let mut digest = [0u8; 32];
+        for (slot, pair) in digest.iter_mut().zip(bytes.chunks(2)) {
+            let pair = std::str::from_utf8(pair).map_err(serde::de::Error::custom)?;
+            *slot = u8::from_str_radix(pair, 16).map_err(serde::de::Error::custom)?;
+        }
+        Ok(digest)
+    }
+}
+
+/// Column widths are capped at 1,800 pixels; row heights (409.5 points) are below that.
+const MAX_LINE_SIZE: f32 = 1800.0;
+const MAX_OUTLINE_LEVEL: u8 = 7;
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct GuardedLineState {
     pub target: StyleTarget,
-    pub expected: Option<LineInfo>,
-    pub restore: Option<LineInfo>,
+    pub expected: GuardedLineFields,
+    pub restore: GuardedLineFields,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -69,116 +138,30 @@ pub struct GuardedLineState {
 pub struct GuardedAxisState {
     pub sheet: LiveId,
     pub before: IdentityPosition,
-    pub affected: Vec<LiveId>,
-    pub fillers: Vec<LiveId>,
+    /// The identities the original action inserted or deleted, as runs in position order.
+    pub affected: Vec<IdentityRun>,
+    /// The identities at the end of the axis that the original action pushed off or appended.
+    pub fillers: Vec<IdentityRun>,
     pub expected_present: bool,
+    #[serde(with = "digest_hex")]
     pub entered: [u8; 32],
+    #[serde(with = "digest_hex")]
     pub filler_entered: [u8; 32],
     pub cells: Vec<GuardedCellContent>,
     pub styles: Vec<GuardedStyleLeaf>,
     pub lines: Vec<GuardedLineState>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-#[serde(deny_unknown_fields)]
-pub struct GuardedSheetState {
-    pub sheet: LiveId,
-    pub at: u32,
-    pub entered: [u8; 32],
-    pub rows: collab_live::ids::OrderedIds,
-    pub cols: collab_live::ids::OrderedIds,
-    pub snapshot: GuardedSheetSnapshot,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-#[serde(deny_unknown_fields)]
-pub struct GuardedSheetFormula {
-    pub target: CellId,
-    pub input: GuardedCellInput,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct GuardedSheetSnapshot {
-    sheet: Sheet,
-    file_id: u32,
-    formulas: Vec<GuardedSheetFormula>,
-}
-
-#[derive(Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct GuardedSheetSnapshotWire {
-    version: u8,
-    sheet: Sheet,
-    file_id: u32,
-    formulas: Vec<GuardedSheetFormula>,
-}
-
-impl Serialize for GuardedSheetSnapshot {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let encoded = serde_json::to_string(&GuardedSheetSnapshotWire {
-            version: 1,
-            sheet: self.sheet.clone(),
-            file_id: self.file_id,
-            formulas: self.formulas.clone(),
-        })
-        .map_err(serde::ser::Error::custom)?;
-        serializer.serialize_str(&encoded)
-    }
-}
-
-impl<'de> Deserialize<'de> for GuardedSheetSnapshot {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let encoded = String::deserialize(deserializer)?;
-        let wire: GuardedSheetSnapshotWire = serde_json::from_str(&encoded).map_err(serde::de::Error::custom)?;
-        if wire.version != 1 {
-            return Err(serde::de::Error::custom("unsupported guarded sheet snapshot version"));
-        }
-        Ok(Self { sheet: wire.sheet, file_id: wire.file_id, formulas: wire.formulas })
-    }
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-#[serde(deny_unknown_fields)]
-pub struct GuardedWholeState {
-    pub sheets: Vec<GuardedSheetState>,
-    pub names: Vec<DefinedName>,
+    /// Python cells the reverse cannot restore. They are left alone and reported.
+    pub python_left: u32,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
 pub enum GuardedStructural {
-    InsertRows {
-        state: GuardedAxisState,
-    },
-    DeleteRows {
-        state: GuardedAxisState,
-    },
-    InsertColumns {
-        state: GuardedAxisState,
-    },
-    DeleteColumns {
-        state: GuardedAxisState,
-    },
-    AddSheet {
-        sheet: LiveId,
-        before: IdentityPosition,
-        expected_present: bool,
-        entered: [u8; 32],
-        snapshot: Box<GuardedSheetSnapshot>,
-    },
-    RenameSheet {
-        sheet: LiveId,
-        expected: String,
-        restore: String,
-    },
-    WholeAction {
-        label: String,
-        sheet: LiveId,
-        before: IdentityPosition,
-        expected_after: bool,
-        before_state: Box<GuardedWholeState>,
-        after_state: Box<GuardedWholeState>,
-    },
+    InsertRows { state: GuardedAxisState },
+    DeleteRows { state: GuardedAxisState },
+    InsertColumns { state: GuardedAxisState },
+    DeleteColumns { state: GuardedAxisState },
+    RenameSheet { sheet: LiveId, expected: String, restore: String },
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -187,6 +170,8 @@ pub enum GuardedPatch {
     Styles(Vec<GuardedStyleLeaf>),
     Composite(Vec<GuardedPatch>),
     Structural(Box<GuardedStructural>),
+    #[serde(skip)]
+    LocalRefusal(String),
 }
 
 impl GuardedPatch {
@@ -211,6 +196,7 @@ impl GuardedPatch {
             ),
             Self::Composite(values) => Self::Composite(values.iter().map(Self::reversed).collect()),
             Self::Structural(structural) => Self::Structural(Box::new(structural.reversed())),
+            Self::LocalRefusal(reason) => Self::LocalRefusal(reason.clone()),
         }
     }
 
@@ -220,6 +206,7 @@ impl GuardedPatch {
             Self::Styles(values) => values.len(),
             Self::Composite(values) => values.iter().fold(0usize, |count, value| count.saturating_add(value.field_count())),
             Self::Structural(_) => 1,
+            Self::LocalRefusal(_) => 0,
         }
     }
 }
@@ -231,20 +218,9 @@ impl GuardedStructural {
             Self::DeleteRows { state } => Self::DeleteRows { state: reverse_axis(state) },
             Self::InsertColumns { state } => Self::InsertColumns { state: reverse_axis(state) },
             Self::DeleteColumns { state } => Self::DeleteColumns { state: reverse_axis(state) },
-            Self::AddSheet { sheet, before, expected_present, entered, snapshot } => {
-                Self::AddSheet { sheet: *sheet, before: *before, expected_present: !expected_present, entered: *entered, snapshot: snapshot.clone() }
-            }
             Self::RenameSheet { sheet, expected, restore } => {
                 Self::RenameSheet { sheet: *sheet, expected: restore.clone(), restore: expected.clone() }
             }
-            Self::WholeAction { label, sheet, before, expected_after, before_state, after_state } => Self::WholeAction {
-                label: label.clone(),
-                sheet: *sheet,
-                before: *before,
-                expected_after: !expected_after,
-                before_state: before_state.clone(),
-                after_state: after_state.clone(),
-            },
         }
     }
 }
@@ -274,6 +250,7 @@ fn reverse_axis(state: &GuardedAxisState) -> GuardedAxisState {
             })
             .collect(),
         lines: state.lines.iter().map(|value| GuardedLineState { target: value.target, expected: value.restore, restore: value.expected }).collect(),
+        python_left: state.python_left,
     }
 }
 
@@ -301,6 +278,8 @@ pub enum HistoryError {
     NothingToRedo,
     #[error("Wait for the current shared Undo or Redo to finish")]
     Pending,
+    #[error("{0}")]
+    Refused(String),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -345,6 +324,9 @@ impl PersonalHistory {
             return Err(HistoryError::Pending);
         }
         let action = self.undo.back().ok_or(HistoryError::NothingToUndo)?;
+        if let GuardedPatch::LocalRefusal(reason) = &action.undo {
+            return Err(HistoryError::Refused(reason.clone()));
+        }
         self.pending = Some(PendingMove { direction: HistoryDirection::Undo, source_action: action.action });
         Ok(action.undo.clone())
     }
@@ -487,6 +469,9 @@ fn command_sheet(command: &SharedCommand) -> Option<LiveId> {
     }
 }
 
+const SHEET_CHANGE_REFUSAL: &str = "This sheet change cannot be undone while others are editing.";
+const UNRECORDED_REFUSAL: &str = "This change cannot be undone while others are editing.";
+
 pub(crate) fn build_undo_action(
     action: u64,
     before_ids: &WorkbookIds,
@@ -495,6 +480,11 @@ pub(crate) fn build_undo_action(
     after: &Workbook,
     command: &SharedCommand,
 ) -> Result<Option<UndoAction>, CoauthorError> {
+    // Shipping whole sheets in a shared entry is not safe, so adding and deleting sheets is
+    // refused locally, before anything is sent. The marker keeps older actions below it.
+    if matches!(command, SharedCommand::InsertSheet { .. } | SharedCommand::DeleteSheet { .. }) {
+        return Ok(Some(refusal_action(action, command, SHEET_CHANGE_REFUSAL)));
+    }
     if let Some(structural) = build_structural_undo(before_ids, after_ids, before, after, command)? {
         let patch = GuardedPatch::Structural(Box::new(structural));
         return finish_action(action, command_label(command), patch).map(Some);
@@ -506,6 +496,10 @@ pub(crate) fn build_undo_action(
     let patch = if is_content(command) {
         let mut values = Vec::new();
         for cell in before_sheet.cells.diff(&after_sheet.cells) {
+            // Python cells never enter a guarded patch; the rest of the change stays undoable.
+            if is_python(before, sheet, cell) || is_python(after, sheet, cell) {
+                continue;
+            }
             let expected = content_input(after_ids, after, sheet, cell)?;
             let restore = content_input(before_ids, before, sheet, cell)?;
             if expected != restore {
@@ -522,6 +516,22 @@ pub(crate) fn build_undo_action(
         return Ok(None);
     }
     finish_action(action, command_label(command), patch).map(Some)
+}
+
+/// A history entry that refuses Undo with `reason`. It is recorded for an action whose
+/// reverse cannot be shared, so Undo never falls through to an older action instead.
+pub(crate) fn refusal_action(action: u64, command: &SharedCommand, reason: &str) -> UndoAction {
+    let patch = GuardedPatch::LocalRefusal(reason.to_string());
+    UndoAction { action, label: command_label(command).to_string(), redo: patch.clone(), undo: patch, retained_bytes: 0 }
+}
+
+/// The marker recorded when building an action's reverse fails.
+pub(crate) fn unrecorded_action(action: u64, command: &SharedCommand) -> UndoAction {
+    refusal_action(action, command, UNRECORDED_REFUSAL)
+}
+
+fn is_python(wb: &Workbook, sheet: usize, at: CellRef) -> bool {
+    wb.sheet(sheet).and_then(|sheet| sheet.cell(at)).is_some_and(|cell| cell.py.is_some())
 }
 
 fn finish_action(action: u64, label: &str, patch: GuardedPatch) -> Result<UndoAction, CoauthorError> {
@@ -556,49 +566,35 @@ fn build_structural_undo(
 ) -> Result<Option<GuardedStructural>, CoauthorError> {
     let structural = match command {
         SharedCommand::InsertRows { sheet, rows } => {
-            let affected = consecutive_ids(rows.first, rows.count)?;
+            let affected = vec![IdentityRun { first: rows.first, count: rows.count }];
             let axes = before_ids.by_id.get(sheet).ok_or_else(|| CoauthorError::UnknownIdentity(format!("sheet {sheet:?}")))?;
-            let fillers = tail_ids(&axes.rows, rows.count)?;
+            let fillers = tail_runs(&axes.rows, rows.count)?;
             GuardedStructural::InsertRows {
                 state: build_axis_state(before_ids, after_ids, before, after, *sheet, rows.before, affected, fillers, true, true)?,
             }
         }
         SharedCommand::DeleteRows { sheet, rows } => {
-            let fillers = consecutive_ids(
-                rows.first,
-                u32::try_from(rows.ids.len()).map_err(|_| CoauthorError::MalformedPayload("too many deleted row identities".into()))?,
-            )?;
-            let before_position = position_after_block(before_ids, *sheet, &rows.ids, true)?;
+            let count = u32::try_from(rows.ids.len()).map_err(|_| CoauthorError::MalformedPayload("too many deleted row identities".into()))?;
+            let fillers = vec![IdentityRun { first: rows.first, count }];
+            let (before_position, affected) = deleted_block(before_ids, *sheet, &rows.ids, true)?;
             GuardedStructural::DeleteRows {
-                state: build_axis_state(before_ids, after_ids, before, after, *sheet, before_position, rows.ids.clone(), fillers, false, true)?,
+                state: build_axis_state(before_ids, after_ids, before, after, *sheet, before_position, affected, fillers, false, true)?,
             }
         }
         SharedCommand::InsertColumns { sheet, cols } => {
-            let affected = consecutive_ids(cols.first, cols.count)?;
+            let affected = vec![IdentityRun { first: cols.first, count: cols.count }];
             let axes = before_ids.by_id.get(sheet).ok_or_else(|| CoauthorError::UnknownIdentity(format!("sheet {sheet:?}")))?;
-            let fillers = tail_ids(&axes.cols, cols.count)?;
+            let fillers = tail_runs(&axes.cols, cols.count)?;
             GuardedStructural::InsertColumns {
                 state: build_axis_state(before_ids, after_ids, before, after, *sheet, cols.before, affected, fillers, true, false)?,
             }
         }
         SharedCommand::DeleteColumns { sheet, cols } => {
-            let fillers = consecutive_ids(
-                cols.first,
-                u32::try_from(cols.ids.len()).map_err(|_| CoauthorError::MalformedPayload("too many deleted column identities".into()))?,
-            )?;
-            let before_position = position_after_block(before_ids, *sheet, &cols.ids, false)?;
+            let count = u32::try_from(cols.ids.len()).map_err(|_| CoauthorError::MalformedPayload("too many deleted column identities".into()))?;
+            let fillers = vec![IdentityRun { first: cols.first, count }];
+            let (before_position, affected) = deleted_block(before_ids, *sheet, &cols.ids, false)?;
             GuardedStructural::DeleteColumns {
-                state: build_axis_state(before_ids, after_ids, before, after, *sheet, before_position, cols.ids.clone(), fillers, false, false)?,
-            }
-        }
-        SharedCommand::InsertSheet { before: insert, .. } => {
-            let sheet = after_ids.resolve_sheet(insert.id).map_err(target_error)?;
-            GuardedStructural::AddSheet {
-                sheet: insert.id,
-                before: insert.before,
-                expected_present: true,
-                entered: sheet_entered(after, sheet)?,
-                snapshot: Box::new(guarded_sheet_snapshot(after_ids, after, insert.id)?),
+                state: build_axis_state(before_ids, after_ids, before, after, *sheet, before_position, affected, fillers, false, false)?,
             }
         }
         SharedCommand::RenameSheet { sheet, .. } => {
@@ -608,50 +604,35 @@ fn build_structural_undo(
             let expected = after.sheet(after_sheet).ok_or_else(|| CoauthorError::UnknownIdentity(format!("sheet {sheet:?}")))?.name.clone();
             GuardedStructural::RenameSheet { sheet: *sheet, expected, restore }
         }
-        SharedCommand::DeleteSheet { sheet } => build_delete_sheet_state(before_ids, after_ids, before, after, *sheet)?,
         _ => return Ok(None),
     };
     Ok(Some(structural))
 }
 
-fn consecutive_ids(first: LiveId, count: u32) -> Result<Vec<LiveId>, CoauthorError> {
-    let capacity = usize::try_from(count).map_err(|_| CoauthorError::MalformedPayload("identity count is too large".into()))?;
-    let mut ids = Vec::with_capacity(capacity);
-    for offset in 0..count {
-        let counter = first.1.checked_add(offset).ok_or_else(|| CoauthorError::MalformedPayload("identity counter overflows".into()))?;
-        ids.push(LiveId(first.0, counter));
-    }
-    Ok(ids)
-}
-
-fn tail_ids(ids: &collab_live::ids::OrderedIds, count: u32) -> Result<Vec<LiveId>, CoauthorError> {
-    let start = ids.len().checked_sub(count).ok_or_else(|| CoauthorError::MalformedPayload("structural identity tail is too short".into()))?;
-    (start..ids.len()).map(|at| ids.id_at(at).ok_or_else(|| CoauthorError::UnknownIdentity(format!("axis position {at}")))).collect()
-}
-
-fn position_after_block(ids: &WorkbookIds, sheet: LiveId, targets: &[LiveId], rows: bool) -> Result<IdentityPosition, CoauthorError> {
+/// The anchor just below a deleted block, and the block's identities as runs in position
+/// order. A block that reached the end of the axis anchors at `End`.
+fn deleted_block(ids: &WorkbookIds, sheet: LiveId, targets: &[LiveId], rows: bool) -> Result<(IdentityPosition, Vec<IdentityRun>), CoauthorError> {
     let axes = ids.by_id.get(&sheet).ok_or_else(|| CoauthorError::UnknownIdentity(format!("sheet {sheet:?}")))?;
     let ordered = if rows { &axes.rows } else { &axes.cols };
-    let mut positions = targets
-        .iter()
-        .map(|id| match ordered.find(*id) {
-            Lookup::At(at) => Ok(at),
-            Lookup::Deleted { .. } => Err(CoauthorError::DeletedTarget(format!("axis identity {id:?}"))),
-            Lookup::Unknown => Err(CoauthorError::UnknownIdentity(format!("axis identity {id:?}"))),
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    positions.sort_unstable();
-    let first = positions.first().copied().ok_or_else(|| CoauthorError::MalformedPayload("structural deletion has no identities".into()))?;
-    for (offset, position) in positions.iter().copied().enumerate() {
-        let offset = u32::try_from(offset).map_err(|_| CoauthorError::MalformedPayload("too many structural identities".into()))?;
-        if position != first.saturating_add(offset) {
-            return Err(CoauthorError::MalformedPayload("structural deletion identities are not consecutive".into()));
-        }
+    let mut sorted = targets.to_vec();
+    sorted.sort_unstable();
+    let runs = compress_runs(sorted);
+    let first = live_block_position(ordered, &runs)?
+        .ok_or_else(|| CoauthorError::MalformedPayload("structural deletion identities are not consecutive".into()))?;
+    let count = u32::try_from(targets.len()).map_err(|_| CoauthorError::MalformedPayload("too many structural identities".into()))?;
+    let after = first.checked_add(count).ok_or_else(|| CoauthorError::MalformedPayload("structural deletion position overflows".into()))?;
+    let mut positioned = Vec::with_capacity(runs.len());
+    for run in runs {
+        let at = live_block_position(ordered, std::slice::from_ref(&run))?
+            .ok_or_else(|| CoauthorError::MalformedPayload("structural deletion identities are not live".into()))?;
+        positioned.push((at, run));
     }
-    let after = first
-        .checked_add(u32::try_from(positions.len()).map_err(|_| CoauthorError::MalformedPayload("too many structural identities".into()))?)
-        .ok_or_else(|| CoauthorError::MalformedPayload("structural deletion position overflows".into()))?;
-    Ok(ordered.id_at(after).map_or(IdentityPosition::End, IdentityPosition::Before))
+    positioned.sort_unstable();
+    let affected =
+        compress_runs(positioned.into_iter().flat_map(|(_, run)| {
+            (0..run.count).filter_map(move |offset| run.first.1.checked_add(offset).map(|counter| LiveId(run.first.0, counter)))
+        }));
+    Ok((ordered.id_at(after).map_or(IdentityPosition::End, IdentityPosition::Before), affected))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -662,83 +643,39 @@ fn build_axis_state(
     after: &Workbook,
     sheet: LiveId,
     position: IdentityPosition,
-    affected: Vec<LiveId>,
-    fillers: Vec<LiveId>,
+    affected: Vec<IdentityRun>,
+    fillers: Vec<IdentityRun>,
     expected_present: bool,
     rows: bool,
 ) -> Result<GuardedAxisState, CoauthorError> {
-    let (cells, styles, lines) = structural_changes(before_ids, after_ids, before, after)?;
+    let changes = structural_changes(before_ids, after_ids, before, after)?;
     let (present_ids, present_wb) = if expected_present { (after_ids, after) } else { (before_ids, before) };
-    let entered = axis_entered(present_ids, present_wb, sheet, &affected, rows)?;
+    let entered = axis_entered(present_ids, present_wb, sheet, &affected, rows)?
+        .ok_or_else(|| CoauthorError::MalformedPayload("structural identities are not one live block".into()))?;
     let (filler_ids, filler_wb) = if expected_present { (before_ids, before) } else { (after_ids, after) };
-    let filler_entered = axis_entered(filler_ids, filler_wb, sheet, &fillers, rows)?;
-    Ok(GuardedAxisState { sheet, before: position, affected, fillers, expected_present, entered, filler_entered, cells, styles, lines })
-}
-
-fn build_delete_sheet_state(
-    before_ids: &WorkbookIds,
-    after_ids: &WorkbookIds,
-    before: &Workbook,
-    after: &Workbook,
-    sheet: LiveId,
-) -> Result<GuardedStructural, CoauthorError> {
-    let before_sheet = before_ids.resolve_sheet(sheet).map_err(target_error)?;
-    let before_position = before_ids
-        .sheets
-        .id_at(u32::try_from(before_sheet.saturating_add(1)).map_err(|_| CoauthorError::MalformedPayload("sheet position is too large".into()))?);
-    let before_position = before_position.map_or(IdentityPosition::End, IdentityPosition::Before);
-    let mut before_states = vec![guarded_sheet_state(before_ids, before, sheet)?];
-    let mut after_states = Vec::new();
-    for at in 0..after_ids.sheets.len() {
-        let id = after_ids.sheets.id_at(at).ok_or_else(|| CoauthorError::UnknownIdentity(format!("sheet position {at}")))?;
-        before_states.push(guarded_sheet_state(before_ids, before, id)?);
-        after_states.push(guarded_sheet_state(after_ids, after, id)?);
-    }
-    Ok(GuardedStructural::WholeAction {
-        label: "Delete Sheet".into(),
+    let filler_entered = axis_entered(filler_ids, filler_wb, sheet, &fillers, rows)?
+        .ok_or_else(|| CoauthorError::MalformedPayload("structural tail identities are not one live block".into()))?;
+    Ok(GuardedAxisState {
         sheet,
-        before: before_position,
-        expected_after: true,
-        before_state: Box::new(GuardedWholeState { sheets: before_states, names: before.names.clone() }),
-        after_state: Box::new(GuardedWholeState { sheets: after_states, names: after.names.clone() }),
+        before: position,
+        affected,
+        fillers,
+        expected_present,
+        entered,
+        filler_entered,
+        cells: changes.cells,
+        styles: changes.styles,
+        lines: changes.lines,
+        python_left: changes.python_left,
     })
 }
 
-fn guarded_sheet_state(ids: &WorkbookIds, wb: &Workbook, sheet: LiveId) -> Result<GuardedSheetState, CoauthorError> {
-    let at = ids.resolve_sheet(sheet).map_err(target_error)?;
-    let at_u32 = u32::try_from(at).map_err(|_| CoauthorError::MalformedPayload("sheet position is too large".into()))?;
-    let axes = ids.by_id.get(&sheet).ok_or_else(|| CoauthorError::UnknownIdentity(format!("sheet {sheet:?}")))?;
-    Ok(GuardedSheetState {
-        sheet,
-        at: at_u32,
-        entered: sheet_entered(wb, at)?,
-        rows: axes.rows.clone(),
-        cols: axes.cols.clone(),
-        snapshot: guarded_sheet_snapshot(ids, wb, sheet)?,
-    })
+struct StructuralChanges {
+    cells: Vec<GuardedCellContent>,
+    styles: Vec<GuardedStyleLeaf>,
+    lines: Vec<GuardedLineState>,
+    python_left: u32,
 }
-
-fn guarded_sheet_snapshot(ids: &WorkbookIds, wb: &Workbook, sheet: LiveId) -> Result<GuardedSheetSnapshot, CoauthorError> {
-    let at = ids.resolve_sheet(sheet).map_err(target_error)?;
-    let target = wb.sheet(at).ok_or_else(|| CoauthorError::UnknownIdentity(format!("sheet {sheet:?}")))?;
-    let mut formulas = Vec::new();
-    for (cell, value) in target.cells.iter() {
-        if value.formula.is_some() {
-            formulas.push(GuardedSheetFormula { target: ids.cell_id(at, cell)?, input: content_input(ids, wb, at, cell)? });
-        }
-    }
-    Ok(GuardedSheetSnapshot { sheet: target.clone(), file_id: target.file_id, formulas })
-}
-
-fn sheet_entered(wb: &Workbook, sheet: usize) -> Result<[u8; 32], CoauthorError> {
-    let target = wb.sheet(sheet).ok_or_else(|| CoauthorError::UnknownIdentity(format!("sheet position {sheet}")))?;
-    let mut isolated = wb.clone();
-    isolated.sheets = vec![Arc::new(target.clone())];
-    isolated.names.clear();
-    Ok(crate::fingerprint::workbook_fingerprint(&isolated).entered)
-}
-
-type StructuralChanges = (Vec<GuardedCellContent>, Vec<GuardedStyleLeaf>, Vec<GuardedLineState>);
 
 fn structural_changes(
     before_ids: &WorkbookIds,
@@ -751,9 +688,24 @@ fn structural_changes(
     let empty = GuardedCellInput { input: String::new(), formula: false, references: Vec::new() };
     let targets: BTreeSet<CellId> = before_cells.keys().chain(after_cells.keys()).copied().collect();
     let mut cells = Vec::new();
+    let mut python_left = 0u32;
+    let mut skipped = BTreeSet::new();
     for target in &targets {
-        let restore = before_cells.get(target).unwrap_or(&empty);
-        let expected = after_cells.get(target).unwrap_or(&empty);
+        let restore = before_cells.get(target);
+        let expected = after_cells.get(target);
+        // A Python cell is never shipped. One that appears on only one side is left alone and
+        // counted for the undo report; one on both sides did not change identity.
+        let python_before = matches!(restore, Some(None));
+        let python_after = matches!(expected, Some(None));
+        if python_before || python_after {
+            if python_before != python_after {
+                python_left = python_left.saturating_add(1);
+            }
+            skipped.insert(*target);
+            continue;
+        }
+        let restore = restore.and_then(Option::as_ref).unwrap_or(&empty);
+        let expected = expected.and_then(Option::as_ref).unwrap_or(&empty);
         if restore != expected {
             cells.push(GuardedValue { target: *target, expected: expected.clone(), restore: restore.clone() });
         }
@@ -763,11 +715,11 @@ fn structural_changes(
     let after_styles = cell_styles(after_ids, after)?;
     let default_style = style_json(&Style::default())?;
     let mut styles = Vec::new();
-    for target in targets {
+    for target in targets.difference(&skipped) {
         append_style_leaves(
-            StyleTarget::Cell { cell: target },
-            before_styles.get(&target).cloned().unwrap_or_else(|| default_style.clone()),
-            after_styles.get(&target).cloned().unwrap_or_else(|| default_style.clone()),
+            StyleTarget::Cell { cell: *target },
+            before_styles.get(target).cloned().unwrap_or_else(|| default_style.clone()),
+            after_styles.get(target).cloned().unwrap_or_else(|| default_style.clone()),
             &mut styles,
         )?;
     }
@@ -777,20 +729,31 @@ fn structural_changes(
     let line_targets: BTreeSet<StyleTarget> = before_lines.keys().chain(after_lines.keys()).copied().collect();
     let mut lines = Vec::new();
     for target in line_targets {
-        let restore = before_lines.get(&target).copied();
-        let expected = after_lines.get(&target).copied();
-        if restore != expected {
-            lines.push(GuardedLineState { target, expected, restore });
+        let restore = before_lines.get(&target);
+        let expected = after_lines.get(&target);
+        let (restore_fields, expected_fields) =
+            (GuardedLineFields::of(restore.map(|(info, _)| info)), GuardedLineFields::of(expected.map(|(info, _)| info)));
+        if restore_fields != expected_fields {
+            lines.push(GuardedLineState { target, expected: expected_fields, restore: restore_fields });
         }
+        append_style_leaves(
+            target,
+            restore.map_or_else(|| default_style.clone(), |(_, style)| style.clone()),
+            expected.map_or_else(|| default_style.clone(), |(_, style)| style.clone()),
+            &mut styles,
+        )?;
     }
-    Ok((cells, styles, lines))
+    Ok(StructuralChanges { cells, styles, lines, python_left })
 }
 
-fn cell_inputs(ids: &WorkbookIds, wb: &Workbook) -> Result<BTreeMap<CellId, GuardedCellInput>, CoauthorError> {
+/// Every stored cell's typed input by identity; `None` marks a Python cell, which is never
+/// encoded.
+fn cell_inputs(ids: &WorkbookIds, wb: &Workbook) -> Result<BTreeMap<CellId, Option<GuardedCellInput>>, CoauthorError> {
     let mut values = BTreeMap::new();
     for (sheet, target_sheet) in wb.sheets.iter().enumerate() {
-        for (cell, _) in target_sheet.cells.iter() {
-            values.insert(ids.cell_id(sheet, cell)?, content_input(ids, wb, sheet, cell)?);
+        for (cell, value) in target_sheet.cells.iter() {
+            let input = if value.py.is_some() { None } else { Some(content_input(ids, wb, sheet, cell)?) };
+            values.insert(ids.cell_id(sheet, cell)?, input);
         }
     }
     Ok(values)
@@ -806,55 +769,60 @@ fn cell_styles(ids: &WorkbookIds, wb: &Workbook) -> Result<BTreeMap<CellId, Json
     Ok(values)
 }
 
-fn line_states(ids: &WorkbookIds, wb: &Workbook) -> Result<BTreeMap<StyleTarget, LineInfo>, CoauthorError> {
+/// Every row and column setting by identity, with its style resolved to typed JSON.
+fn line_states(ids: &WorkbookIds, wb: &Workbook) -> Result<BTreeMap<StyleTarget, (LineInfo, Json)>, CoauthorError> {
     let mut values = BTreeMap::new();
     for (sheet, target_sheet) in wb.sheets.iter().enumerate() {
         let sheet_id = ids.sheet_id(sheet)?;
         let axes = ids.by_id.get(&sheet_id).ok_or_else(|| CoauthorError::UnknownIdentity(format!("sheet {sheet_id:?}")))?;
         for (row, info) in &target_sheet.rows {
             let row = axes.rows.id_at(*row).ok_or_else(|| CoauthorError::UnknownIdentity(format!("row position {row}")))?;
-            values.insert(StyleTarget::Row { sheet: sheet_id, row }, *info);
+            values.insert(StyleTarget::Row { sheet: sheet_id, row }, (*info, style_json(wb.styles.get(info.style.unwrap_or_default()))?));
         }
         for (col, info) in &target_sheet.cols {
             let col = axes.cols.id_at(*col).ok_or_else(|| CoauthorError::UnknownIdentity(format!("column position {col}")))?;
-            values.insert(StyleTarget::Column { sheet: sheet_id, col }, *info);
+            values.insert(StyleTarget::Column { sheet: sheet_id, col }, (*info, style_json(wb.styles.get(info.style.unwrap_or_default()))?));
         }
     }
     Ok(values)
 }
 
-fn axis_entered(ids: &WorkbookIds, wb: &Workbook, sheet: LiveId, affected: &[LiveId], rows: bool) -> Result<[u8; 32], CoauthorError> {
+/// A digest of everything entered in the live block `runs` on one axis: cell inputs, cell
+/// styles and line settings, all by identity and typed value. Style indices and Python source
+/// are never hashed as such, so every client computes the same digest. `None` when the runs are
+/// not one live block.
+fn axis_entered(ids: &WorkbookIds, wb: &Workbook, sheet: LiveId, runs: &[IdentityRun], rows: bool) -> Result<Option<[u8; 32]>, CoauthorError> {
     let sheet_index = ids.resolve_sheet(sheet).map_err(target_error)?;
     let target_sheet = wb.sheet(sheet_index).ok_or_else(|| CoauthorError::UnknownIdentity(format!("sheet {sheet:?}")))?;
     let axes = ids.by_id.get(&sheet).ok_or_else(|| CoauthorError::UnknownIdentity(format!("sheet {sheet:?}")))?;
-    let wanted: BTreeSet<LiveId> = affected.iter().copied().collect();
-    if wanted.len() != affected.len() {
-        return Err(CoauthorError::MalformedPayload("structural guard repeats an identity".into()));
-    }
+    let ordered = if rows { &axes.rows } else { &axes.cols };
+    let count = validate_runs(runs, u32::MAX)?;
+    let Some(start) = live_block_position(ordered, runs)? else { return Ok(None) };
+    let end = start.saturating_add(count);
     let mut cells = Vec::new();
-    for (cell, _) in target_sheet.cells.iter() {
-        let target = ids.cell_id(sheet_index, cell)?;
-        let axis_id = if rows { target.row } else { target.col };
-        if wanted.contains(&axis_id) {
-            cells.push((target, content_input(ids, wb, sheet_index, cell)?, style_json(wb.styles.get(target_sheet.style_id(cell)))?));
+    for (cell, value) in target_sheet.cells.iter() {
+        let at = if rows { cell.row } else { cell.col };
+        if at < start || at >= end {
+            continue;
         }
-    }
-    let mut lines = Vec::new();
-    for id in affected {
-        let at = match if rows { axes.rows.find(*id) } else { axes.cols.find(*id) } {
-            Lookup::At(at) => at,
-            Lookup::Deleted { .. } => return Err(CoauthorError::DeletedTarget(format!("axis identity {id:?}"))),
-            Lookup::Unknown => return Err(CoauthorError::UnknownIdentity(format!("axis identity {id:?}"))),
+        let input = if let Some(python) = value.py.as_ref() {
+            GuardedCellInput { input: format!("python:{}", python.code), formula: true, references: Vec::new() }
+        } else {
+            content_input(ids, wb, sheet_index, cell)?
         };
-        let info = if rows { target_sheet.rows.get(&at) } else { target_sheet.cols.get(&at) }.copied();
-        let style = info.and_then(|line| line.style).map(|style| style_json(wb.styles.get(style))).transpose()?;
-        lines.push((*id, info, style));
+        cells.push((ids.cell_id(sheet_index, cell)?, input, style_json(wb.styles.get(target_sheet.style_id(cell)))?));
     }
-    let bytes = serde_json::to_vec(&(cells, lines)).map_err(|error| CoauthorError::MalformedPayload(error.to_string()))?;
+    let lines_map = if rows { &target_sheet.rows } else { &target_sheet.cols };
+    let mut lines = Vec::new();
+    for (at, info) in lines_map.range(start..end) {
+        let id = ordered.id_at(*at).ok_or_else(|| CoauthorError::UnknownIdentity(format!("axis position {at}")))?;
+        lines.push((id, GuardedLineFields::of(Some(info)), style_json(wb.styles.get(info.style.unwrap_or_default()))?));
+    }
+    let bytes = serde_json::to_vec(&(runs, cells, lines)).map_err(|error| CoauthorError::MalformedPayload(error.to_string()))?;
     let digest = Sha256::digest(bytes);
     let mut entered = [0u8; 32];
     entered.copy_from_slice(&digest);
-    Ok(entered)
+    Ok(Some(entered))
 }
 
 fn target_error(error: TargetGone) -> CoauthorError {
@@ -1031,10 +999,15 @@ enum ResolvedStyleTarget {
     Column { sheet: usize, col: u32 },
 }
 
-pub(crate) fn apply_guarded_patch(session: &mut Session, ids: &mut WorkbookIds, patch: &GuardedPatch) -> Result<UndoReport, EngineError> {
+pub(crate) fn apply_guarded_patch(
+    session: &mut Session,
+    ids: &mut WorkbookIds,
+    patch: &GuardedPatch,
+    participant: u32,
+) -> Result<UndoReport, EngineError> {
     validate_guarded_patch(patch)?;
     if let GuardedPatch::Structural(structural) = patch {
-        return apply_structural_patch(session, ids, structural);
+        return apply_structural_patch(session, ids, structural, participant);
     }
     let mut guards = Vec::new();
     let mut left = 0usize;
@@ -1157,41 +1130,62 @@ fn validate_patch_fields(patch: &GuardedPatch, validator: &mut GuardValidator) -
             }
         }
         GuardedPatch::Structural(structural) => validate_structural_guards(structural, validator)?,
+        GuardedPatch::LocalRefusal(_) => return Err(EngineError::Other("a local undo refusal cannot enter a shared patch".into())),
     }
     Ok(())
 }
 
 fn validate_structural_guards(structural: &GuardedStructural, validator: &mut GuardValidator) -> Result<(), EngineError> {
     match structural {
-        GuardedStructural::InsertRows { state }
-        | GuardedStructural::DeleteRows { state }
-        | GuardedStructural::InsertColumns { state }
-        | GuardedStructural::DeleteColumns { state } => {
-            validator.count_items(state.affected.len().saturating_add(state.fillers.len()))?;
-            let affected: BTreeSet<LiveId> = state.affected.iter().copied().collect();
-            let fillers: BTreeSet<LiveId> = state.fillers.iter().copied().collect();
-            if affected.len() != state.affected.len() || fillers.len() != state.fillers.len() {
-                return Err(EngineError::Other("a structural guarded patch repeats an identity".into()));
-            }
-            validate_cell_guards(&state.cells, validator)?;
-            validate_style_guards(&state.styles, validator)?;
-            for line in &state.lines {
-                validator.add(GuardKey::Line(line.target))?;
-            }
-        }
-        GuardedStructural::AddSheet { snapshot, .. } => {
-            validator.count_items(1)?;
-            validate_snapshot_formula_guards(snapshot, validator)?;
-        }
+        GuardedStructural::InsertRows { state } | GuardedStructural::DeleteRows { state } => validate_axis_state(state, true, validator)?,
+        GuardedStructural::InsertColumns { state } | GuardedStructural::DeleteColumns { state } => validate_axis_state(state, false, validator)?,
         GuardedStructural::RenameSheet { .. } => {
             validator.count_items(1)?;
         }
-        GuardedStructural::WholeAction { before_state, after_state, .. } => {
-            validate_whole_state_guards(before_state, validator)?;
-            validate_whole_state_guards(after_state, validator)?;
+    }
+    Ok(())
+}
+
+/// Bounds a structural guard by runs (contiguous identity ranges), so a large contiguous undo
+/// is cheap, and limits row and column settings to the identities the entry revives.
+fn validate_axis_state(state: &GuardedAxisState, rows: bool, validator: &mut GuardValidator) -> Result<(), EngineError> {
+    validator.count_items(state.affected.len().saturating_add(state.fillers.len()))?;
+    let limit = if rows { gridcraft_core::MAX_ROWS } else { gridcraft_core::MAX_COLS };
+    let affected = validate_runs(&state.affected, limit).map_err(|error| EngineError::Other(error.to_string()))?;
+    let fillers = validate_runs(&state.fillers, limit).map_err(|error| EngineError::Other(error.to_string()))?;
+    if affected != fillers {
+        return Err(EngineError::Other("structural identity exchange is not balanced".into()));
+    }
+    let mut revived = state.affected.clone();
+    revived.sort_unstable();
+    validate_cell_guards(&state.cells, validator)?;
+    validate_style_guards(&state.styles, validator)?;
+    for style in &state.styles {
+        if !matches!(style.target, StyleTarget::Cell { .. }) && !line_target_is_revived(style.target, state.sheet, rows, &revived) {
+            return Err(EngineError::Other("a structural style guard names a line the entry does not restore".into()));
+        }
+    }
+    for line in &state.lines {
+        validator.add(GuardKey::Line(line.target))?;
+        if !line_target_is_revived(line.target, state.sheet, rows, &revived) {
+            return Err(EngineError::Other("a structural line guard names a line the entry does not restore".into()));
+        }
+        if !line.expected.is_valid() || !line.restore.is_valid() {
+            return Err(EngineError::Other("a structural line guard is out of range".into()));
         }
     }
     Ok(())
+}
+
+/// Whether `target` is a row (or column) of `sheet` among the sorted runs `revived`.
+fn line_target_is_revived(target: StyleTarget, sheet: LiveId, rows: bool, revived: &[IdentityRun]) -> bool {
+    let id = match target {
+        StyleTarget::Row { sheet: target_sheet, row } if rows && target_sheet == sheet => row,
+        StyleTarget::Column { sheet: target_sheet, col } if !rows && target_sheet == sheet => col,
+        _ => return false,
+    };
+    let index = revived.partition_point(|run| (run.first.0, run.first.1) <= (id.0, id.1));
+    index.checked_sub(1).and_then(|index| revived.get(index)).is_some_and(|run| run.holds(id))
 }
 
 fn validate_cell_guards(values: &[GuardedCellContent], validator: &mut GuardValidator) -> Result<(), EngineError> {
@@ -1204,29 +1198,6 @@ fn validate_cell_guards(values: &[GuardedCellContent], validator: &mut GuardVali
 fn validate_style_guards(values: &[GuardedStyleLeaf], validator: &mut GuardValidator) -> Result<(), EngineError> {
     for value in values {
         validator.add(GuardKey::Style(value.target, value.path.clone()))?;
-    }
-    Ok(())
-}
-
-fn validate_whole_state_guards(state: &GuardedWholeState, validator: &mut GuardValidator) -> Result<(), EngineError> {
-    let mut sheets = BTreeSet::new();
-    for guarded in &state.sheets {
-        if !sheets.insert(guarded.sheet) {
-            return Err(EngineError::Other("a guarded whole-workbook state repeats a sheet".into()));
-        }
-        validator.count_items(1)?;
-        validate_snapshot_formula_guards(&guarded.snapshot, validator)?;
-    }
-    Ok(())
-}
-
-fn validate_snapshot_formula_guards(snapshot: &GuardedSheetSnapshot, validator: &mut GuardValidator) -> Result<(), EngineError> {
-    let mut targets = BTreeSet::new();
-    for formula in &snapshot.formulas {
-        if !targets.insert(formula.target) {
-            return Err(EngineError::Other("a guarded sheet snapshot repeats a formula target".into()));
-        }
-        validator.count_items(1)?;
     }
     Ok(())
 }
@@ -1366,88 +1337,90 @@ fn resolve_guards(
             }
         }
         GuardedPatch::Structural(_) => return Err(EngineError::Other("a structural guard must be applied as the outer patch".into())),
+        GuardedPatch::LocalRefusal(_) => return Err(EngineError::Other("a local undo refusal cannot enter a shared patch".into())),
     }
     Ok(())
 }
 
-fn apply_structural_patch(session: &mut Session, ids: &mut WorkbookIds, structural: &GuardedStructural) -> Result<UndoReport, EngineError> {
+fn apply_structural_patch(
+    session: &mut Session,
+    ids: &mut WorkbookIds,
+    structural: &GuardedStructural,
+    participant: u32,
+) -> Result<UndoReport, EngineError> {
     match structural {
-        GuardedStructural::InsertRows { state } | GuardedStructural::DeleteRows { state } => apply_axis_patch(session, ids, state, true),
-        GuardedStructural::InsertColumns { state } | GuardedStructural::DeleteColumns { state } => apply_axis_patch(session, ids, state, false),
-        GuardedStructural::AddSheet { sheet, before, expected_present, entered, snapshot } => {
-            apply_add_sheet(session, ids, *sheet, *before, *expected_present, *entered, snapshot)
+        GuardedStructural::InsertRows { state } | GuardedStructural::DeleteRows { state } => apply_axis_patch(session, ids, state, true, participant),
+        GuardedStructural::InsertColumns { state } | GuardedStructural::DeleteColumns { state } => {
+            apply_axis_patch(session, ids, state, false, participant)
         }
         GuardedStructural::RenameSheet { sheet, expected, restore } => apply_rename_sheet(session, ids, *sheet, expected, restore),
-        GuardedStructural::WholeAction { label, sheet, before, expected_after, before_state, after_state } => {
-            apply_whole_action(session, ids, label, *sheet, *before, *expected_after, before_state, after_state)
-        }
     }
 }
 
-fn apply_axis_patch(session: &mut Session, ids: &mut WorkbookIds, state: &GuardedAxisState, rows: bool) -> Result<UndoReport, EngineError> {
-    let count = u32::try_from(state.affected.len()).map_err(|_| EngineError::Other("structural identity count is too large".into()))?;
-    if count == 0 || state.fillers.len() != state.affected.len() {
-        return Err(EngineError::Other("structural identity exchange is not balanced".into()));
-    }
+fn apply_axis_patch(
+    session: &mut Session,
+    ids: &mut WorkbookIds,
+    state: &GuardedAxisState,
+    rows: bool,
+    participant: u32,
+) -> Result<UndoReport, EngineError> {
+    let limit = if rows { gridcraft_core::MAX_ROWS } else { gridcraft_core::MAX_COLS };
+    let count = validate_runs(&state.affected, limit).map_err(|error| EngineError::Other(error.to_string()))?;
+    let label = if rows { "rows" } else { "columns" };
     let sheet_index = ids.resolve_sheet(state.sheet).map_err(|error| EngineError::Other(target_error(error).to_string()))?;
+    let ordered = {
+        let axes = ids.by_id.get(&state.sheet).ok_or_else(|| EngineError::Other(format!("unknown sheet identity {:?}", state.sheet)))?;
+        if rows { axes.rows.clone() } else { axes.cols.clone() }
+    };
+    let engine = |error: CoauthorError| EngineError::Other(error.to_string());
+    // The identities this entry revives must have been deleted by this entry's participant,
+    // according to the ordered entries this client has applied. A forged revival of someone
+    // else's deletion is refused before anything changes.
+    let revived = if state.expected_present { &state.fillers } else { &state.affected };
+    if !ids.deleted_by_participant(state.sheet, rows, revived, participant) {
+        return Err(EngineError::Other(format!("the {label} to restore were not deleted by this participant")));
+    }
     if state.expected_present {
-        let positions = live_axis_positions(ids, state.sheet, &state.affected, rows)?;
-        let Some(at) = positions.first().copied() else { return Err(EngineError::Other("structural identity block is empty".into())) };
-        if axis_entered(ids, &session.doc()?.wb, state.sheet, &state.affected, rows).map_err(|error| EngineError::Other(error.to_string()))?
-            != state.entered
-        {
-            return Ok(untouched_refusal(if rows { "rows" } else { "columns" }));
+        let Some(at) = live_block_position(&ordered, &state.affected).map_err(engine)? else { return Ok(untouched_refusal(label)) };
+        if axis_entered(ids, &session.doc()?.wb, state.sheet, &state.affected, rows).map_err(engine)? != Some(state.entered) {
+            return Ok(untouched_refusal(label));
         }
         let command = if rows { "home.deleteRows" } else { "home.deleteColumns" };
         let range = axis_range(at, count, rows)?;
         let params = if rows { serde_json::json!({"sheet":sheet_index,"rows":range}) } else { serde_json::json!({"sheet":sheet_index,"cols":range}) };
         session.execute(command, params)?;
-        let limit = if rows { gridcraft_core::MAX_ROWS } else { gridcraft_core::MAX_COLS };
         let restore_at = limit.checked_sub(count).ok_or_else(|| EngineError::Other("structural identity count exceeds the worksheet".into()))?;
-        if rows {
-            ids.exchange_rows(state.sheet, &state.affected, restore_at, &state.fillers)
-        } else {
-            ids.exchange_columns(state.sheet, &state.affected, restore_at, &state.fillers)
-        }
-        .map_err(|error| EngineError::Other(error.to_string()))?;
+        ids.exchange_axis(state.sheet, rows, &state.affected, restore_at, &state.fillers, participant).map_err(engine)?;
         Ok(UndoReport { restored: 1, left: 0, reason: None })
     } else {
-        for id in &state.affected {
-            let lookup = ids
-                .by_id
-                .get(&state.sheet)
-                .map(|axes| if rows { axes.rows.find(*id) } else { axes.cols.find(*id) })
-                .ok_or_else(|| EngineError::Other(format!("unknown sheet identity {:?}", state.sheet)))?;
-            if !matches!(lookup, Lookup::Deleted { .. }) {
-                return Ok(untouched_refusal(if rows { "rows" } else { "columns" }));
-            }
-        }
-        let filler_positions = match live_axis_positions(ids, state.sheet, &state.fillers, rows) {
-            Ok(positions) => positions,
-            Err(_) => return Ok(untouched_refusal(if rows { "rows" } else { "columns" })),
-        };
-        let limit = if rows { gridcraft_core::MAX_ROWS } else { gridcraft_core::MAX_COLS };
         let expected_tail = limit.checked_sub(count).ok_or_else(|| EngineError::Other("structural identity count exceeds the worksheet".into()))?;
-        if filler_positions.first().copied() != Some(expected_tail)
-            || axis_entered(ids, &session.doc()?.wb, state.sheet, &state.fillers, rows).map_err(|error| EngineError::Other(error.to_string()))?
-                != state.filler_entered
+        if live_block_position(&ordered, &state.fillers).map_err(engine)? != Some(expected_tail)
+            || axis_entered(ids, &session.doc()?.wb, state.sheet, &state.fillers, rows).map_err(engine)? != Some(state.filler_entered)
         {
-            return Ok(untouched_refusal(if rows { "rows" } else { "columns" }));
+            return Ok(untouched_refusal(label));
         }
-        let at = resolve_axis_position(ids, state.sheet, state.before, rows)?;
+        let Some(at) = resolve_axis_position(&ordered, state.before, count)? else { return Ok(untouched_refusal(label)) };
         let command = if rows { "home.insertRows" } else { "home.insertColumns" };
         let range = axis_range(at, count, rows)?;
         let params = if rows { serde_json::json!({"sheet":sheet_index,"rows":range}) } else { serde_json::json!({"sheet":sheet_index,"cols":range}) };
         session.execute(command, params)?;
-        if rows {
-            ids.exchange_rows(state.sheet, &state.fillers, at, &state.affected)
-        } else {
-            ids.exchange_columns(state.sheet, &state.fillers, at, &state.affected)
-        }
-        .map_err(|error| EngineError::Other(error.to_string()))?;
+        ids.exchange_axis(state.sheet, rows, &state.fillers, at, &state.affected, participant).map_err(engine)?;
         let changes = GuardedPatch::Composite(vec![GuardedPatch::Cells(state.cells.clone()), GuardedPatch::Styles(state.styles.clone())]);
-        let mut report = apply_guarded_patch(session, ids, &changes)?;
-        apply_line_states(session, ids, &state.lines)?;
+        let mut report = apply_guarded_patch(session, ids, &changes, participant)?;
+        let lines_left = apply_line_states(session, ids, &state.lines, rows)?;
+        report.left = report.left.saturating_add(lines_left);
+        if lines_left > 0 && report.reason.is_none() {
+            report.reason = Some("Some fields were left because they changed after this action.".into());
+        }
+        if state.python_left > 0 {
+            let python_left = usize::try_from(state.python_left).unwrap_or(usize::MAX);
+            report.left = report.left.saturating_add(python_left);
+            let note = "Python cells were left alone: they cannot be restored while others are editing.";
+            report.reason = Some(match report.reason.take() {
+                Some(reason) => format!("{reason} {note}"),
+                None => note.to_string(),
+            });
+        }
         report.restored = report.restored.saturating_add(1);
         Ok(report)
     }
@@ -1457,36 +1430,17 @@ fn untouched_refusal(target: &str) -> UndoReport {
     UndoReport { restored: 0, left: 1, reason: Some(format!("The {target} changed after this action; the structural change was left untouched.")) }
 }
 
-fn live_axis_positions(ids: &WorkbookIds, sheet: LiveId, targets: &[LiveId], rows: bool) -> Result<Vec<u32>, EngineError> {
-    let axes = ids.by_id.get(&sheet).ok_or_else(|| EngineError::Other(format!("unknown sheet identity {sheet:?}")))?;
-    let ordered = if rows { &axes.rows } else { &axes.cols };
-    let mut positions = targets
-        .iter()
-        .map(|id| match ordered.find(*id) {
-            Lookup::At(at) => Ok(at),
-            Lookup::Deleted { .. } => Err(EngineError::Other(format!("axis identity {id:?} was deleted"))),
-            Lookup::Unknown => Err(EngineError::Other(format!("unknown axis identity {id:?}"))),
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    positions.sort_unstable();
-    let Some(first) = positions.first().copied() else { return Ok(positions) };
-    for (offset, at) in positions.iter().copied().enumerate() {
-        let offset = u32::try_from(offset).map_err(|_| EngineError::Other("too many structural identities".into()))?;
-        if at != first.saturating_add(offset) {
-            return Err(EngineError::Other("structural identities are no longer consecutive".into()));
-        }
-    }
-    Ok(positions)
-}
-
-fn resolve_axis_position(ids: &WorkbookIds, sheet: LiveId, position: IdentityPosition, rows: bool) -> Result<u32, EngineError> {
-    let axes = ids.by_id.get(&sheet).ok_or_else(|| EngineError::Other(format!("unknown sheet identity {sheet:?}")))?;
-    let ordered = if rows { &axes.rows } else { &axes.cols };
+/// Where a reverted deletion goes back. A block that was deleted from the end of the axis has
+/// no anchor below it; it returns just above the fillers that replaced it. `None` when the
+/// anchor itself has since been deleted.
+fn resolve_axis_position(ordered: &collab_live::ids::OrderedIds, position: IdentityPosition, count: u32) -> Result<Option<u32>, EngineError> {
     match position {
-        IdentityPosition::End => Ok(ordered.len()),
+        IdentityPosition::End => {
+            ordered.len().checked_sub(count).map(Some).ok_or_else(|| EngineError::Other("structural identity count exceeds the worksheet".into()))
+        }
         IdentityPosition::Before(id) => match ordered.find(id) {
-            Lookup::At(at) => Ok(at),
-            Lookup::Deleted { .. } => Err(EngineError::Other(format!("structural anchor {id:?} was deleted"))),
+            Lookup::At(at) => Ok(Some(at)),
+            Lookup::Deleted { .. } => Ok(None),
             Lookup::Unknown => Err(EngineError::Other(format!("unknown structural anchor {id:?}"))),
         },
     }
@@ -1497,63 +1451,51 @@ fn axis_range(at: u32, count: u32, rows: bool) -> Result<String, EngineError> {
     Ok(if rows { RangeRef::rows(at, end) } else { RangeRef::cols(at, end) }.a1())
 }
 
-fn apply_line_states(session: &mut Session, ids: &WorkbookIds, lines: &[GuardedLineState]) -> Result<(), EngineError> {
-    crate::cmd::edit(session, |cx| {
-        for line in lines {
-            match resolve_style_target(ids, line.target).map_err(|error| EngineError::Other(target_error(error).to_string()))? {
-                ResolvedStyleTarget::Row { sheet, row } => {
-                    if let Some(info) = line.restore {
-                        cx.sheet_mut(sheet)?.rows.insert(row, info);
-                    } else {
-                        cx.sheet_mut(sheet)?.rows.remove(&row);
-                    }
-                    cx.fit_rows.push((sheet, row));
-                }
-                ResolvedStyleTarget::Column { sheet, col } => {
-                    if let Some(info) = line.restore {
-                        cx.sheet_mut(sheet)?.cols.insert(col, info);
-                    } else {
-                        cx.sheet_mut(sheet)?.cols.remove(&col);
-                    }
-                }
-                ResolvedStyleTarget::Cell { .. } => return Err(EngineError::Other("a guarded line target names a cell".into())),
+/// Restores typed row or column settings (size, hidden, outline) where they still hold what
+/// this action left, under the sheet's format-rows or format-columns protection. Returns how
+/// many were left because they changed.
+fn apply_line_states(session: &mut Session, ids: &WorkbookIds, lines: &[GuardedLineState], rows: bool) -> Result<usize, EngineError> {
+    let mut resolved = Vec::with_capacity(lines.len());
+    for line in lines {
+        match resolve_style_target(ids, line.target).map_err(|error| EngineError::Other(target_error(error).to_string()))? {
+            ResolvedStyleTarget::Row { sheet, row } if rows => resolved.push((sheet, row, line)),
+            ResolvedStyleTarget::Column { sheet, col } if !rows => resolved.push((sheet, col, line)),
+            _ => return Err(EngineError::Other("a guarded line target names the wrong axis".into())),
+        }
+    }
+    {
+        let wb = &session.doc()?.wb;
+        for (sheet, _, _) in &resolved {
+            if let Some(protection) = wb.sheet(*sheet).and_then(|sheet| sheet.protection.as_ref())
+                && !(if rows { protection.format_rows } else { protection.format_columns })
+            {
+                return Err(EngineError::Other("The row or column you're trying to change is on a protected sheet.".into()));
             }
         }
-        Ok(())
-    })?;
-    Ok(())
-}
-
-fn apply_add_sheet(
-    session: &mut Session,
-    ids: &mut WorkbookIds,
-    sheet: LiveId,
-    before: IdentityPosition,
-    expected_present: bool,
-    entered: [u8; 32],
-    snapshot: &GuardedSheetSnapshot,
-) -> Result<UndoReport, EngineError> {
-    if expected_present {
-        let at = match ids.resolve_sheet(sheet) {
-            Ok(at) => at,
-            Err(_) => return Ok(untouched_refusal("added sheet")),
-        };
-        if sheet_entered(&session.doc()?.wb, at).map_err(|error| EngineError::Other(error.to_string()))? != entered {
-            return Ok(untouched_refusal("added sheet"));
-        }
-        session.execute("home.deleteSheet", serde_json::json!({"sheet":at}))?;
-        ids.restore_sheet(Some(sheet), 0, None).map_err(|error| EngineError::Other(error.to_string()))?;
-    } else {
-        if !matches!(ids.sheets.find(sheet), Lookup::Deleted { .. }) {
-            return Ok(untouched_refusal("added sheet"));
-        }
-        let at = resolve_sheet_position(ids, before)?;
-        session.execute("home.insertSheet", serde_json::json!({"name":snapshot.sheet.name,"before":at}))?;
-        let identity_at = u32::try_from(at).map_err(|_| EngineError::Other("sheet position is too large".into()))?;
-        ids.restore_sheet(None, identity_at, Some(sheet)).map_err(|error| EngineError::Other(error.to_string()))?;
-        restore_sheet_snapshot(session, ids, at, snapshot)?;
     }
-    Ok(UndoReport { restored: 1, left: 0, reason: None })
+    crate::cmd::edit(session, |cx| {
+        let mut left = 0usize;
+        for (sheet, at, line) in &resolved {
+            let target = cx.sheet_mut(*sheet)?;
+            let map = if rows { &mut target.rows } else { &mut target.cols };
+            if GuardedLineFields::of(map.get(at)) != line.expected {
+                left = left.saturating_add(1);
+                continue;
+            }
+            let mut info = map.get(at).copied().unwrap_or_default();
+            line.restore.write_to(&mut info);
+            if info == LineInfo::default() {
+                map.remove(at);
+            } else {
+                map.insert(*at, info);
+            }
+            if rows {
+                cx.fit_rows.push((*sheet, *at));
+            }
+            cx.structural = true;
+        }
+        Ok(left)
+    })
 }
 
 fn apply_rename_sheet(session: &mut Session, ids: &WorkbookIds, sheet: LiveId, expected: &str, restore: &str) -> Result<UndoReport, EngineError> {
@@ -1567,126 +1509,6 @@ fn apply_rename_sheet(session: &mut Session, ids: &WorkbookIds, sheet: LiveId, e
     }
     session.execute("sheet.rename", serde_json::json!({"sheet":at,"name":restore}))?;
     Ok(UndoReport { restored: 1, left: 0, reason: None })
-}
-
-#[allow(clippy::too_many_arguments)]
-fn apply_whole_action(
-    session: &mut Session,
-    ids: &mut WorkbookIds,
-    label: &str,
-    sheet: LiveId,
-    before: IdentityPosition,
-    expected_after: bool,
-    before_state: &GuardedWholeState,
-    after_state: &GuardedWholeState,
-) -> Result<UndoReport, EngineError> {
-    let (expected, restore) = if expected_after { (after_state, before_state) } else { (before_state, after_state) };
-    if !whole_state_matches(session, ids, sheet, expected)? {
-        return Ok(UndoReport {
-            restored: 0,
-            left: 1,
-            reason: Some(format!("{label} can be reversed only while everything it changed is untouched.")),
-        });
-    }
-    let expected_has_target = expected.sheets.iter().any(|state| state.sheet == sheet);
-    let restore_target = restore.sheets.iter().find(|state| state.sheet == sheet);
-    match (expected_has_target, restore_target) {
-        (false, Some(target)) => {
-            let at = resolve_sheet_position(ids, before)?;
-            session.execute("home.insertSheet", serde_json::json!({"name":target.snapshot.sheet.name,"before":at}))?;
-            let identity_at = u32::try_from(at).map_err(|_| EngineError::Other("sheet position is too large".into()))?;
-            ids.restore_sheet(None, identity_at, Some(sheet)).map_err(|error| EngineError::Other(error.to_string()))?;
-        }
-        (true, None) => {
-            let at = ids.resolve_sheet(sheet).map_err(|error| EngineError::Other(target_error(error).to_string()))?;
-            session.execute("home.deleteSheet", serde_json::json!({"sheet":at}))?;
-            ids.restore_sheet(Some(sheet), 0, None).map_err(|error| EngineError::Other(error.to_string()))?;
-        }
-        (true, Some(_)) | (false, None) => {}
-    }
-    restore_whole_state(session, ids, restore)?;
-    Ok(UndoReport { restored: 1, left: 0, reason: None })
-}
-
-fn whole_state_matches(session: &Session, ids: &WorkbookIds, target: LiveId, state: &GuardedWholeState) -> Result<bool, EngineError> {
-    if session.doc()?.wb.names != state.names {
-        return Ok(false);
-    }
-    let target_expected = state.sheets.iter().any(|sheet| sheet.sheet == target);
-    if target_expected != matches!(ids.sheets.find(target), Lookup::At(_)) {
-        return Ok(false);
-    }
-    for guarded in &state.sheets {
-        let at = match ids.resolve_sheet(guarded.sheet) {
-            Ok(at) => at,
-            Err(_) => return Ok(false),
-        };
-        if sheet_entered(&session.doc()?.wb, at).map_err(|error| EngineError::Other(error.to_string()))? != guarded.entered {
-            return Ok(false);
-        }
-        let Some(axes) = ids.by_id.get(&guarded.sheet) else { return Ok(false) };
-        if axes.rows != guarded.rows || axes.cols != guarded.cols {
-            return Ok(false);
-        }
-    }
-    Ok(true)
-}
-
-fn restore_whole_state(session: &mut Session, ids: &WorkbookIds, state: &GuardedWholeState) -> Result<(), EngineError> {
-    crate::cmd::edit(session, |cx| {
-        cx.wb.names = state.names.clone();
-        cx.structural = true;
-        Ok(())
-    })?;
-    for guarded in &state.sheets {
-        let at = ids.resolve_sheet(guarded.sheet).map_err(|error| EngineError::Other(target_error(error).to_string()))?;
-        restore_sheet_snapshot(session, ids, at, &guarded.snapshot)?;
-    }
-    Ok(())
-}
-
-fn restore_sheet_snapshot(session: &mut Session, ids: &WorkbookIds, at: usize, snapshot: &GuardedSheetSnapshot) -> Result<(), EngineError> {
-    crate::cmd::edit(session, |cx| {
-        let target = cx.wb.sheets.get_mut(at).ok_or_else(|| EngineError::Other(format!("sheet position {at} is absent")))?;
-        let mut sheet = snapshot.sheet.clone();
-        sheet.file_id = snapshot.file_id;
-        *target = Arc::new(sheet);
-        cx.changed.extend(snapshot.sheet.cells.iter().map(|(cell, _)| (at, cell)));
-        cx.structural = true;
-        Ok(())
-    })?;
-    let mut resolved = Vec::with_capacity(snapshot.formulas.len());
-    for formula in &snapshot.formulas {
-        let (sheet, cell, input) = resolve_cell_input(ids, session, formula.target, &formula.input.input, true, &formula.input.references)
-            .map_err(|error| EngineError::Other(target_error(error).to_string()))?;
-        resolved.push((sheet, cell, input));
-    }
-    crate::cmd::edit(session, |cx| {
-        for (sheet, cell, input) in &resolved {
-            let style = cx.wb.sheet(*sheet).map(|target| target.style_id(*cell)).unwrap_or_default();
-            let replacement = guarded_input_to_cell(input, true, style, &mut cx.wb)?;
-            if let Some(replacement) = replacement {
-                cx.sheet_mut(*sheet)?.cells.set(*cell, replacement);
-            } else {
-                cx.sheet_mut(*sheet)?.cells.remove(*cell);
-            }
-            cx.changed.push((*sheet, *cell));
-        }
-        Ok(())
-    })?;
-    Ok(())
-}
-
-fn resolve_sheet_position(ids: &WorkbookIds, position: IdentityPosition) -> Result<usize, EngineError> {
-    let at = match position {
-        IdentityPosition::End => ids.sheets.len(),
-        IdentityPosition::Before(id) => match ids.sheets.find(id) {
-            Lookup::At(at) => at,
-            Lookup::Deleted { .. } => return Err(EngineError::Other(format!("sheet anchor {id:?} was deleted"))),
-            Lookup::Unknown => return Err(EngineError::Other(format!("unknown sheet anchor {id:?}"))),
-        },
-    };
-    usize::try_from(at).map_err(|_| EngineError::Other("sheet position is too large".into()))
 }
 
 fn resolve_style_target(ids: &WorkbookIds, target: StyleTarget) -> Result<ResolvedStyleTarget, TargetGone> {

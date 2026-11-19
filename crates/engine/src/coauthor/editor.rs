@@ -10,7 +10,7 @@ use serde_json::Value as Json;
 
 use super::{
     CoauthorError, GuardedPatch, GuardedStructural, PreparedChange, SharedCommand, TargetGone, UndoAction, UndoReport, WorkbookIds,
-    apply_guarded_patch, build_undo_action, decode_entry, encode_command, mode_for, resolve_command,
+    apply_guarded_patch, build_undo_action, decode_entry, encode_command, mode_for, resolve_command, unrecorded_action,
 };
 use crate::fingerprint::{DocId, fingerprint};
 use crate::{Calc, EngineError, Selection, Session};
@@ -21,6 +21,7 @@ const GUARDED_APPLY_COMMAND: &str = "internal.coauthorGuardedPatch";
 struct GuardedApplyContext {
     ids: WorkbookIds,
     patch: super::GuardedPatch,
+    participant: u32,
 }
 
 thread_local! {
@@ -31,7 +32,7 @@ fn run_guarded_apply(session: &mut Session, _: &Json) -> crate::Result<Json> {
     let context = GUARDED_APPLY.with(|slot| slot.borrow_mut().take());
     let mut context = context.ok_or_else(|| EngineError::Other("the co-author guarded command is internal".into()))?;
     let revision = session.doc()?.revision;
-    let report = apply_guarded_patch(session, &mut context.ids, &context.patch)?;
+    let report = apply_guarded_patch(session, &mut context.ids, &context.patch, context.participant)?;
     if report.restored > 0 {
         let document = session.doc_mut()?;
         if document.revision == revision {
@@ -44,7 +45,12 @@ fn run_guarded_apply(session: &mut Session, _: &Json) -> crate::Result<Json> {
     serde_json::to_value(report).map_err(|error| EngineError::Other(error.to_string()))
 }
 
-fn execute_guarded_apply(session: &mut Session, ids: &mut WorkbookIds, patch: &super::GuardedPatch) -> Result<UndoReport, EngineError> {
+fn execute_guarded_apply(
+    session: &mut Session,
+    ids: &mut WorkbookIds,
+    patch: &super::GuardedPatch,
+    participant: u32,
+) -> Result<UndoReport, EngineError> {
     static REGISTER: Once = Once::new();
     REGISTER.call_once(|| crate::cmd::register_test_command(GUARDED_APPLY_COMMAND, run_guarded_apply));
     let occupied = GUARDED_APPLY.with(|slot| {
@@ -52,7 +58,7 @@ fn execute_guarded_apply(session: &mut Session, ids: &mut WorkbookIds, patch: &s
         if slot.is_some() {
             true
         } else {
-            *slot = Some(GuardedApplyContext { ids: ids.clone(), patch: patch.clone() });
+            *slot = Some(GuardedApplyContext { ids: ids.clone(), patch: patch.clone(), participant });
             false
         }
     });
@@ -283,10 +289,11 @@ impl GridLiveEditor {
             GuardedPatch::Cells(_) => "cell content",
             GuardedPatch::Styles(_) => "cell formatting",
             GuardedPatch::Composite(parts) => parts.first().map_or("guarded fields", Self::guarded_target_kind),
+            GuardedPatch::LocalRefusal(_) => "sheet",
             GuardedPatch::Structural(structural) => match structural.as_ref() {
                 GuardedStructural::InsertRows { .. } | GuardedStructural::DeleteRows { .. } => "rows",
                 GuardedStructural::InsertColumns { .. } | GuardedStructural::DeleteColumns { .. } => "columns",
-                GuardedStructural::AddSheet { .. } | GuardedStructural::RenameSheet { .. } | GuardedStructural::WholeAction { .. } => "sheet",
+                GuardedStructural::RenameSheet { .. } => "sheet",
             },
         }
     }
@@ -324,7 +331,7 @@ impl LiveEditor for GridLiveEditor {
         if let SharedCommand::Guarded { patch } = &decoded.command {
             let view = self.capture_view();
             let before = self.snapshot();
-            let report = match execute_guarded_apply(&mut self.session, &mut self.ids, patch) {
+            let report = match execute_guarded_apply(&mut self.session, &mut self.ids, patch, entry.participant.0) {
                 Ok(report) => report,
                 Err(error) => {
                     self.restore_shared(&before, view.as_ref(), true);
@@ -379,7 +386,7 @@ impl LiveEditor for GridLiveEditor {
             return Self::engine_error_outcome(error, entry.stamp.is_none() && stamp_was_read);
         }
         if let Some(structural) = resolved.structural
-            && self.ids.apply_structural(&structural).is_err()
+            && self.ids.apply_structural_owned(&structural, entry.participant.0).is_err()
         {
             self.restore_shared(&before, view.as_ref(), true);
             return Ok(Self::no_effect("The shared identities could not be updated.", entry.stamp.is_none() && stamp_was_read));
@@ -404,9 +411,18 @@ impl LiveEditor for GridLiveEditor {
         }
         if entry.own
             && let Ok(document) = self.session.doc()
-            && let Ok(Some(action)) = build_undo_action(decoded.action, &before.ids, &self.ids, &before.document.wb, &document.wb, &decoded.command)
         {
-            self.history_updates.insert(decoded.action, Some(action));
+            match build_undo_action(decoded.action, &before.ids, &self.ids, &before.document.wb, &document.wb, &decoded.command) {
+                Ok(Some(action)) => {
+                    self.history_updates.insert(decoded.action, Some(action));
+                }
+                Ok(None) => {}
+                // A reverse that cannot be built is recorded as a refusal, so Undo never
+                // silently reverses an older action in its place.
+                Err(_) => {
+                    self.history_updates.insert(decoded.action, Some(unrecorded_action(decoded.action, &decoded.command)));
+                }
+            }
         }
         Ok(Outcome { effect: Effect::Applied, read_stamp })
     }

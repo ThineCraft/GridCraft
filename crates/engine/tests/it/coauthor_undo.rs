@@ -2,10 +2,9 @@ use collab_core::ids::Seq;
 use collab_live::client::{Effect, Event, LiveConfig};
 use gridcraft_core::{CellRef, MAX_ROWS, Value};
 use gridcraft_engine::coauthor::{
-    GRIDCRAFT_LIVE_FORMAT, GridCoauthor, GridLiveEditor, GuardedPatch, GuardedStructural, PERSONAL_HISTORY_BYTES, PersonalHistory, SharedCommand,
-    UndoAction, decode_entry,
+    GRIDCRAFT_LIVE_FORMAT, GridCoauthor, GridLiveEditor, GuardedPatch, PERSONAL_HISTORY_BYTES, PersonalHistory, UndoAction, decode_entry,
 };
-use gridcraft_model::{SheetProtection, Style};
+use gridcraft_model::{Sheet, SheetProtection, Style};
 use protocol::live::MAX_PAYLOAD_BYTES;
 use serde_json::json;
 use std::sync::Arc;
@@ -87,6 +86,83 @@ fn propose(
 ) -> ProposedEntry {
     let step = client.submit(id, params, 2026, now_ms).expect("shared command submits");
     server.one_proposal(place, &step)
+}
+
+fn forged_sheet_structural_payload(structural: serde_json::Value) -> String {
+    json!({
+        "version": 1,
+        "action": 99,
+        "command": {"id": "edit.guardedPatch", "patch": {"Structural": structural}}
+    })
+    .to_string()
+}
+
+#[test]
+fn forged_sheet_structural_guard_kinds_are_not_wire_commands() {
+    let sheet = Sheet::new("Forged");
+    let snapshot = json!({"version":1,"sheet":sheet,"file_id":1,"formulas":[]}).to_string();
+    let entered = vec![0; 32];
+    let add = forged_sheet_structural_payload(json!({
+        "kind":"addSheet",
+        "sheet":[9, 1],
+        "before":"end",
+        "expected_present":false,
+        "entered":entered,
+        "snapshot":snapshot
+    }));
+    let delete = forged_sheet_structural_payload(json!({
+        "kind":"wholeAction",
+        "label":"Delete Sheet",
+        "sheet":[0, 0],
+        "before":"end",
+        "expected_after":true,
+        "before_state":{"sheets":[],"names":[]},
+        "after_state":{"sheets":[],"names":[]}
+    }));
+
+    assert!(decode_entry(&add).is_err(), "an add-sheet guarded patch must not decode from the wire");
+    assert!(decode_entry(&delete).is_err(), "a delete-sheet guarded patch must not decode from the wire");
+
+    // Delivered as ordered entries, both are refused like an unknown command and change nothing.
+    let mut server = DeterministicServer::new();
+    let mut alice = client();
+    let mut bob = client();
+    let alice_place = server.join(&mut alice, 10);
+    server.join(&mut bob, 20);
+    let edit = propose(&server, &mut alice, &alice_place, "cell.set", json!({"sheet":"Sheet1","cell":"B1","input":"carrier"}), 30);
+    for (offset, payload) in [(0u64, add), (10, delete)] {
+        let mut forged = edit.clone();
+        forged.payload = payload;
+        let before = bob.editor().session().doc().expect("document exists").wb.clone();
+        let before_ids = bob.editor().ids().clone();
+        let ordered = server.order(&forged, 1_795_219_200_100 + offset as i64, 43);
+        let step = server.deliver(&mut bob, &ordered, 100 + offset);
+        assert!(step.events.iter().any(|event| matches!(event, Event::Applied { effect: Effect::NoEffect { .. }, .. })));
+        assert_eq!(bob.editor().session().doc().expect("document exists").wb, before);
+        assert_eq!(bob.editor().ids(), &before_ids);
+    }
+}
+
+#[test]
+fn sheet_delete_undo_is_refused_locally_without_falling_through_history() {
+    let mut session = session_with_sheets(&["Deleted", "Other"]);
+    session.execute("cell.set", json!({"sheet":"Other","cell":"A1","input":"before"})).expect("initial value is set");
+    let mut alice = GridCoauthor::new(live_config(), GridLiveEditor::new(session).expect("editor builds"));
+    let mut peer = GridCoauthor::new(live_config(), GridLiveEditor::new(session_with_sheets(&["Deleted", "Other"])).expect("peer editor builds"));
+    let mut server = DeterministicServer::new();
+    let alice_place = server.join(&mut alice, 10);
+    server.join(&mut peer, 20);
+
+    let edit = propose(&server, &mut alice, &alice_place, "cell.set", json!({"sheet":"Other","cell":"A1","input":"older"}), 30);
+    order_and_deliver(&mut server, &edit, &mut alice, &mut peer, 40);
+    let deletion = propose(&server, &mut alice, &alice_place, "home.deleteSheet", json!({"sheet":"Deleted"}), 50);
+    order_and_deliver(&mut server, &deletion, &mut alice, &mut peer, 60);
+
+    let before = alice.editor().session().doc().expect("document exists").wb.clone();
+    let error = alice.undo(70).expect_err("sheet delete cannot be undone while sharing").to_string();
+    assert!(error.contains("cannot be undone while others are editing"), "{error}");
+    assert_eq!(alice.editor().session().doc().expect("document exists").wb, before);
+    assert_eq!(alice.history().undo_len(), 2, "the refusal marker stays above the older edit");
 }
 
 fn order_and_deliver(
@@ -685,22 +761,20 @@ fn guarded_structural_patches_obey_protection_gates() {
         assert_eq!(alice.editor().session().doc().expect("document exists").wb, before, "{command} reverse obeys protection");
     }
 
-    for (command, params) in [("home.insertSheet", json!({"name":"Added"})), ("sheet.rename", json!({"sheet":"Sheet1","name":"Budget"}))] {
-        let mut server = DeterministicServer::new();
-        let mut alice = client();
-        let mut bob = client();
-        let alice_place = server.join(&mut alice, 10);
-        server.join(&mut bob, 20);
-        let change = propose(&server, &mut alice, &alice_place, command, params, 30);
-        order_and_deliver(&mut server, &change, &mut alice, &mut bob, 40);
-        protect_workbook_structure(&mut alice);
-        protect_workbook_structure(&mut bob);
-        let before = alice.editor().session().doc().expect("document exists").wb.clone();
-        let undo = alice.undo(50).expect("sheet undo submits");
-        let proposal = server.one_proposal(&alice_place, &undo);
-        order_and_deliver(&mut server, &proposal, &mut alice, &mut bob, 60);
-        assert_eq!(alice.editor().session().doc().expect("document exists").wb, before, "{command} reverse obeys structure protection");
-    }
+    let mut server = DeterministicServer::new();
+    let mut alice = client();
+    let mut bob = client();
+    let alice_place = server.join(&mut alice, 10);
+    server.join(&mut bob, 20);
+    let change = propose(&server, &mut alice, &alice_place, "sheet.rename", json!({"sheet":"Sheet1","name":"Budget"}), 30);
+    order_and_deliver(&mut server, &change, &mut alice, &mut bob, 40);
+    protect_workbook_structure(&mut alice);
+    protect_workbook_structure(&mut bob);
+    let before = alice.editor().session().doc().expect("document exists").wb.clone();
+    let undo = alice.undo(50).expect("sheet undo submits");
+    let proposal = server.one_proposal(&alice_place, &undo);
+    order_and_deliver(&mut server, &proposal, &mut alice, &mut bob, 60);
+    assert_eq!(alice.editor().session().doc().expect("document exists").wb, before, "rename reverse obeys structure protection");
 
     let make_client = || {
         let session = session_with_sheets(&["Deleted", "Other"]);
@@ -713,13 +787,10 @@ fn guarded_structural_patches_obey_protection_gates() {
     server.join(&mut bob, 20);
     let deletion = propose(&server, &mut alice, &alice_place, "home.deleteSheet", json!({"sheet":"Deleted"}), 30);
     order_and_deliver(&mut server, &deletion, &mut alice, &mut bob, 40);
-    protect_workbook_structure(&mut alice);
-    protect_workbook_structure(&mut bob);
     let before = alice.editor().session().doc().expect("document exists").wb.clone();
-    let undo = alice.undo(50).expect("whole-action undo submits");
-    let proposal = server.one_proposal(&alice_place, &undo);
-    order_and_deliver(&mut server, &proposal, &mut alice, &mut bob, 60);
-    assert_eq!(alice.editor().session().doc().expect("document exists").wb, before, "WholeAction obeys workbook structure protection");
+    let error = alice.undo(50).expect_err("sheet delete undo is refused before anything is sent").to_string();
+    assert!(error.contains("cannot be undone while others are editing"), "{error}");
+    assert_eq!(alice.editor().session().doc().expect("document exists").wb, before);
 }
 
 #[test]
@@ -1061,26 +1132,19 @@ fn sheet_rename_undo_keeps_later_cell_edits() {
 }
 
 #[test]
-fn sheet_add_undo_refuses_after_another_person_edits_it() {
+fn sheet_add_undo_is_refused_locally() {
     let mut server = DeterministicServer::new();
     let mut alice = client();
     let mut bob = client();
     let alice_place = server.join(&mut alice, 10);
-    let bob_place = server.join(&mut bob, 20);
+    server.join(&mut bob, 20);
 
     let add = propose(&server, &mut alice, &alice_place, "home.insertSheet", json!({"name":"Added"}), 30);
     order_and_deliver(&mut server, &add, &mut alice, &mut bob, 40);
-    let edit = propose(&server, &mut bob, &bob_place, "cell.set", json!({"sheet":"Added","cell":"A1","input":"bob"}), 50);
-    order_and_deliver(&mut server, &edit, &mut bob, &mut alice, 60);
-
-    let undo = alice.undo(70).expect("sheet add undo submits");
-    let proposal = server.one_proposal(&alice_place, &undo);
-    order_and_deliver(&mut server, &proposal, &mut alice, &mut bob, 80);
-
-    assert_eq!(sheet_value(&alice, "Added", "A1"), Value::text("bob"));
-    assert_eq!(sheet_value(&bob, "Added", "A1"), Value::text("bob"));
-    let report = alice.last_undo_report().expect("guard refusal is reported");
-    assert_eq!((report.restored, report.left), (0, 1));
+    let error = alice.undo(50).expect_err("sheet add undo is local refusal").to_string();
+    assert!(error.contains("cannot be undone while others are editing"), "{error}");
+    assert!(alice.editor().session().doc().expect("document exists").wb.sheet_index("Added").is_some());
+    assert!(bob.editor().session().doc().expect("document exists").wb.sheet_index("Added").is_some());
 }
 
 fn delete_row_with_text(text_len: usize, extra_cell: bool) -> (DeterministicServer, ClientPlace, GridCoauthor, GridCoauthor) {
@@ -1108,7 +1172,7 @@ fn delete_row_with_text(text_len: usize, extra_cell: bool) -> (DeterministicServ
 }
 
 #[test]
-fn sort_large_paste_and_sheet_delete_require_untouched_guard() {
+fn structural_reverse_obeys_the_wire_limit() {
     let make_session = || {
         let mut session = session_with_sheets(&["Source", "Summary"]);
         session.execute("cell.set", json!({"sheet":"Source","cell":"A1","input":"7"})).expect("source is set");
@@ -1119,31 +1183,24 @@ fn sort_large_paste_and_sheet_delete_require_untouched_guard() {
     let mut bob = GridCoauthor::new(live_config(), GridLiveEditor::new(make_session()).expect("editor builds"));
     let mut server = DeterministicServer::new();
     let alice_place = server.join(&mut alice, 10);
-    let bob_place = server.join(&mut bob, 20);
+    server.join(&mut bob, 20);
 
     let deletion = propose(&server, &mut alice, &alice_place, "home.deleteSheet", json!({"sheet":"Source"}), 30);
     order_and_deliver(&mut server, &deletion, &mut alice, &mut bob, 40);
-    let edit = propose(&server, &mut bob, &bob_place, "cell.set", json!({"sheet":"Summary","cell":"A1","input":"later"}), 50);
-    order_and_deliver(&mut server, &edit, &mut bob, &mut alice, 60);
+    let error = alice.undo(50).expect_err("sheet delete undo is local refusal").to_string();
+    assert!(error.contains("cannot be undone while others are editing"), "{error}");
 
-    let undo = alice.undo(70).expect("sheet delete undo submits");
-    let proposal = server.one_proposal(&alice_place, &undo);
-    let decoded = decode_entry(&proposal.payload).expect("whole-action guard decodes");
-    let whole_action = match decoded.command {
-        SharedCommand::Guarded { patch: GuardedPatch::Structural(structural) } => matches!(*structural, GuardedStructural::WholeAction { .. }),
-        _ => false,
+    // The guard digests are written as decimal byte arrays, so their width depends on the
+    // content. Scan for a text length that puts the reverse exactly one byte below the limit.
+    let payload_for = |text_len: usize| {
+        let (server, place, mut client, _peer) = delete_row_with_text(text_len, false);
+        // A probe above the limit is refused before it is sent.
+        client.undo(90).ok().map(|undo| server.one_proposal(&place, &undo).payload.len())
     };
-    assert!(whole_action, "sheet delete uses the reusable all-or-nothing guard");
-    order_and_deliver(&mut server, &proposal, &mut alice, &mut bob, 80);
-    assert!(alice.editor().session().doc().expect("document exists").wb.sheet_index("Source").is_none());
-    assert_eq!(sheet_value(&alice, "Summary", "A1"), Value::text("later"));
-
-    let (probe_server, probe_place, mut probe, _probe_peer) = delete_row_with_text(1, false);
-    let probe_undo = probe.undo(90).expect("the payload overhead probe submits");
-    let probe_payload = probe_server.one_proposal(&probe_place, &probe_undo).payload.len();
-    let payload_overhead = probe_payload.checked_sub(1).expect("the payload includes the probe text");
-    let exact_limit_text =
-        MAX_PAYLOAD_BYTES.checked_sub(payload_overhead).and_then(|length| length.checked_add(1)).expect("the wire limit exceeds structural overhead");
+    let estimate = MAX_PAYLOAD_BYTES.saturating_sub(payload_for(1).expect("a one-character probe submits"));
+    let exact_limit_text = (estimate.saturating_sub(256)..estimate.saturating_add(256))
+        .find(|&text_len| payload_for(text_len) == Some(MAX_PAYLOAD_BYTES - 1))
+        .expect("some text length puts the reverse one byte below the wire limit");
 
     let (mut below_server, below_place, mut below, mut below_peer) = delete_row_with_text(exact_limit_text, false);
     let below_undo = below.undo(100).expect("a structural reverse below the wire limit submits");
@@ -1152,7 +1209,7 @@ fn sort_large_paste_and_sheet_delete_require_untouched_guard() {
     order_and_deliver(&mut below_server, &below_proposal, &mut below, &mut below_peer, 110);
     assert!(matches!(sheet_value(&below, "Sheet1", "A1"), Value::Text(_)));
 
-    let (above_server, _above_place, mut above, _above_peer) = delete_row_with_text(exact_limit_text, true);
+    let (above_server, _above_place, mut above, _above_peer) = delete_row_with_text(exact_limit_text + 256, true);
     let before = above.editor().session().doc().expect("document exists").wb.clone();
     let error = above.undo(120).expect_err("a structural reverse above the wire limit is refused").to_string();
     assert!(error.contains("This change is too large to undo while sharing"), "{error}");
@@ -1207,59 +1264,271 @@ fn row_delete_undo_refuses_after_another_delete_replaces_the_tail_filler() {
 }
 
 #[test]
-fn sheet_delete_undo_refuses_after_a_surviving_sheet_changes_structure() {
-    let make_session = || {
-        let mut session = session_with_sheets(&["Deleted", "Other"]);
-        {
-            let document = session.doc_mut().expect("document exists");
-            Arc::make_mut(&mut document.wb).sheets.get_mut(0).map(Arc::make_mut).expect("deleted sheet exists").file_id = 42;
-        }
-        session.execute("cell.set", json!({"sheet":"Deleted","cell":"A1","input":"=Other!A1"})).expect("formula is set");
-        session
-    };
-    let mut alice = GridCoauthor::new(live_config(), GridLiveEditor::new(make_session()).expect("editor builds"));
-    let mut bob = GridCoauthor::new(live_config(), GridLiveEditor::new(make_session()).expect("editor builds"));
+fn forged_undo_cannot_revive_another_participants_deleted_rows() {
     let mut server = DeterministicServer::new();
+    let mut alice = client();
+    let mut bob = client();
+    let mut carol = client();
     let alice_place = server.join(&mut alice, 10);
     let bob_place = server.join(&mut bob, 20);
+    server.join(&mut carol, 30);
 
-    let deletion = propose(&server, &mut alice, &alice_place, "home.deleteSheet", json!({"sheet":"Deleted"}), 30);
-    order_and_deliver(&mut server, &deletion, &mut alice, &mut bob, 40);
-    let insertion = propose(&server, &mut bob, &bob_place, "home.insertRows", json!({"sheet":"Other","rows":"1:1"}), 50);
-    order_and_deliver(&mut server, &insertion, &mut bob, &mut alice, 60);
+    let deletion = propose(&server, &mut bob, &bob_place, "home.deleteRows", json!({"sheet":"Sheet1","rows":"1:1"}), 40);
+    let ordered = server.order(&deletion, 1_795_219_200_040, 41);
+    server.deliver(&mut bob, &ordered, 50);
+    server.deliver(&mut alice, &ordered, 51);
+    server.deliver(&mut carol, &ordered, 52);
+    let before_alice = (alice.editor().ids().clone(), alice.editor().session().doc().expect("document exists").wb.clone());
+    let before_carol = (carol.editor().ids().clone(), carol.editor().session().doc().expect("document exists").wb.clone());
 
-    let undo = alice.undo(70).expect("sheet delete undo submits");
-    let proposal = server.one_proposal(&alice_place, &undo);
-    order_and_deliver(&mut server, &proposal, &mut alice, &mut bob, 80);
+    // A valid payload made from Bob's deletion, relabelled as Alice's entry.
+    let bob_undo = bob.undo(60).expect("Bob's honest undo prepares a valid patch");
+    let bob_proposal = server.one_proposal(&bob_place, &bob_undo);
+    let forged = ProposedEntry {
+        client: bob_proposal.client,
+        participant: alice_place.participant,
+        local: bob_proposal.local,
+        seen: bob_proposal.seen,
+        payload: bob_proposal.payload,
+    };
+    let forged_ordered = server.order(&forged, 1_795_219_200_060, 42);
+    let alice_step = server.deliver(&mut alice, &forged_ordered, 70);
+    let carol_step = server.deliver(&mut carol, &forged_ordered, 71);
 
-    assert!(alice.editor().session().doc().expect("document exists").wb.sheet_index("Deleted").is_none());
-    assert!(bob.editor().session().doc().expect("document exists").wb.sheet_index("Deleted").is_none());
-    let report = alice.last_undo_report().expect("guard refusal is reported");
-    assert_eq!((report.restored, report.left), (0, 1));
+    for step in [&alice_step, &carol_step] {
+        assert!(step.events.iter().any(|event| matches!(event, Event::Applied { effect: Effect::NoEffect { .. }, .. })));
+    }
+    assert_eq!(
+        (alice.editor().ids().clone(), alice.editor().session().doc().expect("document exists").wb.clone()),
+        before_alice,
+        "Alice refuses revival of Bob's deletion"
+    );
+    assert_eq!(
+        (carol.editor().ids().clone(), carol.editor().session().doc().expect("document exists").wb.clone()),
+        before_carol,
+        "every remote client makes the same ownership check"
+    );
+    assert_eq!(sheet_value(&carol, "Sheet1", "A1"), Value::Empty);
 }
 
 #[test]
-fn sheet_delete_undo_preserves_the_file_sheet_identity() {
-    let make_session = || {
-        let mut session = session_with_sheets(&["Deleted", "Other"]);
-        let document = session.doc_mut().expect("document exists");
-        Arc::make_mut(&mut document.wb).sheets.get_mut(0).map(Arc::make_mut).expect("deleted sheet exists").file_id = 42;
-        session
-    };
-    let mut alice = GridCoauthor::new(live_config(), GridLiveEditor::new(make_session()).expect("editor builds"));
-    let mut bob = GridCoauthor::new(live_config(), GridLiveEditor::new(make_session()).expect("editor builds"));
+fn undo_and_redo_of_three_thousand_contiguous_rows_work() {
     let mut server = DeterministicServer::new();
+    let mut alice = client();
+    let mut bob = client();
     let alice_place = server.join(&mut alice, 10);
     server.join(&mut bob, 20);
 
-    let deletion = propose(&server, &mut alice, &alice_place, "home.deleteSheet", json!({"sheet":"Deleted"}), 30);
+    let deletion = propose(&server, &mut alice, &alice_place, "home.deleteRows", json!({"sheet":"Sheet1","rows":"1:3000"}), 30);
     order_and_deliver(&mut server, &deletion, &mut alice, &mut bob, 40);
-    let undo = alice.undo(50).expect("sheet delete undo submits");
+    assert_eq!(sheet_value(&bob, "Sheet1", "A1"), Value::Empty);
+    let undo = alice.undo(50).expect("a compact contiguous-row undo submits");
     let proposal = server.one_proposal(&alice_place, &undo);
     order_and_deliver(&mut server, &proposal, &mut alice, &mut bob, 60);
 
-    let restored = alice.editor().session().doc().expect("document exists").wb.sheet(0).expect("restored sheet exists");
-    assert_eq!(restored.file_id, 42, "XLSX sheet identity is restored");
+    let report = alice.last_undo_report().expect("undo report is retained");
+    assert!(report.restored > 0, "the structural reverse applies");
+    assert_eq!(report.left, 0);
+    assert_eq!(sheet_value(&alice, "Sheet1", "A1"), Value::text("original"));
+    assert_eq!(sheet_value(&bob, "Sheet1", "A1"), Value::text("original"));
+    assert_eq!(alice.editor().ids(), bob.editor().ids());
+
+    let redo = alice.redo(70).expect("the contiguous-row redo submits");
+    let proposal = server.one_proposal(&alice_place, &redo);
+    order_and_deliver(&mut server, &proposal, &mut alice, &mut bob, 80);
+    assert_eq!(sheet_value(&alice, "Sheet1", "A1"), Value::Empty);
+    assert_eq!(sheet_value(&bob, "Sheet1", "A1"), Value::Empty);
+    assert_eq!(alice.editor().ids(), bob.editor().ids());
+}
+
+#[test]
+fn deleting_the_last_rows_can_be_undone() {
+    let mut server = DeterministicServer::new();
+    let mut alice = client();
+    let mut bob = client();
+    let alice_place = server.join(&mut alice, 10);
+    server.join(&mut bob, 20);
+    let last = format!("A{MAX_ROWS}");
+    let set = propose(&server, &mut alice, &alice_place, "cell.set", json!({"sheet":"Sheet1","cell":last,"input":"bottom"}), 30);
+    order_and_deliver(&mut server, &set, &mut alice, &mut bob, 40);
+
+    let rows = format!("{}:{MAX_ROWS}", MAX_ROWS - 1);
+    let deletion = propose(&server, &mut alice, &alice_place, "home.deleteRows", json!({"sheet":"Sheet1","rows":rows}), 50);
+    order_and_deliver(&mut server, &deletion, &mut alice, &mut bob, 60);
+    assert_eq!(sheet_value(&bob, "Sheet1", &last), Value::Empty);
+    let undo = alice.undo(70).expect("the end-of-sheet undo submits");
+    let proposal = server.one_proposal(&alice_place, &undo);
+    order_and_deliver(&mut server, &proposal, &mut alice, &mut bob, 80);
+
+    assert_eq!(sheet_value(&alice, "Sheet1", &last), Value::text("bottom"));
+    assert_eq!(sheet_value(&bob, "Sheet1", &last), Value::text("bottom"));
+    assert_eq!(alice.editor().ids(), bob.editor().ids());
+}
+
+fn line_client() -> GridCoauthor {
+    let mut session = initial_session();
+    session.execute("cell.set", json!({"sheet":"Sheet1","cell":"C1","input":"right"})).expect("right value is set");
+    session.execute("home.columnWidth", json!({"sheet":"Sheet1","cols":"B:B","width":100})).expect("column width is set");
+    session
+        .execute("home.formatCells", json!({"sheet":"Sheet1","range":"B:B","style":{"protection":{"locked":false}}}))
+        .expect("column starts unlocked");
+    GridCoauthor::new(live_config(), GridLiveEditor::new(session).expect("editor builds"))
+}
+
+fn column_width(client: &GridCoauthor, col: u32) -> Option<f32> {
+    let document = client.editor().session().doc().expect("document exists");
+    document.wb.sheet(0).expect("sheet exists").cols.get(&col).and_then(|line| line.size)
+}
+
+fn any_unlocked_line(client: &GridCoauthor) -> bool {
+    let document = client.editor().session().doc().expect("document exists");
+    let sheet = document.wb.sheet(0).expect("sheet exists");
+    sheet.cols.values().chain(sheet.rows.values()).any(|line| line.style.is_some_and(|style| !document.wb.styles.get(style).protection.locked))
+}
+
+#[test]
+fn restored_line_settings_obey_protection_and_carry_no_style_indices() {
+    // Honest path: the width and the column style come back, as typed values.
+    let mut server = DeterministicServer::new();
+    let mut alice = line_client();
+    let mut bob = line_client();
+    let alice_place = server.join(&mut alice, 10);
+    server.join(&mut bob, 20);
+    let deletion = propose(&server, &mut alice, &alice_place, "home.deleteColumns", json!({"sheet":"Sheet1","cols":"B:B"}), 30);
+    order_and_deliver(&mut server, &deletion, &mut alice, &mut bob, 40);
+    let undo = alice.undo(50).expect("column delete undo submits");
+    let proposal = server.one_proposal(&alice_place, &undo);
+    let payload: serde_json::Value = serde_json::from_str(&proposal.payload).expect("structural undo is JSON");
+    let lines = payload["command"]["patch"]["Structural"]["state"]["lines"].as_array().expect("line settings are an array");
+    assert!(!lines.is_empty(), "the deleted column's width travels with the undo");
+    for line in lines {
+        for side in ["expected", "restore"] {
+            assert!(line[side].get("style").is_none(), "line settings carry no style index: {line}");
+        }
+    }
+    order_and_deliver(&mut server, &proposal, &mut alice, &mut bob, 60);
+    for peer in [&alice, &bob] {
+        assert_eq!(sheet_value(peer, "Sheet1", "C1"), Value::text("right"));
+        assert_eq!(column_width(peer, 1), Some(100.0));
+        assert!(any_unlocked_line(peer), "the column style is restored through the typed style path");
+    }
+
+    // Protected sheet: inserting columns is allowed, but the unlock must not come back.
+    let mut server = DeterministicServer::new();
+    let mut alice = line_client();
+    let mut bob = line_client();
+    let alice_place = server.join(&mut alice, 10);
+    server.join(&mut bob, 20);
+    let deletion = propose(&server, &mut alice, &alice_place, "home.deleteColumns", json!({"sheet":"Sheet1","cols":"B:B"}), 30);
+    order_and_deliver(&mut server, &deletion, &mut alice, &mut bob, 40);
+    let protection = SheetProtection { insert_columns: true, format_cells: true, format_columns: true, ..SheetProtection::default() };
+    protect_sheet(&mut alice, protection.clone());
+    protect_sheet(&mut bob, protection);
+    let before = alice.editor().session().doc().expect("document exists").wb.clone();
+    let undo = alice.undo(50).expect("column delete undo submits");
+    let proposal = server.one_proposal(&alice_place, &undo);
+    order_and_deliver(&mut server, &proposal, &mut alice, &mut bob, 60);
+    assert_eq!(alice.editor().session().doc().expect("document exists").wb, before, "the protected column is not unlocked");
+    assert!(!any_unlocked_line(&alice));
+    assert!(!any_unlocked_line(&bob));
+
+    // A forged line aimed at a column the entry does not revive is refused outright.
+    let mut server = DeterministicServer::new();
+    let mut alice = line_client();
+    let mut bob = line_client();
+    let alice_place = server.join(&mut alice, 10);
+    server.join(&mut bob, 20);
+    let deletion = propose(&server, &mut alice, &alice_place, "home.deleteColumns", json!({"sheet":"Sheet1","cols":"B:B"}), 30);
+    order_and_deliver(&mut server, &deletion, &mut alice, &mut bob, 40);
+    let undo = alice.undo(50).expect("column delete undo submits");
+    let mut forged = server.one_proposal(&alice_place, &undo);
+    let mut payload: serde_json::Value = serde_json::from_str(&forged.payload).expect("structural undo is JSON");
+    payload["command"]["patch"]["Structural"]["state"]["lines"][0]["target"]["col"] = json!([0, 0]);
+    forged.payload = serde_json::to_string(&payload).expect("forged line target encodes");
+    let before = bob.editor().session().doc().expect("document exists").wb.clone();
+    let ordered = server.order(&forged, 1_795_219_200_060, 43);
+    let step = server.deliver(&mut bob, &ordered, 60);
+    assert!(step.events.iter().any(|event| matches!(event, Event::Applied { effect: Effect::NoEffect { .. }, .. })));
+    assert_eq!(bob.editor().session().doc().expect("document exists").wb, before);
+}
+
+#[test]
+fn revival_work_does_not_grow_with_earlier_deletions_on_the_axis() {
+    let mut server = DeterministicServer::new();
+    let mut alice = client();
+    let mut bob = client();
+    let alice_place = server.join(&mut alice, 10);
+    let bob_place = server.join(&mut bob, 20);
+
+    // Each full-height insert pushes about a million row identities off the end of the axis.
+    let mut now = 30u64;
+    for _ in 0..16 {
+        let insert = propose(&server, &mut bob, &bob_place, "home.insertRows", json!({"sheet":"Sheet1","rows":format!("5:{MAX_ROWS}")}), now);
+        order_and_deliver(&mut server, &insert, &mut bob, &mut alice, now + 1);
+        now += 10;
+    }
+    let set = propose(&server, &mut alice, &alice_place, "cell.set", json!({"sheet":"Sheet1","cell":"A3","input":"kept"}), now);
+    order_and_deliver(&mut server, &set, &mut alice, &mut bob, now + 1);
+    let deletion = propose(&server, &mut alice, &alice_place, "home.deleteRows", json!({"sheet":"Sheet1","rows":"3:3"}), now + 10);
+    order_and_deliver(&mut server, &deletion, &mut alice, &mut bob, now + 11);
+
+    let undo = alice.undo(now + 20).expect("a one-row undo submits");
+    let proposal = server.one_proposal(&alice_place, &undo);
+    let ordered = server.order(&proposal, 1_795_219_200_000 + now as i64 + 30, 41);
+    let started = std::time::SystemTime::UNIX_EPOCH.elapsed().unwrap_or_default();
+    server.deliver(&mut bob, &ordered, now + 31);
+    let elapsed = std::time::SystemTime::UNIX_EPOCH.elapsed().unwrap_or_default().saturating_sub(started);
+    server.deliver(&mut alice, &ordered, now + 32);
+
+    assert_eq!(sheet_value(&bob, "Sheet1", "A3"), Value::text("kept"));
+    assert_eq!(alice.editor().ids(), bob.editor().ids());
+    assert!(elapsed < std::time::Duration::from_millis(25), "a one-row undo took {elapsed:?} after many large deletions");
+}
+
+fn python_client(target: Option<&str>) -> GridCoauthor {
+    let mut session = session_with_sheets(&["Sheet1", "Other"]);
+    session.execute("cell.set", json!({"sheet":"Sheet1","cell":"A2","input":"deleted"})).expect("row value is set");
+    session.execute("python.set", json!({"sheet":"Other","cell":"D4","code":"1 + 1"})).expect("Python cell elsewhere is set");
+    if let Some(cell) = target {
+        session.execute("python.set", json!({"sheet":"Sheet1","cell":cell,"code":"2 + 2"})).expect("Python cell in the target is set");
+    }
+    GridCoauthor::new(live_config(), GridLiveEditor::new(session).expect("editor builds"))
+}
+
+#[test]
+fn python_cells_do_not_stop_structural_undo_and_are_reported_as_left_alone() {
+    let mut server = DeterministicServer::new();
+    let mut alice = python_client(None);
+    let mut bob = python_client(None);
+    let alice_place = server.join(&mut alice, 10);
+    server.join(&mut bob, 20);
+    let deletion = propose(&server, &mut alice, &alice_place, "home.deleteRows", json!({"sheet":"Sheet1","rows":"2:2"}), 30);
+    order_and_deliver(&mut server, &deletion, &mut alice, &mut bob, 40);
+    assert_eq!(alice.history().undo_len(), 1, "a Python cell elsewhere does not prevent recording");
+    let undo = alice.undo(50).expect("row delete undo submits");
+    let proposal = server.one_proposal(&alice_place, &undo);
+    order_and_deliver(&mut server, &proposal, &mut alice, &mut bob, 60);
+    assert_eq!(sheet_value(&alice, "Sheet1", "A2"), Value::text("deleted"));
+    assert_eq!(sheet_value(&bob, "Sheet1", "A2"), Value::text("deleted"));
+
+    let mut server = DeterministicServer::new();
+    let mut alice = python_client(Some("B2"));
+    let mut bob = python_client(Some("B2"));
+    let alice_place = server.join(&mut alice, 10);
+    server.join(&mut bob, 20);
+    let deletion = propose(&server, &mut alice, &alice_place, "home.deleteRows", json!({"sheet":"Sheet1","rows":"2:2"}), 30);
+    order_and_deliver(&mut server, &deletion, &mut alice, &mut bob, 40);
+    assert_eq!(alice.history().undo_len(), 1, "a Python cell in the deleted row does not prevent recording");
+    let undo = alice.undo(50).expect("row delete undo submits");
+    let proposal = server.one_proposal(&alice_place, &undo);
+    assert!(!proposal.payload.contains("2 + 2"), "Python source never enters the guarded patch");
+    order_and_deliver(&mut server, &proposal, &mut alice, &mut bob, 60);
+    assert_eq!(sheet_value(&alice, "Sheet1", "A2"), Value::text("deleted"));
+    assert_eq!(sheet_value(&bob, "Sheet1", "A2"), Value::text("deleted"));
+    let report = alice.last_undo_report().expect("undo report is retained");
+    assert!(report.restored > 0);
+    assert_eq!(report.left, 1, "the Python cell is reported as left alone");
+    assert!(report.reason.as_deref().is_some_and(|reason| reason.contains("Python")), "{report:?}");
 }
 
 #[test]
