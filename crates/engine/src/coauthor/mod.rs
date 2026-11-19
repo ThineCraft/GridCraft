@@ -132,6 +132,32 @@ pub enum TicketAnswer {
     Failed { send: Option<String> },
 }
 
+/// A checkpoint of `state`: its bytes and hash, and the identity data a base needs.
+fn write_checkpoint(state: &editor::GridCheckpointState<'_>) -> Result<GridCheckpoint, GridLiveError> {
+    let written = write_bytes(state)?;
+    let session_data = state.ids.session_data()?;
+    Ok(GridCheckpoint { bytes: written.bytes, session_data, sha256: written.sha256, entered: written.entered })
+}
+
+/// A checkpoint's file bytes, their SHA-256 and the entered digest, without identity data.
+struct WrittenBytes {
+    bytes: Vec<u8>,
+    sha256: [u8; 32],
+    entered: [u8; 32],
+}
+
+/// The deterministic file bytes of `state` (the stored view applied, file ids restored), their
+/// SHA-256 and the entered digest.
+fn write_bytes(state: &editor::GridCheckpointState<'_>) -> Result<WrittenBytes, GridLiveError> {
+    let mut workbook = state.workbook.clone();
+    state.stored_view.apply(&mut workbook, state.ids);
+    state.ids.restore_file_ids(&mut workbook)?;
+    let bytes = crate::io::save_bytes(&workbook, "checkpoint.xlsx").map_err(CoauthorError::from)?;
+    let sha256 = Sha256::digest(&bytes).into();
+    let entered = crate::fingerprint::workbook_fingerprint(&workbook).entered;
+    Ok(WrittenBytes { bytes, sha256, entered })
+}
+
 /// An error from preparing a GridCraft entry or advancing the shared live client.
 #[derive(Debug, Error)]
 pub enum GridLiveError {
@@ -315,30 +341,16 @@ impl GridCoauthor {
         write_checkpoint(&state)
     }
 
-    /// The copy the person sees now, waiting changes included, as deterministic checkpoint bytes
-    /// with no identity data: an archived copy is never loaded as a base.
+    /// The copy the person sees now, waiting changes included, as deterministic checkpoint bytes.
+    /// It carries no identity data, and none is built: the room stores it below the current file
+    /// with no live checkpoint row, which is what keeps it from ever being loaded as a base (the
+    /// web seat loads any base with empty identity data as a plain file).
     fn shown_copy(&self) -> Result<GridCheckpoint, GridLiveError> {
         let state = self.editor.checkpoint_state()?;
-        let mut copy = write_checkpoint(&state)?;
-        copy.session_data = Vec::new();
-        Ok(copy)
+        let written = write_bytes(&state)?;
+        Ok(GridCheckpoint { bytes: written.bytes, session_data: Vec::new(), sha256: written.sha256, entered: written.entered })
     }
-}
 
-fn write_checkpoint(state: &editor::GridCheckpointState<'_>) -> Result<GridCheckpoint, GridLiveError> {
-    {
-        let mut workbook = state.workbook.clone();
-        state.stored_view.apply(&mut workbook, state.ids);
-        state.ids.restore_file_ids(&mut workbook)?;
-        let bytes = crate::io::save_bytes(&workbook, "checkpoint.xlsx").map_err(CoauthorError::from)?;
-        let session_data = state.ids.session_data()?;
-        let sha256 = Sha256::digest(&bytes).into();
-        let entered = crate::fingerprint::workbook_fingerprint(&workbook).entered;
-        Ok(GridCheckpoint { bytes, session_data, sha256, entered })
-    }
-}
-
-impl GridCoauthor {
     /// Answers a checkpoint or verify ticket from the exact agreed state at its position; `None`
     /// for any other event. A failure is answered with the `checkpoint_failed` frame only.
     pub fn answer_ticket(&self, event: &Event) -> Option<TicketAnswer> {

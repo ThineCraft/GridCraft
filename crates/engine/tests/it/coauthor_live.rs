@@ -1116,8 +1116,7 @@ fn archive_return_writes_the_old_shown_copy() {
     let (workbook, _) = io::open_bytes("archive.xlsx", &checkpoint.bytes).expect("the copy opens");
     let a1 = workbook.sheet(0).expect("sheet").value(CellRef::parse("A1").expect("cell"));
     assert_eq!(a1, Value::Text("old copy".into()), "the copy is what the person saw, waiting change included");
-    let again = alice.answer_ticket(event);
-    assert!(matches!(again, Some(TicketAnswer::Write { checkpoint: ref c, .. }) if c.bytes == checkpoint.bytes), "deterministic bytes");
+    assert_eq!(checkpoint.bytes, archived_copy("old copy"), "another editor with the same changes writes the same bytes");
 
     // An ordinary ticket still writes the agreed state.
     let ordinary =
@@ -1138,4 +1137,26 @@ fn an_over_limit_room_is_a_recoverable_pause() {
     assert!(step.events.iter().any(|event| matches!(event, Event::Unavailable { .. })));
     assert_eq!(alice.phase(), gridcraft_engine::coauthor::Phase::Offline, "it waits to join again");
     assert!(!alice.connected(30).is_empty(), "and can join again");
+}
+
+/// The archived copy an independent editor writes after typing `text` into A1 and being archived
+/// on its return.
+fn archived_copy(text: &str) -> Vec<u8> {
+    let mut server = DeterministicServer::new();
+    let mut editor = GridCoauthor::new(live_config(), GridLiveEditor::new(session_with_sheets(&["Data"])).expect("editor builds"));
+    let place = server.join(&mut editor, 10);
+    let _ = editor.submit("cell.set", json!({"sheet":0,"cell":"A1","input":text}), 2026, 20).expect("the edit is made");
+    editor.disconnected(30);
+    let _ = editor.connected(100);
+    let joined = json!({"type":"live_joined","session":"00000000-0000-0000-0000-00000000005e","participant":9,
+        "place":{"is":"returning","previous":place.participant.0},"can_edit":true,"heartbeat_ms":60_000,"people":[]});
+    editor.receive(&joined.to_string(), 101).expect("join");
+    editor.receive(&json!({"type":"archive_return","current":"r9"}).to_string(), 102).expect("archive return");
+    let ticket = json!({"type":"checkpoint_ticket","ticket":"00000000-0000-0000-0000-0000000000c1","purpose":"write","at":0,"base":"r9","major":"returning_client_archive"});
+    let step = editor.receive(&ticket.to_string(), 103).expect("a ticket while joining");
+    let event = step.events.iter().find(|event| matches!(event, Event::CheckpointRequested { .. })).expect("the archive ticket");
+    match editor.answer_ticket(event) {
+        Some(TicketAnswer::Write { checkpoint, .. }) => checkpoint.bytes,
+        _ => panic!("the archive ticket is answered"),
+    }
 }

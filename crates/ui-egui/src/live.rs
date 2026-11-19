@@ -139,7 +139,10 @@ impl SheetApp {
                 self.live_undo_steps = if result.is_ok() { steps - 1 } else { 0 };
                 result
             }
-            "edit.redo" => link.redo(&mut self.session),
+            "edit.redo" => {
+                self.live_undo_steps = 0;
+                link.redo(&mut self.session)
+            }
             _ => {
                 gridcraft_engine::find_command(id)?;
                 match route(id) {
@@ -147,7 +150,12 @@ impl SheetApp {
                     Route::Refused(reason) => Err(reason.to_string()),
                     Route::Shared if !link.may_edit() => Err(READ_ONLY_REASON.to_string()),
                     Route::Shared => match explicit_params(&self.session, id, params.clone()) {
-                        Ok(explicit) => link.submit(&mut self.session, id, explicit, origin_year()),
+                        Ok(explicit) => {
+                            // A newer change cancels the rest of a multi-step Undo, which would
+                            // otherwise go on to undo that change too.
+                            self.live_undo_steps = 0;
+                            link.submit(&mut self.session, id, explicit, origin_year())
+                        }
                         Err(error) => Err(error.to_string()),
                     },
                 }
@@ -760,5 +768,22 @@ mod tests {
         let (mut app, _seat, _) = live_app(false, true, vec![]);
         app.begin_python_edit();
         assert!(app.editor.is_none());
+    }
+
+    #[test]
+    fn a_later_edit_cancels_the_rest_of_a_multi_step_undo() {
+        let (mut app, seat, _) = live_app(true, true, vec![]);
+        app.run("cell.set", json!({"cell":"A1","input":"1"})).unwrap();
+        seat.confirm(&mut app.session, 0, 1);
+        app.run("cell.set", json!({"cell":"A2","input":"2"})).unwrap();
+        seat.confirm(&mut app.session, 1, 2);
+        app.run("edit.undo", json!({"steps": 2})).unwrap();
+        seat.confirm(&mut app.session, 2, 3);
+        app.run("cell.set", json!({"cell":"A3","input":"3"})).unwrap();
+        assert_eq!(seat.entries().len(), 4);
+        seat.confirm(&mut app.session, 3, 4);
+        app.continue_live_undo();
+        assert_eq!(seat.entries().len(), 4, "the rest of the Undo was cancelled by the newer change");
+        assert_eq!(value(&app, "A3"), Value::Number(3.0));
     }
 }

@@ -48,7 +48,7 @@ use gridcraft_ui_egui::live::OtherPlace;
 use serde_json::{Value as Json, json};
 
 /// The largest server frame taken from the page.
-pub const MAX_FRAME_BYTES: usize = 1 << 20;
+pub const MAX_FRAME_BYTES: usize = 2 << 20;
 /// The largest base file taken from the page, as for an ordinary open.
 pub const MAX_BASE_BYTES: usize = 512 << 20;
 /// The most people a people list may name.
@@ -249,6 +249,11 @@ fn base(data: &Json, binaries: PageBinaries) -> Result<PageBase, LiveMsgError> {
             Some((at_ms, seed))
         }
     };
+    // A stamp comes with identity data: one without it is a checkpoint that lost its data on the
+    // way, refused rather than loaded as a file with fresh identities.
+    if binaries.session_data.is_none() && stamp.is_some() {
+        return Err(LiveMsgError::Invalid("stamp"));
+    }
     // Empty session data is a re-stored file with no identities (G4 task 11): a file base, which
     // needs no stamp.
     let session_data = binaries.session_data.filter(|data| !data.is_empty());
@@ -799,15 +804,21 @@ impl PageQueue {
     /// warning. A `closed` ends an overflow.
     fn push_lifecycle(&mut self, message: LivePageMsg) {
         let socket = matches!(message, LivePageMsg::Open | LivePageMsg::Closed);
-        if matches!(message, LivePageMsg::Closed) {
-            self.overflowed = false;
-        }
+        // Any lifecycle message ends an overflow: the page reset the socket, or started or
+        // stopped the session; frames are heard again from here even if no `closed` came.
+        self.overflowed = false;
         if socket && matches!(self.items.back(), Some(LivePageMsg::Open | LivePageMsg::Closed)) {
             self.items.pop_back();
         }
         if self.items.len() >= MAX_QUEUED {
-            log::warn!("live: too many page messages waiting; one was dropped");
-            return;
+            // The oldest waiting message goes, never the newest lifecycle state.
+            log::warn!("live: too many page messages waiting; the oldest was dropped");
+            if let Some(dropped) = self.items.pop_front() {
+                self.bytes = self.bytes.saturating_sub(cost(&dropped));
+                if matches!(dropped, LivePageMsg::Base(_)) {
+                    self.has_base = false;
+                }
+            }
         }
         self.items.push_back(message);
     }
@@ -1531,10 +1542,13 @@ mod tests {
     }
 
     #[test]
-    fn frames_over_a_mebibyte_are_refused() {
-        let at_limit = "x".repeat(MAX_FRAME_BYTES);
+    fn frames_over_the_clients_limit_are_refused() {
+        // collab-live reads frames up to 2 MiB; an entry with escaped text can be over 1 MiB.
+        let big = "x".repeat((1 << 20) + 1);
+        assert!(matches!(parse(json!({"type":"gridcraft:live-frame","frame":big})), Ok(Some(LivePageMsg::Frame(_)))), "over 1 MiB is still a frame");
+        let at_limit = "x".repeat(2 << 20);
         assert!(matches!(parse(json!({"type":"gridcraft:live-frame","frame":at_limit})), Ok(Some(LivePageMsg::Frame(_)))));
-        let over = "x".repeat(MAX_FRAME_BYTES + 1);
+        let over = "x".repeat((2 << 20) + 1);
         assert!(matches!(parse(json!({"type":"gridcraft:live-frame","frame":over})), Err(LiveMsgError::TooLarge(_))));
         assert!(parse(json!({"type":"gridcraft:live-frame","frame":7})).is_err());
     }
@@ -2004,5 +2018,30 @@ mod tests {
         seat.handle(LivePageMsg::Frame(joined.to_string()), 22);
         let out = seat.handle(LivePageMsg::Frame(json!({"type":"catchup","base":0,"revision":"r-outside","from":0,"head":0}).to_string()), 23);
         assert!(out.iter().any(|message| matches!(message, LiveEditorMsg::Load { revision: Some(r), at: 0 } if r == "r-outside")), "{out:?}");
+    }
+
+    #[test]
+    fn a_stamp_without_session_data_is_refused() {
+        let stamped = json!({"type":"gridcraft:live-base","revision":"r3","at":4,"stamp":{"atMs":5,"seed":6}});
+        let lost = parse_page_msg(&stamped, PageBinaries { bytes: Some(vec![1]), session_data: None });
+        assert!(lost.is_err(), "a checkpoint that lost its identity data fails loudly");
+        let restored = parse_page_msg(&stamped, PageBinaries { bytes: Some(vec![1]), session_data: Some(Vec::new()) });
+        assert!(
+            matches!(restored, Ok(Some(LivePageMsg::Base(PageBase { session_data: None, stamp: None, .. })))),
+            "empty identity data is a re-stored file"
+        );
+    }
+
+    #[test]
+    fn an_overflow_ends_with_any_lifecycle_message() {
+        for end in [LivePageMsg::Open, LivePageMsg::Stop, start_msg(true)] {
+            let mut queue = PageQueue::default();
+            while queue.push(LivePageMsg::Frame("x".repeat(1 << 20))).is_ok() {}
+            assert!(queue.push(LivePageMsg::Tick).is_ok() && queue.len() == 0, "dropped quietly while overflowed");
+            queue.push(end).unwrap();
+            let before = queue.len();
+            queue.push(LivePageMsg::Tick).unwrap();
+            assert_eq!(queue.len(), before + 1, "heard again after the next lifecycle message");
+        }
     }
 }
