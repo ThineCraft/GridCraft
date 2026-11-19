@@ -154,9 +154,13 @@ impl GridLiveEditor {
     ) -> Result<PreparedChange, CoauthorError> {
         let entry = encode_command(&self.ids, &self.session, action, id, params, origin_year, allocate)?;
         let payload = serde_json::to_string(&entry).map_err(|error| CoauthorError::MalformedPayload(error.to_string()))?;
-        let stored_cells = self.session.doc()?.wb.sheets.iter().fold(0usize, |count, sheet| count.saturating_add(sheet.cells.len()));
-        let mode = mode_for(&entry.command, stored_cells);
+        let mode = mode_for(&entry.command, self.stored_cells());
         Ok(PreparedChange { payload, mode, action })
+    }
+
+    /// Stored cells across the shared workbook, for the large-workbook wait rule.
+    pub(super) fn stored_cells(&self) -> usize {
+        self.session.doc().map_or(0, |document| document.wb.sheets.iter().fold(0usize, |count, sheet| count.saturating_add(sheet.cells.len())))
     }
 
     /// The ordered entry currently being applied, retained when that apply crashes so the host

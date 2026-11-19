@@ -49,6 +49,19 @@ pub fn mode_for(command: &SharedCommand, stored_cells: usize) -> Mode {
     if structural && stored_cells >= LARGE_WORKBOOK_CELLS { Mode::WaitForServer } else { Mode::ShowAtOnce }
 }
 
+/// Chooses the mode of a personal Undo or Redo: one that reverses a structural change follows
+/// the same rule as the structural command itself.
+pub fn mode_for_guarded(patch: &GuardedPatch, stored_cells: usize) -> Mode {
+    fn structural(patch: &GuardedPatch) -> bool {
+        match patch {
+            GuardedPatch::Structural(_) => true,
+            GuardedPatch::Composite(parts) => parts.iter().any(structural),
+            GuardedPatch::Cells(_) | GuardedPatch::Styles(_) | GuardedPatch::LocalRefusal(_) => false,
+        }
+    }
+    if structural(patch) && stored_cells >= LARGE_WORKBOOK_CELLS { Mode::WaitForServer } else { Mode::ShowAtOnce }
+}
+
 /// One validated local change, ready to hand to the shared live client.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PreparedChange {
@@ -186,13 +199,14 @@ impl GridCoauthor {
     fn submit_history_patch(&mut self, patch: GuardedPatch, pending: PendingHistory, now_ms: u64) -> Result<Step, GridLiveError> {
         let next_action = self.next_action.checked_add(1).ok_or(GridLiveError::ActionExhausted)?;
         let action = self.next_action;
+        let mode = mode_for_guarded(&patch, self.editor.stored_cells());
         let entry = command::guarded_entry(action, patch);
         let payload = serde_json::to_string(&entry).map_err(|error| CoauthorError::MalformedPayload(error.to_string()))?;
         if payload.len() > MAX_PAYLOAD_BYTES {
             self.history.refused(action);
             return Err(CoauthorError::HistoryRefusal("This change is too large to undo while sharing".into()).into());
         }
-        let step = match self.client.local(&mut self.editor, payload, Mode::ShowAtOnce, now_ms) {
+        let step = match self.client.local(&mut self.editor, payload, mode, now_ms) {
             Ok(step) => step,
             Err(error) => {
                 self.history.refused(action);

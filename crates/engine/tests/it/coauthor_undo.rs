@@ -1626,3 +1626,38 @@ fn pending_guarded_undo_reports_that_it_read_the_stamp() {
     assert_eq!(pending.effect, Effect::Applied);
     assert!(pending.read_stamp, "a pending Undo that recalculates `=NOW()` must be re-run under its stamp");
 }
+
+#[test]
+fn structural_undo_and_redo_wait_for_the_server_on_large_workbooks() {
+    let mut session = session_with_sheets(&["Sheet1"]);
+    {
+        let document = session.doc_mut().expect("document exists");
+        let sheet = Arc::make_mut(&mut document.wb).sheets.get_mut(0).map(Arc::make_mut).expect("sheet exists");
+        for row in 0..100_000u32 {
+            sheet.set_value(CellRef::new(row, 0), Value::Number(f64::from(row)));
+        }
+    }
+    let mut server = DeterministicServer::new();
+    let mut alice = GridCoauthor::new(live_config(), GridLiveEditor::new(session).expect("editor builds"));
+    let alice_place = server.join(&mut alice, 10);
+
+    let insert = propose(&server, &mut alice, &alice_place, "home.insertRows", json!({"sheet":"Sheet1","rows":"1:1"}), 20);
+    assert_eq!(sheet_value(&alice, "Sheet1", "A1"), Value::Number(0.0), "the large insert waits for the server");
+    let ordered = server.order(&insert, 1_795_219_200_000, 41);
+    server.deliver(&mut alice, &ordered, 30);
+    assert_eq!(sheet_value(&alice, "Sheet1", "A1"), Value::Empty, "the insert appears after acknowledgement");
+
+    let undo = alice.undo(40).expect("undo submits");
+    let undo = server.one_proposal(&alice_place, &undo);
+    assert_eq!(sheet_value(&alice, "Sheet1", "A1"), Value::Empty, "the large structural Undo waits for the server");
+    let ordered = server.order(&undo, 1_795_219_201_000, 42);
+    server.deliver(&mut alice, &ordered, 50);
+    assert_eq!(sheet_value(&alice, "Sheet1", "A1"), Value::Number(0.0), "the Undo appears after acknowledgement");
+
+    let redo = alice.redo(60).expect("redo submits");
+    let redo = server.one_proposal(&alice_place, &redo);
+    assert_eq!(sheet_value(&alice, "Sheet1", "A1"), Value::Number(0.0), "the large structural Redo waits for the server");
+    let ordered = server.order(&redo, 1_795_219_202_000, 43);
+    server.deliver(&mut alice, &ordered, 70);
+    assert_eq!(sheet_value(&alice, "Sheet1", "A1"), Value::Empty, "the Redo appears after acknowledgement");
+}
