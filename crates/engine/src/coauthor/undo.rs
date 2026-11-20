@@ -845,6 +845,7 @@ fn target_error(error: TargetGone) -> CoauthorError {
         TargetGone::UnknownColumn(id) => CoauthorError::UnknownIdentity(format!("column {id:?}")),
         TargetGone::Malformed(message) => CoauthorError::MalformedPayload(message),
         TargetGone::UnrepresentableReference => CoauthorError::MalformedPayload("unrepresentable identity reference".into()),
+        TargetGone::TooFragmented => CoauthorError::TooFragmented,
     }
 }
 

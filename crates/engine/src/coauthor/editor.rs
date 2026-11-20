@@ -549,6 +549,7 @@ impl GridLiveEditor {
             TargetGone::DeletedColumn(_) | TargetGone::UnknownColumn(_) => "column",
             TargetGone::UnrepresentableReference => "formula reference",
             TargetGone::Malformed(_) => "target",
+            TargetGone::TooFragmented => "identity axis",
         };
         let state = match error {
             TargetGone::DeletedSheet(_) | TargetGone::DeletedRow(_) | TargetGone::DeletedColumn(_) => "was deleted",
@@ -563,6 +564,7 @@ impl GridLiveEditor {
             TargetGone::DeletedRow(_) => NotAppliedReason::RowDeleted,
             TargetGone::DeletedColumn(_) => NotAppliedReason::ColumnDeleted,
             TargetGone::Malformed(_) => NotAppliedReason::Invalid,
+            TargetGone::TooFragmented => NotAppliedReason::TooFragmented,
             _ => NotAppliedReason::TargetUnavailable,
         }
     }
@@ -696,10 +698,15 @@ impl LiveEditor for GridLiveEditor {
             return Self::engine_error_outcome(error, entry.stamp.is_none() && stamp_was_read);
         }
         if let Some(structural) = &resolved.structural
-            && self.ids.apply_structural_owned(structural, entry.participant.0).is_err()
+            && let Err(error) = self.ids.apply_structural_owned(structural, entry.participant.0)
         {
             self.restore_shared(&before, view.as_ref(), true);
-            self.note_own(entry.own, decoded.action, Some(NotAppliedReason::Failed));
+            let reason = if matches!(&error, CoauthorError::TooFragmented | CoauthorError::Identity(IdError::TooFragmented { .. })) {
+                NotAppliedReason::TooFragmented
+            } else {
+                NotAppliedReason::Failed
+            };
+            self.note_own(entry.own, decoded.action, Some(reason));
             return Ok(Self::no_effect("The shared identities could not be updated.", entry.stamp.is_none() && stamp_was_read));
         }
         if resolved.structural.is_some() {

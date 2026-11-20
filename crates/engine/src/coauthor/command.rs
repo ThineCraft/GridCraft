@@ -9,6 +9,7 @@ use serde::de::{self, DeserializeSeed, MapAccess, SeqAccess, Visitor};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as Json;
 
+use super::ids::merge_fragmentation_blocks;
 use super::{
     CellId, CoauthorError, GuardedPatch, IdentityDelete, IdentityInsert, IdentityPosition, IdentityRanges, IdentitySheetInsert, IdentityStructural,
     TargetGone, WorkbookIds,
@@ -840,6 +841,10 @@ pub fn encode_command(
             }
             let axes = ids.by_id.get(&sheet).ok_or_else(|| CoauthorError::UnknownIdentity(format!("sheet {sheet:?}")))?;
             let ordered = if axis == AxisParam::Rows { &axes.rows } else { &axes.cols };
+            ordered.check_fragmentation(&[(at, count)]).map_err(|error| match error {
+                IdError::TooFragmented { .. } => CoauthorError::TooFragmented,
+                other => CoauthorError::Identity(other),
+            })?;
             let before = ordered.id_at(at).map_or(IdentityPosition::End, IdentityPosition::Before);
             let insert = IdentityInsert { before, first: allocate(count)?, count };
             command.insert(key.into(), to_json(insert)?);
@@ -857,9 +862,16 @@ pub fn encode_command(
             let axes = ids.by_id.get(&sheet).ok_or_else(|| CoauthorError::UnknownIdentity(format!("sheet {sheet:?}")))?;
             let ordered = if axis == AxisParam::Rows { &axes.rows } else { &axes.cols };
             let mut targets = Vec::with_capacity(positions.len());
+            let mut blocks = Vec::with_capacity(positions.len());
             for position in positions {
                 targets.push(ordered.id_at(position).ok_or_else(|| CoauthorError::UnknownIdentity(format!("{key} position {position}")))?);
+                blocks.push((position, 1));
             }
+            let blocks = merge_fragmentation_blocks(&blocks);
+            ordered.check_fragmentation(&blocks).map_err(|error| match error {
+                IdError::TooFragmented { .. } => CoauthorError::TooFragmented,
+                other => CoauthorError::Identity(other),
+            })?;
             let first = allocate(
                 u32::try_from(targets.len())
                     .map_err(|_| CoauthorError::OversizedPayload { bytes: targets.len().saturating_mul(8), max: MAX_PAYLOAD_BYTES })?,
@@ -1009,7 +1021,10 @@ pub fn resolve_command(ids: &WorkbookIds, session: &crate::Session, entry: &Shar
         }
     }
     if let Some(change) = structural.as_ref() {
-        ids.validate_structural(change).map_err(|error| TargetGone::Malformed(format!("invalid structural identity change: {error}")))?;
+        ids.validate_structural(change).map_err(|error| match error {
+            CoauthorError::TooFragmented => TargetGone::TooFragmented,
+            other => TargetGone::Malformed(format!("invalid structural identity change: {other}")),
+        })?;
     }
     Ok(ResolvedCommand { id, params: Json::Object(object.clone()), structural })
 }

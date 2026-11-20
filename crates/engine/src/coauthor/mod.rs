@@ -118,6 +118,8 @@ pub enum CoauthorError {
     UnknownIdentity(String),
     #[error("live target was deleted: {0}")]
     DeletedTarget(String),
+    #[error("the live identity axis would become too fragmented")]
+    TooFragmented,
     #[error(transparent)]
     Engine(#[from] crate::EngineError),
     #[error("live entry is {bytes} bytes; the limit is {max}")]

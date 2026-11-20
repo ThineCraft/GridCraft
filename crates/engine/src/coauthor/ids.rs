@@ -57,9 +57,29 @@ pub(crate) fn compress_runs(ids: impl IntoIterator<Item = LiveId>) -> Vec<Identi
             last.count += 1;
             continue;
         }
+
         runs.push(IdentityRun { first: id, count: 1 });
     }
     runs
+}
+
+pub(crate) fn merge_fragmentation_blocks(blocks: &[(u32, u32)]) -> Vec<(u32, u32)> {
+    let mut sorted = blocks.to_vec();
+    sorted.sort_unstable_by_key(|(at, _)| *at);
+    let mut merged: Vec<(u32, u32)> = Vec::with_capacity(sorted.len());
+    for (at, count) in sorted {
+        if let Some((prior_at, prior_count)) = merged.last_mut()
+            && u64::from(*prior_at).saturating_add(u64::from(*prior_count)) >= u64::from(at)
+        {
+            let end = u64::from(at).saturating_add(u64::from(count));
+            let prior_end = u64::from(*prior_at).saturating_add(u64::from(*prior_count));
+            let new_end = end.max(prior_end);
+            *prior_count = u32::try_from(new_end.saturating_sub(u64::from(*prior_at))).unwrap_or(u32::MAX);
+        } else {
+            merged.push((at, count));
+        }
+    }
+    merged
 }
 
 /// Checks that runs are non-empty, in range and disjoint, and returns how many identities they
@@ -120,7 +140,7 @@ struct DeletedOwner {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct WorkbookIds {
     pub sheets: OrderedIds,
-    pub by_id: BTreeMap<LiveId, SheetIds>,
+    pub by_id: BTreeMap<LiveId, Arc<SheetIds>>,
     /// Stable XLSX `sheetId` values, including identities of deleted sheets. Imported nonzero
     /// ids are preserved; sheets created in a live session receive a deterministic unused id.
     file_ids: BTreeMap<LiveId, u32>,
@@ -277,6 +297,8 @@ pub enum TargetGone {
     UnknownColumn(LiveId),
     #[error("malformed live target: {0}")]
     Malformed(String),
+    #[error("the live identity axis would become too fragmented")]
+    TooFragmented,
     #[error("formula reference no longer has one coordinate across its 3-D sheet span")]
     UnrepresentableReference,
 }
@@ -289,7 +311,7 @@ impl WorkbookIds {
         let mut by_id = BTreeMap::new();
         for position in 0..sheet_count {
             let id = LiveId(0, position);
-            by_id.insert(id, SheetIds { id, rows: OrderedIds::base(MAX_ROWS), cols: OrderedIds::base(MAX_COLS) });
+            by_id.insert(id, Arc::new(SheetIds { id, rows: OrderedIds::base(MAX_ROWS), cols: OrderedIds::base(MAX_COLS) }));
         }
         let (file_ids, reserved_file_ids) = canonical_file_ids(wb, &sheets)?;
         Ok(Self { sheets, by_id, file_ids, reserved_file_ids, deleted_by: BTreeMap::new() })
@@ -308,7 +330,8 @@ impl WorkbookIds {
             if entry.key != entry.value.id {
                 return Err(CoauthorError::MalformedPayload("a sheet identity does not match its map key".into()));
             }
-            let value = SheetIds { id: entry.value.id, rows: ordered_from_wire(entry.value.rows)?, cols: ordered_from_wire(entry.value.cols)? };
+            let value =
+                Arc::new(SheetIds { id: entry.value.id, rows: ordered_from_wire(entry.value.rows)?, cols: ordered_from_wire(entry.value.cols)? });
             if by_id.insert(entry.key, value).is_some() {
                 return Err(CoauthorError::MalformedPayload("the sheet identity map contains a duplicate key".into()));
             }
@@ -597,6 +620,18 @@ impl WorkbookIds {
         let axis = DeletedAxis::of(rows);
         let label = if rows { "row" } else { "column" };
         let mut next = self.clone();
+        let axes = next.by_id.get(&sheet).ok_or_else(|| CoauthorError::UnknownIdentity(format!("sheet {sheet:?}")))?;
+        let ordered = if rows { &axes.rows } else { &axes.cols };
+        let mut blocks = Vec::with_capacity(remove.len().saturating_add(restore.len()));
+        for run in remove.iter().chain(restore.iter()) {
+            if let Lookup::At(position) = ordered.find(run.first) {
+                blocks.push((position, run.count));
+            }
+        }
+        ordered.check_fragmentation(&blocks).map_err(|error| match error {
+            IdError::TooFragmented { .. } => CoauthorError::TooFragmented,
+            other => CoauthorError::Identity(other),
+        })?;
         next.claim_deleted(sheet, axis, restore, participant)?;
         let axes = next.live_sheet_mut(sheet)?;
         let ordered = if rows { &mut axes.rows } else { &mut axes.cols };
@@ -700,29 +735,81 @@ impl WorkbookIds {
         next.apply_structural_in_place(change)
     }
 
+    /// Checks whether an axis change would leave the identity table within the live wire's
+    /// fragmentation limits. The answer is deterministic from the existing table and blocks.
+    pub fn check_fragmentation(&self, sheet: LiveId, rows: bool, blocks: &[(u32, u32)]) -> Result<(), TargetGone> {
+        let axes = self.by_id.get(&sheet).ok_or(TargetGone::UnknownSheet(sheet))?;
+        let ordered = if rows { &axes.rows } else { &axes.cols };
+        ordered.check_fragmentation(blocks).map_err(|_| TargetGone::TooFragmented)
+    }
+
     fn apply_structural_in_place(&mut self, change: &IdentityStructural) -> Result<(), CoauthorError> {
         match change {
             IdentityStructural::InsertRows { sheet, before, first, count } => {
                 let axes = self.live_sheet_mut(*sheet)?;
+                let at = match *before {
+                    IdentityPosition::Before(id) => match axes.rows.find(id) {
+                        Lookup::At(position) => position,
+                        Lookup::Deleted { .. } | Lookup::Unknown => return Err(CoauthorError::UnknownIdentity(format!("row identity {id:?}"))),
+                    },
+                    IdentityPosition::End => axes.rows.len(),
+                };
+                axes.rows.check_fragmentation(&[(at, *count)]).map_err(|error| match error {
+                    IdError::TooFragmented { .. } => CoauthorError::TooFragmented,
+                    other => CoauthorError::Identity(other),
+                })?;
                 insert_fixed(&mut axes.rows, *before, *first, *count, MAX_ROWS)?;
             }
             IdentityStructural::DeleteRows { sheet, ids, first } => {
                 let axes = self.live_sheet_mut(*sheet)?;
+                let mut blocks = Vec::with_capacity(ids.len());
+                for id in ids {
+                    if let Lookup::At(position) = axes.rows.find(*id) {
+                        blocks.push((position, 1));
+                    }
+                }
+                let blocks = merge_fragmentation_blocks(&blocks);
+                axes.rows.check_fragmentation(&blocks).map_err(|error| match error {
+                    IdError::TooFragmented { .. } => CoauthorError::TooFragmented,
+                    other => CoauthorError::Identity(other),
+                })?;
                 delete_fixed(&mut axes.rows, ids, *first, "row", MAX_ROWS)?;
             }
             IdentityStructural::InsertColumns { sheet, before, first, count } => {
                 let axes = self.live_sheet_mut(*sheet)?;
+                let at = match *before {
+                    IdentityPosition::Before(id) => match axes.cols.find(id) {
+                        Lookup::At(position) => position,
+                        Lookup::Deleted { .. } | Lookup::Unknown => return Err(CoauthorError::UnknownIdentity(format!("column identity {id:?}"))),
+                    },
+                    IdentityPosition::End => axes.cols.len(),
+                };
+                axes.cols.check_fragmentation(&[(at, *count)]).map_err(|error| match error {
+                    IdError::TooFragmented { .. } => CoauthorError::TooFragmented,
+                    other => CoauthorError::Identity(other),
+                })?;
                 insert_fixed(&mut axes.cols, *before, *first, *count, MAX_COLS)?;
             }
             IdentityStructural::DeleteColumns { sheet, ids, first } => {
                 let axes = self.live_sheet_mut(*sheet)?;
+                let mut blocks = Vec::with_capacity(ids.len());
+                for id in ids {
+                    if let Lookup::At(position) = axes.cols.find(*id) {
+                        blocks.push((position, 1));
+                    }
+                }
+                let blocks = merge_fragmentation_blocks(&blocks);
+                axes.cols.check_fragmentation(&blocks).map_err(|error| match error {
+                    IdError::TooFragmented { .. } => CoauthorError::TooFragmented,
+                    other => CoauthorError::Identity(other),
+                })?;
                 delete_fixed(&mut axes.cols, ids, *first, "column", MAX_COLS)?;
             }
             IdentityStructural::InsertSheet { before, id } => {
                 let file_id = next_file_id(self.file_ids.values().copied().chain(self.reserved_file_ids.iter().copied()))?;
                 let at = position(&self.sheets, *before, "sheet")?;
                 self.sheets.insert(at, *id, 1)?;
-                self.by_id.insert(*id, SheetIds { id: *id, rows: OrderedIds::base(MAX_ROWS), cols: OrderedIds::base(MAX_COLS) });
+                self.by_id.insert(*id, Arc::new(SheetIds { id: *id, rows: OrderedIds::base(MAX_ROWS), cols: OrderedIds::base(MAX_COLS) }));
                 self.file_ids.insert(*id, file_id);
             }
             IdentityStructural::DeleteSheet { id } => delete_exact(&mut self.sheets, &[*id], "sheet")?,
@@ -732,7 +819,7 @@ impl WorkbookIds {
 
     fn live_sheet_mut(&mut self, id: LiveId) -> Result<&mut SheetIds, CoauthorError> {
         match self.sheets.find(id) {
-            Lookup::At(_) => self.by_id.get_mut(&id).ok_or_else(|| CoauthorError::UnknownIdentity(format!("sheet {id:?}"))),
+            Lookup::At(_) => Ok(Arc::make_mut(self.by_id.get_mut(&id).ok_or_else(|| CoauthorError::UnknownIdentity(format!("sheet {id:?}")))?)),
             Lookup::Deleted { .. } => Err(CoauthorError::DeletedTarget(format!("sheet {id:?}"))),
             Lookup::Unknown => Err(CoauthorError::UnknownIdentity(format!("sheet {id:?}"))),
         }
@@ -809,7 +896,7 @@ type DeletedCoverage = BTreeMap<(LiveId, DeletedAxis, u32), Vec<(u64, u64)>>;
 /// Indexes and merges every deleted identity run once. Checkpoint metadata may contain many
 /// owner runs, so rebuilding and sorting an entire million-cell axis per owner would let a
 /// fragmented payload turn validation quadratic.
-fn deleted_coverage(by_id: &BTreeMap<LiveId, SheetIds>) -> Result<DeletedCoverage, CoauthorError> {
+fn deleted_coverage(by_id: &BTreeMap<LiveId, Arc<SheetIds>>) -> Result<DeletedCoverage, CoauthorError> {
     let mut coverage: DeletedCoverage = BTreeMap::new();
     for (&sheet, axes) in by_id {
         for (axis, ids) in [(DeletedAxis::Row, &axes.rows), (DeletedAxis::Column, &axes.cols)] {
@@ -1090,6 +1177,52 @@ impl From<IdError> for CoauthorError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gridcraft_model::Sheet;
+
+    #[test]
+    fn snapshot_shares_unchanged_sheet_tables() {
+        let mut workbook = Workbook::new();
+        workbook.sheets.push(Arc::new(Sheet::new("Second")));
+        let mut ids = WorkbookIds::from_workbook(&workbook).expect("base identities build");
+        let first = ids.sheet_id(0).expect("first sheet has an identity");
+        let second = ids.sheet_id(1).expect("second sheet has an identity");
+        let before = ids.clone();
+
+        ids.apply_structural(&IdentityStructural::DeleteRows { sheet: first, ids: vec![LiveId(0, 0)], first: LiveId(1, 0) })
+            .expect("first sheet change applies");
+
+        assert!(Arc::ptr_eq(&before.by_id[&second], &ids.by_id[&second]));
+        assert!(!Arc::ptr_eq(&before.by_id[&first], &ids.by_id[&first]));
+    }
+
+    #[test]
+    fn session_data_bytes_are_unchanged_by_sharing() {
+        let mut workbook = Workbook::new();
+        workbook.sheets.push(Arc::new(Sheet::new("Second")));
+        let ids = WorkbookIds::from_workbook(&workbook).expect("base identities build");
+        let shared = ids.clone();
+        assert_eq!(ids.session_data().expect("identity data serializes"), shared.session_data().expect("shared identity data serializes"));
+    }
+
+    #[test]
+    fn structural_entry_over_the_block_cap_is_refused() {
+        let workbook = Workbook::new();
+        let ids = WorkbookIds::from_workbook(&workbook).expect("base identities build");
+        let sheet = ids.sheet_id(0).expect("base sheet exists");
+        let blocks: Vec<(u32, u32)> = (0..1_025u32).map(|at| (at * 2, 1)).collect();
+        assert_eq!(ids.check_fragmentation(sheet, true, &blocks[..1_024]), Ok(()));
+        assert_eq!(ids.check_fragmentation(sheet, true, &blocks), Err(TargetGone::TooFragmented));
+    }
+
+    #[test]
+    fn structural_entry_over_the_block_cap_has_a_specific_error() {
+        let workbook = Workbook::new();
+        let mut ids = WorkbookIds::from_workbook(&workbook).expect("base identities build");
+        let sheet = ids.sheet_id(0).expect("base sheet exists");
+        let ids_to_delete: Vec<LiveId> = (0..1_025u32).filter_map(|at| ids.by_id[&sheet].rows.id_at(at * 2)).collect();
+        let result = ids.apply_structural(&IdentityStructural::DeleteRows { sheet, ids: ids_to_delete, first: LiveId(1, 0) });
+        assert!(matches!(result, Err(CoauthorError::TooFragmented)));
+    }
 
     #[test]
     fn fragmented_multi_owner_checkpoint_metadata_round_trips() {

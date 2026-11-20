@@ -306,6 +306,8 @@ pub enum NotAppliedReason {
     ChangedSinceUndo,
     /// The change is not valid on any machine.
     Invalid,
+    /// The structural change would fragment an identity axis past the live limit.
+    TooFragmented,
     /// The change could not be applied.
     Failed,
 }

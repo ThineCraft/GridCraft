@@ -19,6 +19,9 @@ use crate::sequences::{
     Step, TIMING_REPETITIONS, check_rerun, headline_p95, heavier_timing_document, is_structural, kind_table, rerun_pending, time_all_workloads,
     time_command_kinds, time_workload, timing_command_kinds, timing_document, timing_stats, timing_table, timing_workbook, timing_workloads,
 };
+use collab_live::ids::LiveId;
+use gridcraft_engine::coauthor::{IdentityStructural, WorkbookIds};
+use gridcraft_model::Workbook;
 use serde_json::json;
 
 #[test]
@@ -121,5 +124,27 @@ fn heavier_formula_rerun_report() -> Result<(), String> {
         println!("{line}");
     }
     println!("repetitions {TIMING_REPETITIONS} after one excluded warm-up; report only, no wall-clock gate");
+    Ok(())
+}
+
+#[test]
+#[ignore = "release-only fragmented identity axis timing proof"]
+#[allow(clippy::disallowed_methods)]
+fn fragmented_axis_timing() -> Result<(), String> {
+    if cfg!(debug_assertions) {
+        return Err("timings must be run with cargo test --release".into());
+    }
+    let workbook = Workbook::new();
+    let mut ids = WorkbookIds::from_workbook(&workbook).map_err(|error| error.to_string())?;
+    let sheet = ids.sheet_id(0).map_err(|error| error.to_string())?;
+    let started = Instant::now();
+    for position in 0..1_000u32 {
+        let row =
+            ids.by_id.get(&sheet).and_then(|axes| axes.rows.id_at(position * 60)).ok_or_else(|| "fragmented source row is missing".to_string())?;
+        ids.apply_structural(&IdentityStructural::DeleteRows { sheet, ids: vec![row], first: LiveId(1, position) })
+            .map_err(|error| error.to_string())?;
+    }
+    let elapsed = started.elapsed();
+    println!("1000 alternating row deletions on a 60000-row axis: {:.3} ms", elapsed.as_secs_f64() * 1_000.0);
     Ok(())
 }
