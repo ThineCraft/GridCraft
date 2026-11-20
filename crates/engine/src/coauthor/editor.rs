@@ -258,7 +258,9 @@ impl GridLiveEditor {
         let (workbook, _) = crate::io::open_checkpoint_bytes("checkpoint.xlsx", bytes)?;
         let ids = WorkbookIds::from_session_data(session_data, &workbook)?;
         close_all_documents(&mut session);
-        session.add_document(DocState::new_checkpoint_configured(workbook, None, "checkpoint.xlsx".into(), Trust::FromFile, |calc| {
+        // No row fitting on load: the checkpoint's heights are the agreed ones (see
+        // `DocState::new_configured`).
+        session.add_document(DocState::new_configured(workbook, None, "checkpoint.xlsx".into(), Trust::FromFile, |calc| {
             calc.fixed_now = Some(gridcraft_core::date::serial_from_unix_ms(stamp.at_ms as f64));
             calc.set_rand_seed(u64::from(stamp.seed));
         }));

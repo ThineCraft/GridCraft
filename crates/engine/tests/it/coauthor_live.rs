@@ -1204,3 +1204,107 @@ fn archived_copy(text: &str) -> Vec<u8> {
         _ => panic!("the archive ticket is answered"),
     }
 }
+
+// ---------------------------------------------------------------- checkpoint load keeps agreed row heights (G4 final review C2)
+
+/// A long-running peer whose formula rows hold heights a fresh fit would change: it started on
+/// a stored file whose large-font formula row 1 was saved at 60 pt (taller than its fit), then
+/// wrapped A1:A200000, a range too tall to fit, over the wrapping formula in A5.
+fn c2_peer_with_unfitted_formula_rows() -> (GridCoauthor, DeterministicServer, ClientPlace) {
+    let mut workbook = gridcraft_engine::model::Workbook::new();
+    let large = workbook.styles.derive(gridcraft_engine::model::StyleId::DEFAULT, |style| style.font.size = 20.0);
+    let sheet = workbook.sheet_mut(0).expect("Sheet1 exists");
+    sheet.set_value(CellRef::new(0, 1), Value::text("x"));
+    sheet.set_cell(
+        CellRef::new(0, 0),
+        Cell { value: Value::text("x"), formula: Some(Arc::new(gridcraft_engine::model::Formula::new("B1"))), style: large, ..Cell::default() },
+    );
+    sheet.rows.entry(0).or_default().size = Some(60.0);
+    let bytes = io::save_bytes(&workbook, "file.xlsx").expect("the stored file saves");
+    let config = LiveConfig { format: GRIDCRAFT_LIVE_FORMAT.to_string(), crashed_at: None };
+    let mut peer =
+        GridCoauthor::start(Session::new(), gridcraft_engine::coauthor::LiveBase::File { bytes: &bytes }, config).expect("the file base starts");
+    let session = peer.editor_mut().session_mut();
+    session
+        .execute("cell.set", json!({"cell":"A5","input":"=\"a long line of text that wraps in a narrow column and goes on and on and on\""}))
+        .expect("the wrapping formula is entered");
+    select(session, "Sheet1", "A1:A200000");
+    session.execute("home.wrapText", json!({})).expect("the tall range wraps");
+    let mut server = DeterministicServer::new();
+    let place = server.join(&mut peer, 10);
+    (peer, server, place)
+}
+
+fn c2_heights(client: &GridCoauthor) -> Vec<(u32, Option<f32>)> {
+    let document = client.editor().session().doc().expect("document exists");
+    document.wb.sheet(0).expect("Sheet1 exists").rows.iter().map(|(row, info)| (*row, info.size)).collect()
+}
+
+fn c2_height(client: &GridCoauthor, row: u32) -> f32 {
+    client.editor().session().doc().expect("document exists").wb.sheet(0).expect("Sheet1 exists").row_height(row)
+}
+
+/// Loads the peer's checkpoint at the current head into a new co-author and joins it.
+fn c2_joiner(peer: &GridCoauthor, server: &mut DeterministicServer) -> (GridCoauthor, ClientPlace, gridcraft_engine::coauthor::GridCheckpoint) {
+    let checkpoint = peer.checkpoint(server.head()).expect("the peer writes a checkpoint");
+    let config = LiveConfig { format: GRIDCRAFT_LIVE_FORMAT.to_string(), crashed_at: None };
+    let mut joiner = GridCoauthor::new(config, GridLiveEditor::new(session_with_sheets(&["Old"])).expect("editor builds"));
+    joiner.load_checkpoint(&checkpoint.bytes, &checkpoint.session_data, Stamp { at_ms: 1_795_219_200_000, seed: 7 }).expect("the checkpoint loads");
+    let place = server.join(&mut joiner, 20);
+    (joiner, place, checkpoint)
+}
+
+#[test]
+fn coauthor_checkpoint_load_keeps_peers_formula_row_heights() {
+    let (peer, mut server, _) = c2_peer_with_unfitted_formula_rows();
+    assert_eq!(c2_height(&peer, 0), 60.0, "the stored taller height survives the file base");
+    let (joiner, _, checkpoint) = c2_joiner(&peer, &mut server);
+
+    assert_eq!(c2_height(&joiner, 0), c2_height(&peer, 0), "row 1 keeps the peer's stored height");
+    assert_eq!(c2_height(&joiner, 4), c2_height(&peer, 4), "row 5 keeps the peer's unfitted height");
+    assert_eq!(c2_heights(&joiner), c2_heights(&peer), "every row height is the peer's");
+    assert_eq!(joiner.editor().agreement_digest(), checkpoint.entered, "the loaded base is the checkpoint's entered content");
+    assert_eq!(joiner.checkpoint(server.head()).expect("the joiner writes").sha256, checkpoint.sha256, "the joiner writes the same bytes");
+}
+
+#[test]
+fn coauthor_checkpoint_joiner_fingerprint_matches_peers_after_more_edits() {
+    let (mut peer, mut server, peer_place) = c2_peer_with_unfitted_formula_rows();
+    let (mut joiner, joiner_place, _) = c2_joiner(&peer, &mut server);
+    let edits: [(bool, &str, serde_json::Value); 4] = [
+        (true, "cell.set", json!({"sheet":"Sheet1","cell":"D3","input":"peer"})),
+        (false, "cell.set", json!({"sheet":"Sheet1","cell":"E7","input":"joiner"})),
+        (true, "home.insertRows", json!({"sheet":"Sheet1","rows":"9:9"})),
+        (false, "home.bold", json!({"sheet":"Sheet1","range":"D3:E7","on":true})),
+    ];
+    for (i, (by_peer, id, params)) in edits.into_iter().enumerate() {
+        let now = 100 + 10 * i as u64;
+        let (author, place) = if by_peer { (&mut peer, &peer_place) } else { (&mut joiner, &joiner_place) };
+        let step = author.submit(id, params, 2026, now).expect("the edit submits");
+        let proposed = server.one_proposal(place, &step);
+        let entry = server.order(&proposed, 1_795_219_200_000 + 61_000 * i as i64, 11 + i as u32);
+        server.deliver_both(&mut peer, &mut joiner, &entry, now + 1);
+        assert_eq!(
+            fingerprint(joiner.editor().session(), DocId(0)).entered,
+            fingerprint(peer.editor().session(), DocId(0)).entered,
+            "entered fingerprints agree after edit {i} (joiner {:?}, peer {:?})",
+            c2_heights(&joiner),
+            c2_heights(&peer)
+        );
+        assert_eq!(joiner.editor().agreement_digest(), peer.editor().agreement_digest(), "agreement digests agree after edit {i}");
+    }
+
+    // A live edit that recalculates the large-font formula still fits its row, alike on both.
+    let step = peer.submit("cell.set", json!({"sheet":"Sheet1","cell":"B1","input":"y"}), 2026, 200).expect("the precedent edit submits");
+    let proposed = server.one_proposal(&peer_place, &step);
+    let entry = server.order(&proposed, 1_795_219_500_000, 99);
+    server.deliver_both(&mut peer, &mut joiner, &entry, 201);
+    assert!(c2_height(&peer, 0) < 60.0, "live recalculation refits the formula row: {}", c2_height(&peer, 0));
+    assert_eq!(c2_height(&joiner, 0), c2_height(&peer, 0), "both peers fit the row to the same height");
+    assert_eq!(joiner.editor().agreement_digest(), peer.editor().agreement_digest(), "agreement digests agree after the refit");
+    assert_eq!(
+        joiner.checkpoint(server.head()).expect("the joiner writes").sha256,
+        peer.checkpoint(server.head()).expect("the peer writes").sha256,
+        "a checkpoint either writes verifies against the other"
+    );
+}

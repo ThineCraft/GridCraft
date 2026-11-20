@@ -284,7 +284,9 @@ pub enum LiveBase<'a> {
     /// The empty document, for a log with no stored revision.
     Empty,
     /// The document's stored file, for the first live session: fresh identities, the base rows
-    /// and columns all participant 0's.
+    /// and columns all participant 0's. Only a base with no entries built on it may load this
+    /// way: entries name identities, and fresh ones match only the session that began on this
+    /// file. The room guarantees it (a base with identity data loads as `Checkpoint`).
     File { bytes: &'a [u8] },
     /// A durable checkpoint with its identity tables, loaded under its stamp.
     Checkpoint { bytes: &'a [u8], session_data: &'a [u8], stamp: Stamp },
