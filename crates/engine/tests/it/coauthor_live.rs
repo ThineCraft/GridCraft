@@ -1160,12 +1160,15 @@ fn checkpoint_then_catchup_equals_straight_through() {
         );
     }
     assert_eq!(run.late.sha256, run.straight.sha256);
-    assert_eq!(run.bob_verify, run.straight.sha256, "the writer of the base verifies the head");
+    assert_eq!(run.bob_verify.sha256, run.straight.sha256, "the writer of the base verifies the head");
 }
 
 /// Two fresh GridCraft editors load the same verified base and its identity data, replay the
-/// same retained entries and answer a write and a verify ticket at the head: identical bytes and
-/// SHA-256, equal to the room's straight-through writers.
+/// same retained entries and answer a write and a verify ticket at the head: identical bytes,
+/// identity data and SHA-256, equal to the room's straight-through writers. The room compares
+/// the verifier's identity-data hash with the writer's upload (ShareCraft G4 final review I3),
+/// so identity data must hold nothing that differs between people at the same position:
+/// straight through, late joiner, fresh joiners and the base's writer all agree.
 #[test]
 fn checkpoint_hash_matches_between_two_grid_editors() {
     let run = crate::live::checkpoint_run();
@@ -1176,11 +1179,15 @@ fn checkpoint_hash_matches_between_two_grid_editors() {
     let written = crate::live::written(crate::live::ticket_answer(&mut erin, true, run.head, 21, 3_000));
     let verify = crate::live::verified(crate::live::ticket_answer(&mut frank, false, run.head, 22, 3_001));
     let frank_written = crate::live::written(crate::live::ticket_answer(&mut frank, true, run.head, 23, 3_002));
-    assert_eq!(written.sha256, verify, "the second editor's hash matches the writer's");
+    assert_eq!(written.sha256, verify.sha256, "the second editor's hash matches the writer's");
     assert_eq!(written.bytes, frank_written.bytes, "both fresh editors write identical bytes");
     assert_eq!(written.session_data, frank_written.session_data, "and identical identity data");
+    assert_eq!(crate::live::session_sha256(&written), verify.session_sha256, "the verify answer hashes the identity data the writer uploads");
     assert_eq!(written.sha256, run.straight.sha256, "a checkpoint-loaded writer matches a straight-through one");
     assert_eq!(written.entered, run.straight.entered);
+    assert_eq!(written.session_data, run.straight.session_data, "a checkpoint-loaded writer's identity data matches a straight-through one's");
+    assert_eq!(run.late.session_data, run.straight.session_data, "the late joiner's identity data matches too");
+    assert_eq!(run.bob_verify.session_sha256, crate::live::session_sha256(&run.straight), "the base's writer verifies the head's identity data");
 }
 
 /// The archived copy an independent editor writes after typing `text` into A1 and being archived

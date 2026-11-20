@@ -255,12 +255,25 @@ pub fn written(answer: TicketAnswer) -> GridCheckpoint {
     }
 }
 
-/// The hash a verify ticket reported.
-pub fn verified(answer: TicketAnswer) -> [u8; 32] {
+/// What a verify ticket reported: the checkpoint file's hash and its identity data's hash.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Verified {
+    pub sha256: [u8; 32],
+    pub session_sha256: [u8; 32],
+}
+
+/// The hashes a verify ticket reported.
+pub fn verified(answer: TicketAnswer) -> Verified {
     match answer {
-        TicketAnswer::Verify { sha256, .. } => sha256,
+        TicketAnswer::Verify { sha256, session_sha256, .. } => Verified { sha256, session_sha256 },
         _ => panic!("a verify ticket reports a hash"),
     }
+}
+
+/// The SHA-256 of a written checkpoint's identity data, as the room hashes the upload.
+pub fn session_sha256(checkpoint: &GridCheckpoint) -> [u8; 32] {
+    use sha2::Digest;
+    sha2::Sha256::digest(&checkpoint.session_data).into()
 }
 
 /// Joins `client` as `participant` on the checkpoint base at `at` (loaded with its identity data
@@ -323,8 +336,8 @@ pub struct CheckpointRun {
     pub straight: GridCheckpoint,
     /// Carol's checkpoint at `head`: she joined late on `base` and caught up on the suffix.
     pub late: GridCheckpoint,
-    /// Bob's verify hash at `head`.
-    pub bob_verify: [u8; 32],
+    /// Bob's verify hashes at `head`.
+    pub bob_verify: Verified,
 }
 
 /// Orders one proposal, delivers it to every client and checks that every client with nothing
@@ -426,7 +439,8 @@ pub fn checkpoint_run() -> CheckpointRun {
     let base_at = server.head();
     let base = written(ticket_answer(&mut clients[bob], true, base_at, 1, 210));
     let alice_hash = verified(ticket_answer(&mut clients[alice], false, base_at, 2, 211));
-    assert_eq!(base.sha256, alice_hash, "the writer with a waiting change and the verifier write the same bytes");
+    assert_eq!(base.sha256, alice_hash.sha256, "the writer with a waiting change and the verifier write the same bytes");
+    assert_eq!(session_sha256(&base), alice_hash.session_sha256, "and the same identity data");
     assert_eq!(base.entered, clients[alice].editor().agreement_digest(), "the base is the agreed state");
     assert_ne!(base.entered, clients[bob].editor().agreement_digest(), "Bob still shows his waiting change");
     let last = log.last().expect("entries before the checkpoint");

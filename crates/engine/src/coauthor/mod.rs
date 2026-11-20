@@ -95,6 +95,14 @@ pub struct GridCheckpoint {
     pub entered: [u8; 32],
 }
 
+impl GridCheckpoint {
+    /// The SHA-256 of the identity data exactly as it is uploaded with the checkpoint; the room
+    /// compares a verifier's with the writer's upload.
+    pub fn session_sha256(&self) -> [u8; 32] {
+        Sha256::digest(&self.session_data).into()
+    }
+}
+
 /// A live entry that cannot be decoded, targeted or applied safely.
 #[derive(Debug, Error)]
 pub enum CoauthorError {
@@ -126,8 +134,9 @@ pub enum CoauthorError {
 pub enum TicketAnswer {
     /// Upload the checkpoint under the ticket.
     Write { ticket: String, at: Seq, base: Option<String>, checkpoint: GridCheckpoint },
-    /// Report the hash of the independently written checkpoint.
-    Verify { ticket: String, at: Seq, sha256: [u8; 32] },
+    /// Report the hashes of the independently written checkpoint: its file bytes, and the
+    /// identity data a write at `at` would upload with them.
+    Verify { ticket: String, at: Seq, sha256: [u8; 32], session_sha256: [u8; 32] },
     /// The ticket cannot be honoured: send the `checkpoint_failed` frame, and post nothing.
     Failed { send: Option<String> },
 }
@@ -193,6 +202,10 @@ pub struct GridCoauthor {
     /// that does nothing can give it back.
     pending_texts: BTreeMap<u64, String>,
     notices: Vec<LiveNotice>,
+    /// Whether the person was told changes wait. Every join hears `changes_paused` or
+    /// `changes_resumed` before its catch-up, so only a change of state is told: a resume after
+    /// no pause, or a pause heard again on a rejoin, shows nothing.
+    paused_told: bool,
     editing: bool,
     presence_sent: Option<String>,
     presence_sent_at: Option<u64>,
@@ -229,6 +242,7 @@ impl GridCoauthor {
             last_undo_report: None,
             pending_texts: BTreeMap::new(),
             notices: Vec::new(),
+            paused_told: false,
             editing: false,
             presence_sent: None,
             presence_sent_at: None,
@@ -375,7 +389,7 @@ impl GridCoauthor {
         Some(if write {
             TicketAnswer::Write { ticket, at, base, checkpoint }
         } else {
-            TicketAnswer::Verify { ticket, at, sha256: checkpoint.sha256 }
+            TicketAnswer::Verify { ticket, at, sha256: checkpoint.sha256, session_sha256: checkpoint.session_sha256() }
         })
     }
 
@@ -639,8 +653,16 @@ impl GridCoauthor {
                 Event::Returned { .. } => returned_not_applied = Some(0),
                 Event::ArchiveReturn { .. } => self.notices.push(LiveNotice::ArchivedReturn),
                 Event::AccessChanged { can_edit } => self.notices.push(LiveNotice::ReadOnly { read_only: !can_edit }),
-                Event::ChangesPaused { entries, bytes } => self.notices.push(LiveNotice::Paused { entries: *entries, bytes: *bytes }),
-                Event::ChangesResumed => self.notices.push(LiveNotice::Resumed),
+                Event::ChangesPaused { entries, bytes } => {
+                    if !std::mem::replace(&mut self.paused_told, true) {
+                        self.notices.push(LiveNotice::Paused { entries: *entries, bytes: *bytes });
+                    }
+                }
+                Event::ChangesResumed => {
+                    if std::mem::replace(&mut self.paused_told, false) {
+                        self.notices.push(LiveNotice::Resumed);
+                    }
+                }
                 Event::CannotOpen { .. } => self.notices.push(LiveNotice::CannotOpen),
                 Event::Incompatible { .. } => self.notices.push(LiveNotice::Incompatible),
                 Event::Removed { .. } => self.notices.push(LiveNotice::Removed),

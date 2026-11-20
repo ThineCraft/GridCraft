@@ -21,7 +21,9 @@
 //! - `gridcraft:live-reset` `{ kind }`: close and reconnect after back-off; only the error's kind.
 //! - `gridcraft:live-load` `{ revision, at }`: fetch this base and send `live-base`.
 //! - `gridcraft:live-checkpoint` `{ ticket, at, base, bytes, sessionData, sha256 }`: upload it.
-//! - `gridcraft:live-hash` `{ ticket, at, sha256 }`: report the verifying hash.
+//! - `gridcraft:live-hash` `{ ticket, at, sha256, sessionSha256 }`: report the verifying hashes,
+//!   of the file bytes and of the identity data a write at `at` would upload; the page posts them
+//!   as ShareCraft's `{ ticket, at, sha256, session_sha256 }` hash body.
 //! - `gridcraft:live-notice` `{ notice }`: one notice to show, as the engine's `LiveNotice` JSON.
 //! - `gridcraft:live-state` `{ phase, waiting, canEdit }`: answers every tick, and is sent when it
 //!   changes.
@@ -293,7 +295,7 @@ pub enum LiveEditorMsg {
     Reset { kind: &'static str },
     Load { revision: Option<String>, at: u64 },
     Checkpoint { ticket: String, at: u64, base: Option<String>, bytes: Vec<u8>, session_data: Vec<u8>, sha256: String },
-    Hash { ticket: String, at: u64, sha256: String },
+    Hash { ticket: String, at: u64, sha256: String, session_sha256: String },
     Notice(Json),
     State { phase: &'static str, waiting: usize, can_edit: bool },
 }
@@ -338,7 +340,9 @@ impl LiveEditorMsg {
             Self::Reset { kind } => json!({ "kind": kind }),
             Self::Load { revision, at } => json!({ "revision": revision, "at": at }),
             Self::Checkpoint { ticket, at, base, sha256, .. } => json!({ "ticket": ticket, "at": at, "base": base, "sha256": sha256 }),
-            Self::Hash { ticket, at, sha256 } => json!({ "ticket": ticket, "at": at, "sha256": sha256 }),
+            Self::Hash { ticket, at, sha256, session_sha256 } => {
+                json!({ "ticket": ticket, "at": at, "sha256": sha256, "sessionSha256": session_sha256 })
+            }
             Self::Notice(notice) => json!({ "notice": notice }),
             Self::State { phase, waiting, can_edit } => json!({ "phase": phase, "waiting": waiting, "canEdit": can_edit }),
         }
@@ -989,7 +993,9 @@ fn ticket_messages(answer: TicketAnswer) -> Vec<LiveEditorMsg> {
             bytes: checkpoint.bytes,
             session_data: checkpoint.session_data,
         }],
-        TicketAnswer::Verify { ticket, at, sha256 } => vec![LiveEditorMsg::Hash { ticket, at: at.0, sha256: hex(&sha256) }],
+        TicketAnswer::Verify { ticket, at, sha256, session_sha256 } => {
+            vec![LiveEditorMsg::Hash { ticket, at: at.0, sha256: hex(&sha256), session_sha256: hex(&session_sha256) }]
+        }
         TicketAnswer::Failed { send } => {
             log::warn!("live: a checkpoint ticket could not be honoured");
             send.into_iter().map(LiveEditorMsg::Send).collect()
@@ -1607,7 +1613,20 @@ mod tests {
         let verify =
             json!({"type":"checkpoint_ticket","ticket":"00000000-0000-0000-0000-0000000000a2","purpose":"verify","at":0,"base":"r1","major":null});
         let out = seat.handle(LivePageMsg::Frame(verify.to_string()), 30);
-        assert!(out.iter().any(|message| matches!(message, LiveEditorMsg::Hash { ticket, at: 0, sha256 } if ticket == "00000000-0000-0000-0000-0000000000a2" && *sha256 == hex)));
+        let session_hex: String = expected.session_sha256().iter().map(|byte| format!("{byte:02x}")).collect();
+        let hash = out.iter().find(|message| matches!(message, LiveEditorMsg::Hash { .. })).expect("a verify ticket posts the hash");
+        assert!(
+            matches!(hash, LiveEditorMsg::Hash { ticket, at: 0, sha256, session_sha256 }
+                if ticket == "00000000-0000-0000-0000-0000000000a2" && *sha256 == hex && *session_sha256 == session_hex),
+            "the verify answer carries both hashes"
+        );
+        assert_eq!(hash.kind(), "gridcraft:live-hash");
+        assert_eq!(
+            hash.fields(),
+            json!({"ticket":"00000000-0000-0000-0000-0000000000a2","at":0,"sha256":hex,"sessionSha256":session_hex}),
+            "the identity data's hash goes with the file's, as ShareCraft's hash body requires"
+        );
+        assert!(hash.binaries().is_empty(), "a verify answer uploads nothing");
         assert!(!out.iter().any(|message| matches!(message, LiveEditorMsg::Checkpoint { .. })), "a verify ticket posts only the hash");
 
         let wrong =

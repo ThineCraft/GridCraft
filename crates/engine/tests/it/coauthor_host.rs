@@ -6,7 +6,7 @@ use collab_live::client::{Event, LiveConfig, LocalError, Step};
 use collab_live::ids::LiveId;
 use gridcraft_core::{CellRef, RangeRef};
 use gridcraft_engine::coauthor::{
-    GRIDCRAFT_LIVE_FORMAT, GridCoauthor, GridLiveEditor, GridLiveError, LiveBase, LiveNotice, MAX_PRESENCE_BYTES, NotAppliedReason, Route,
+    GRIDCRAFT_LIVE_FORMAT, GridCoauthor, GridLiveEditor, GridLiveError, LiveBase, LiveNotice, MAX_PRESENCE_BYTES, NotAppliedReason, Phase, Route,
     ShownPresence, UNSHARED_REASON, explicit_params, is_local_command, is_shared_command, route,
 };
 use gridcraft_engine::fingerprint::{DocId, fingerprint};
@@ -82,6 +82,63 @@ fn join_with_access(client: &mut GridCoauthor, participant: u32, can_edit: bool,
         .receive(&json!({"type":"catchup","base":0,"revision":null,"from":0,"head":0}).to_string(), now_ms.saturating_add(2))
         .expect("catch-up is accepted");
     client.base_ready(now_ms.saturating_add(3)).expect("loaded base is accepted");
+}
+
+/// Joins `client` as the room does since ShareCraft's G4 final review: the pause state
+/// (`changes_paused` or `changes_resumed`) arrives between `live_joined` and `catchup`.
+fn join_told_pause_state(client: &mut GridCoauthor, pause_state: &Json, now_ms: u64) {
+    let join = client.tick(now_ms).into_iter().any(|frame| matches!(serde_json::from_str(&frame), Ok(LiveClientMsg::LiveJoin { .. })));
+    assert!(join, "a new co-author sends a live join");
+    let joined = json!({"type":"live_joined","session":"00000000-0000-0000-0000-00000000005e","participant":1,
+        "place":{"is":"new"},"can_edit":true,"heartbeat_ms":60_000,"people":[]});
+    client.receive(&joined.to_string(), now_ms.saturating_add(1)).expect("join is accepted");
+    client.receive(&pause_state.to_string(), now_ms.saturating_add(2)).expect("the pause state is accepted before the catch-up");
+    let step = client
+        .receive(&json!({"type":"catchup","base":0,"revision":null,"from":0,"head":0}).to_string(), now_ms.saturating_add(3))
+        .expect("catch-up is accepted after the pause state");
+    assert!(step.events.iter().any(|event| matches!(event, Event::LoadBase { .. })));
+    client.base_ready(now_ms.saturating_add(4)).expect("loaded base is accepted");
+    assert_eq!(client.phase(), Phase::Live, "the join ends live");
+}
+
+fn sends_entry(frames: &[String]) -> bool {
+    frames.iter().any(|frame| matches!(serde_json::from_str(frame), Ok(LiveClientMsg::Entry { .. })))
+}
+
+/// Every join is told whether changes wait before its catch-up. A join that is not paused shows
+/// nothing and sends changes at once; a paused join is told so, holds the person's change and
+/// sends it when changes resume.
+#[test]
+fn a_join_is_told_whether_changes_wait_before_its_catch_up() {
+    let mut open = coauthor(&["Data"]);
+    join_told_pause_state(&mut open, &json!({"type":"changes_resumed"}), 10);
+    assert!(open.take_notices().is_empty(), "a join that was never paused is not told changes resumed");
+    let step = open.submit("cell.set", json!({"sheet":0,"cell":"A1","input":"1"}), ORIGIN_YEAR, 20).expect("the edit is made");
+    assert!(sends_entry(&step.send), "an open room takes the change at once");
+
+    let mut paused = coauthor(&["Data"]);
+    join_told_pause_state(&mut paused, &json!({"type":"changes_paused","entries":5_000,"bytes":1_024}), 10);
+    assert_eq!(paused.take_notices(), vec![LiveNotice::Paused { entries: 5_000, bytes: 1_024 }]);
+    let step = paused.submit("cell.set", json!({"sheet":0,"cell":"A1","input":"1"}), ORIGIN_YEAR, 20).expect("the edit is made");
+    assert!(!sends_entry(&step.send) && !sends_entry(&paused.tick(30)), "a paused room holds the change");
+    assert_eq!(paused.waiting(), 1, "the held change still waits");
+    let step = paused.receive(&json!({"type":"changes_resumed"}).to_string(), 40).expect("the resume is accepted");
+    assert!(sends_entry(&step.send), "the held change goes when changes resume");
+    assert_eq!(paused.take_notices(), vec![LiveNotice::Resumed], "and the person is told");
+}
+
+/// A pause the person was already told about is not told again (a rejoin while paused hears it
+/// once more before its catch-up).
+#[test]
+fn a_repeated_pause_is_told_once() {
+    let mut paused = coauthor(&["Data"]);
+    join_told_pause_state(&mut paused, &json!({"type":"changes_paused","entries":5_000,"bytes":1_024}), 10);
+    assert_eq!(paused.take_notices(), vec![LiveNotice::Paused { entries: 5_000, bytes: 1_024 }]);
+    paused.receive(&json!({"type":"changes_paused","entries":5_001,"bytes":1_100}).to_string(), 20).expect("still paused");
+    assert!(paused.take_notices().is_empty(), "the person already knows changes wait");
+    paused.receive(&json!({"type":"changes_resumed"}).to_string(), 30).expect("resumed");
+    paused.receive(&json!({"type":"changes_resumed"}).to_string(), 40).expect("resumed again");
+    assert_eq!(paused.take_notices(), vec![LiveNotice::Resumed], "one resume is told once");
 }
 
 fn entered(client: &GridCoauthor) -> [u8; 32] {
