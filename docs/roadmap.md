@@ -1,6 +1,6 @@
 # Roadmap detail
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-11-19 · **Change:** minor (first live GridCraft command set and in-process co-author adapter complete; user-facing co-authoring remains G4/G5 work) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-11-19 · **Change:** minor (G4 checkpoint fidelity proved; user-facing co-authoring remains G5 work; earlier: first live GridCraft command set and in-process co-author adapter complete) · **Target:** Microsoft Excel (Microsoft 365)
 
 Forward-looking plan. The one-page summary is [`ROADMAP.md`](../ROADMAP.md); the ranked work
 list is [`gaps.md`](gaps.md); numbers and method are in
@@ -86,8 +86,14 @@ G3 completes the first fork-side engine slice. `gridcraft/1` has an allow-listed
 identity targets for sheets, rows, columns, cells and formula references. The in-process adapter
 uses G2's ordered client to apply, roll back and re-run commands, preserves each person's active
 sheet and selection, compares entered content across platforms, and records guarded personal
-Undo/Redo. It is not user-facing: G4 still supplies checkpoints and retained-room state, and G5
-supplies sockets, the host bridge, presence, notices and the screen integration.
+Undo/Redo. G4 adds checkpoints: the agreed state at a ticket's position as deterministic bytes
+plus identity session data, loaded with a full recalculation under its entry's stamp. A late
+joiner on a checkpoint plus the retained entries, and two fresh editors writing the same
+position, produce the same SHA-256 as straight-through clients; desktop and wasm32 agree on
+entered content ([coauthor-determinism.md](coauthor-determinism.md#checkpoints-in-g4)). It is
+not user-facing: G5 supplies sockets, the host bridge, presence, notices and the screen
+integration. One maths library for desktop and browser, real-browser runs and large content
+remain open.
 
 Structural changes on workbooks with at least 100,000 stored cells wait for the server instead of
 being shown and re-run locally. Shared sheet insertion and deletion work, but Undo of a sheet add
@@ -137,6 +143,7 @@ platforms.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-19 | minor | G4 checkpoints: agreed-state bytes and identity data, full-recalculation load, checkpoint-plus-suffix, second-writer and native/wasm entered proofs; user-facing work remains G5 |
 | 2026-11-19 | minor | First identity-targeted live command set and in-process G2 adapter complete; checkpoints and user-facing G4/G5 integration remain |
 | 2026-10-23 | minor | Measuring: tests run through `cargo xtask test` |
 | 2026-10-11 | minor | PivotTable calculated fields landed |

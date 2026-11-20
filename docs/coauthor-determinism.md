@@ -15,9 +15,9 @@ is one of:
 "Shared commands" are the first Stage 2 set in `gridcraft/1`: cell content, number format, font,
 fill, borders, alignment, filters, row and column insert and delete, and sheet add, rename and
 delete. They carry explicit identity targets before they enter the live log. The in-process G2
-adapter preserves each person's view and re-runs pending work from an agreed snapshot. This is
-engine infrastructure only; G4 and G5 still have to add checkpoints, the host bridge and the
-user-facing collaboration experience.
+adapter preserves each person's view and re-runs pending work from an agreed snapshot. G4 adds
+checkpoints (see Checkpoints in G4). This is engine infrastructure only; G5 still has to add the
+host bridge and the user-facing collaboration experience.
 
 Audited at branch `coauthor-proofs` after `43d635b0`, November 2026. G3 findings were updated on
 branch `coauthor-g3` on 19 November 2026. The G1 long run was re-run at `f92a4178` (see Long run),
@@ -202,6 +202,26 @@ per-workbook results.
 | Iterative calculation and manual mode | Open after G3 | Iterative results depend on which formulas were dirty and on the evaluation order (Gauss-Seidel); manual mode leaves values stale. Both differ from a full recalculation by design (`command_sequence_fuzz` skips them). Calculation options are not shared commands. A future shared design must either share them with a full recalculation on every client or keep them per workbook and recalculate in full after each agreed step. |
 | More than 8 spill rounds in one recalculation | Open after G3 | `run` stops after 8 rounds. A pathological chain of spills could stop at different points after an incremental edit and after a rebuild. Not seen in the replay. |
 
+## Checkpoints in G4
+
+A checkpoint is the XLSX of the agreed state at a ticket's exact position, with the identity
+tables as session data. Branch `coauthor-g4`, November 2026.
+
+| Property | G4 behaviour and exact tests |
+| --- | --- |
+| Agreed state only | A write or verify ticket writes the agreed snapshot at its position; a change still waiting is shown but never written. Tests: `grid_checkpoint_uses_the_agreed_snapshot` and, with a waiting change during the ticket, `checkpoint_then_catchup_equals_straight_through`. |
+| Deterministic bytes and identities | Personal view (active sheet, selection, scroll, zoom, tab and scroll-bar settings) is replaced by the stored view before writing, so two people in the same agreed state write the same bytes, identity data and SHA-256. Tests: `grid_checkpoint_bytes_are_deterministic` and `grid_checkpoint_restores_stored_view_before_writing`. |
+| Identity data | The session data carries every sheet, row and column identity, including who deleted each one, and is validated as a whole before an editor sees it. Tests: `checkpoint_session_data_restores_deletion_ownership` and `workbook_ids_reject_inconsistent_session_data`. |
+| Full recalculation on load | A checkpoint loads with a full recalculation under the stamp of the entry at its position (clock and RAND seed), not with the file's cached values. Tests: `checkpoint_load_recalculates_every_formula` and `checkpoint_load_stamps_the_first_iterative_calculation`. |
+| Row heights | File › Open's auto-fit of imported rows is not applied a second time on a checkpoint load, so the row-height loss found in G3 (8 of 10,000 generated cases) is fixed; ordinary File › Open still fits imported rows. Tests: `checkpoint_reload_preserves_wrapped_formula_row_height`, `checkpoint_reload_preserves_seed_3996_row_heights`, `ordinary_file_open_still_fits_imported_rows`, and `coauthor_save_reload::save_reload_lossless` with its checkpoint cases. |
+| Checkpoint plus suffix | A late joiner that loads a checkpoint written while a change waited, with its identity data, and replays the retained entries agrees in entered content with clients that applied everything, after every later entry. Its head checkpoint has the same bytes, identity data and SHA-256 as theirs. The run includes NOW, RAND, row and column insert and delete, a sheet add and rename, and an Undo of a row deletion made before the checkpoint. Test: `checkpoint_then_catchup_equals_straight_through`. Loading the same bytes as a plain file, without the identity data, makes that Undo do nothing on the late joiner and the test fails. |
+| Second writer | Two fresh editors that load the same base and identity data and replay the same entries write identical bytes, identity data and SHA-256 at the head, equal to the straight-through writers'. Test: `checkpoint_hash_matches_between_two_grid_editors`. |
+| Across platforms | Room agreement compares the entered digest only. The same checkpoint run under wasm32 (Node, wasm-bindgen test runner) gives the native entered digests at the base and the head. Test: `wasm_replay::native_and_wasm_checkpoint_agree_on_entered_content`. In this run the head's SHA-256 also matched the native one, but that is reported, not asserted: checkpoint bytes carry computed values, and the maths-library differences above can change them. |
+
+Still open after G4: one maths library for desktop and browser (until then a browser writer and a
+desktop verifier can disagree on bytes for the same entered content); runs in real browsers rather
+than Node; the G5 host bridge; large content (C20); and commands outside the shared set.
+
 ## Long run
 
 `cargo test --release --locked --offline -p gridcraft-engine --test it coauthor_replay::long_replay -- --ignored --nocapture`,
@@ -215,7 +235,8 @@ seeds 100000 to 109999, 60 random steps each, on x86_64 Windows, at `f92a4178`:
 - Scope: identical command histories from a new workbook, in one process on x86_64 Windows. This
   G1 run did not drive filters or prove rollback against straight application. G3 adds focused
   explicit-filter tests and `rollback_rerun_matches_straight_through`, including snapshot RNG
-  state. Checkpoint loading remains G4 work; the G1 run proves nothing across platforms.
+  state. G4's checkpoint tests are listed under Checkpoints in G4; the G1 run proves nothing
+  across platforms.
 - A run at `d0f5983b` (248.4 s), before the row-height writer fix (`723f2f70`) and the fingerprint's
   blank-cell rule (`93951043`), gave exactly the same counts.
 - An earlier run at `965571a1` (241.8 s, the same counts except 463,022 `entered` changes)

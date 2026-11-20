@@ -1,6 +1,6 @@
 # Gaps
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-11-19 · **Change:** minor (§16: gestures refused while editing together; earlier: §16: G3 review carries for G4 and G5; earlier: §16: first live command set and in-process co-author adapter complete; no user-facing co-authoring yet; earlier: §17: equations; earlier: §13: Solver Sensitivity report; earlier: §4: chart resizing is no longer a gap) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-11-19 · **Change:** minor (§16: G4 checkpoints proved; deletion-ownership note resolved; earlier: §16: gestures refused while editing together; earlier: §16: G3 review carries for G4 and G5; earlier: §16: first live command set and in-process co-author adapter complete; no user-facing co-authoring yet; earlier: §17: equations; earlier: §13: Solver Sensitivity report; earlier: §4: chart resizing is no longer a gap) · **Target:** Microsoft Excel (Microsoft 365)
 
 Every known shortfall against Excel, one entry each, ranked by user impact (what blocks someone
 using GridCraft for real work first). This is the work list: pick from the top, check the open
@@ -168,13 +168,18 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
   pivots, macros and scripts stay refused too. Save hands over no file (checkpoints are
   automatic); Export as PDF still works. Other people's selections are drawn only once the
   live wire carries presence (ShareCraft G5 task 1).
-- **Still missing:** G4 checkpoints and retained-room state; G5 sockets, the host bridge,
-  presence, notices and the screen integration. There is no user-facing co-authoring until G4
-  and G5 land. Known before a real room (G3 final review):
-  - **G4:** who deleted each row and column identity (`deleted_by`) is not saved with the
-    identity table, so a client that loads a checkpoint refuses an Undo that the others apply.
-    The checkpoint must carry or rebuild it, with a two-client test where one client starts
-    from a checkpoint.
+- **Added in G4 (engine):** checkpoints. A ticket writes the agreed state at its position as
+  deterministic XLSX bytes plus identity session data (including who deleted each row and
+  column); a waiting change is never written. A checkpoint loads with a full recalculation under
+  its entry's stamp, without File › Open's second row auto-fit. A late joiner on a checkpoint
+  plus the retained entries writes the same bytes and SHA-256 as straight-through clients, and
+  two fresh editors writing the same position agree. Cross-platform agreement compares entered
+  content only. Detail and tests: [coauthor-determinism.md](coauthor-determinism.md#checkpoints-in-g4).
+- **Still missing:** G5 sockets, the host bridge, presence, notices and the screen integration.
+  There is no user-facing co-authoring until G5 lands. Also open: one maths library for desktop
+  and browser (checkpoint bytes carry computed values, so a browser writer and a desktop verifier
+  can disagree on the hash), runs in real browsers rather than Node, large content (C20) and
+  commands outside the shared set. Known before a real room (G3 final review):
   - **G5 (P, S):** live identity tables are scanned in full per target, and every applied entry
     clones the whole table, so a co-author who fragments an axis (one delete naming tens of
     thousands of alternate rows) makes every later entry slow on every client. Index the
@@ -223,6 +228,7 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-19 | minor | §16: G4 checkpoints (agreed-state bytes, identity data, full-recalculation load, checkpoint-plus-suffix and second-writer proofs); the G4 deletion-ownership note is resolved |
 | 2026-11-19 | minor | §16: G3 final-review carries: deletion ownership in checkpoints (G4), identity-table cost under fragmentation (G5) |
 | 2026-11-19 | minor | §16: first identity-targeted live command set and in-process G2 adapter complete; checkpoints and user-facing G4/G5 integration remain |
 | 2026-11-02 | minor | §17: equations (Insert › Equation, LaTeX source, gallery, editor) |

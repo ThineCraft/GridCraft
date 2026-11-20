@@ -20,6 +20,11 @@
 
 #[path = "support/sequences.rs"]
 mod sequences;
+// The checkpoint run for `native_and_wasm_checkpoint_agree_on_entered_content`; the other room
+// helpers are used by the native integration tests only.
+#[path = "support/live.rs"]
+#[allow(dead_code)]
+mod live;
 
 use std::collections::BTreeMap;
 
@@ -225,7 +230,7 @@ fn value_text(v: &Value) -> String {
         Value::Error(e) => format!("error {} {}", e.code(), e.as_str()),
         Value::Array(a) => {
             let first: Vec<String> = a.iter().take(8).map(value_text).collect();
-            let more = if a.rows * a.cols > 8 { ", …" } else { "" };
+            let more = if a.rows * a.cols > 8 { ", â€¦" } else { "" };
             format!("array {}x{} [{}{more}]", a.rows, a.cols, first.join("; "))
         }
     }
@@ -528,6 +533,43 @@ fn cross_platform_agreement_uses_entered_digest() {
 
     assert_eq!(sequences::agreement_digest(&native), sequences::agreement_digest(&other_platform));
     assert_ne!(native.computed, other_platform.computed, "the computed diagnostic deliberately differs");
+}
+
+// ---------------------------------------------------------------- checkpoint fidelity
+
+/// The entered digests of the checkpoint run (`support/live.rs`, `checkpoint_run`), recorded on
+/// x86_64 Windows: the base Bob writes while his change waits, and the head.
+const CHECKPOINT_BASE_ENTERED: &str = "d0437e6485acce2750525cb868f13dc628dcbd158d9c729b45dfb71b74f1a1a7";
+const CHECKPOINT_HEAD_ENTERED: &str = "f4d640402b7373eb7f570b69377e574731af5a0efe54bc1ab9a0a3ae1342fc2d";
+/// The head checkpoint's SHA-256 on x86_64 Windows. Diagnostic only: the bytes carry computed
+/// values, which may differ across platforms (see `docs/coauthor-determinism.md`).
+const CHECKPOINT_HEAD_SHA256_NATIVE: &str = "8c464a91dad58f948a05118aa99ecbc961c5b66e3a0f4f262e77576f0d3175c0";
+
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+/// The same room run natively and under wasm32: a checkpoint written while a change waits, a
+/// late joiner loading it with its identity data, further structural and content changes, and
+/// head checkpoints from a straight-through and a checkpoint-loaded writer. Entered content
+/// agrees with the native record at the base and the head; the bytes' hash is reported only.
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+fn native_and_wasm_checkpoint_agree_on_entered_content() {
+    let run = live::checkpoint_run();
+    assert_eq!(run.late.entered, run.straight.entered, "checkpoint plus suffix agrees with straight through on this platform");
+    let diagnostic = format!(
+        "checkpoint run: base entered {}, head entered {}, head sha256 {} (native {CHECKPOINT_HEAD_SHA256_NATIVE})",
+        hex(&run.base.entered),
+        hex(&run.straight.entered),
+        hex(&run.straight.sha256)
+    );
+    #[cfg(target_arch = "wasm32")]
+    wasm_bindgen_test::console_log!("{diagnostic}");
+    #[cfg(not(target_arch = "wasm32"))]
+    eprintln!("{diagnostic}");
+    assert_eq!(hex(&run.base.entered), CHECKPOINT_BASE_ENTERED, "the base's entered content differs from the native record");
+    assert_eq!(hex(&run.straight.entered), CHECKPOINT_HEAD_ENTERED, "the head's entered content differs from the native record");
 }
 
 /// The embedded list must name every sequence in the fixtures folder, so a fixture added there

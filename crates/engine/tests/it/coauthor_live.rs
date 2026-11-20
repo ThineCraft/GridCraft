@@ -1139,6 +1139,50 @@ fn an_over_limit_room_is_a_recoverable_pause() {
     assert!(!alice.connected(30).is_empty(), "and can join again");
 }
 
+/// A late joiner that loads a checkpoint written while a change was waiting, with its identity
+/// data, and catches up on the retained entries agrees with the clients that applied everything,
+/// in entered content after every later entry (checked inside the run) and in the bytes, identity
+/// data and hash of the checkpoint each writes at the head.
+#[test]
+fn checkpoint_then_catchup_equals_straight_through() {
+    let run = crate::live::checkpoint_run();
+    assert!(run.head > run.base_at && !run.suffix.is_empty());
+    let (base, _) = io::open_bytes("base.xlsx", &run.base.bytes).expect("the base reopens");
+    assert_eq!(base.sheet(0).expect("Data exists").value(CellRef::parse("C1").expect("cell")), Value::Empty, "the waiting change is not in the base");
+    assert_eq!(run.late.entered, run.straight.entered, "checkpoint plus suffix has the straight-through entered content");
+    assert_eq!(run.late.session_data, run.straight.session_data, "and the same identity data");
+    if run.late.bytes != run.straight.bytes {
+        let (late, _) = io::open_bytes("late.xlsx", &run.late.bytes).expect("late reopens");
+        let (straight, _) = io::open_bytes("straight.xlsx", &run.straight.bytes).expect("straight reopens");
+        panic!(
+            "checkpoint plus suffix wrote different bytes from straight through: {}",
+            gridcraft_engine::fingerprint::workbook_first_difference(&straight, &late).unwrap_or_else(|| "no workbook item differs".into())
+        );
+    }
+    assert_eq!(run.late.sha256, run.straight.sha256);
+    assert_eq!(run.bob_verify, run.straight.sha256, "the writer of the base verifies the head");
+}
+
+/// Two fresh GridCraft editors load the same verified base and its identity data, replay the
+/// same retained entries and answer a write and a verify ticket at the head: identical bytes and
+/// SHA-256, equal to the room's straight-through writers.
+#[test]
+fn checkpoint_hash_matches_between_two_grid_editors() {
+    let run = crate::live::checkpoint_run();
+    let fresh = || GridCoauthor::new(live_config(), GridLiveEditor::new(session_with_sheets(&["Unrelated", "Other"])).expect("editor builds"));
+    let (mut erin, mut frank) = (fresh(), fresh());
+    crate::live::join_from_checkpoint(&mut erin, 7, &run.base, run.base_at, run.base_stamp, &run.suffix, 1_000);
+    crate::live::join_from_checkpoint(&mut frank, 8, &run.base, run.base_at, run.base_stamp, &run.suffix, 2_000);
+    let written = crate::live::written(crate::live::ticket_answer(&mut erin, true, run.head, 21, 3_000));
+    let verify = crate::live::verified(crate::live::ticket_answer(&mut frank, false, run.head, 22, 3_001));
+    let frank_written = crate::live::written(crate::live::ticket_answer(&mut frank, true, run.head, 23, 3_002));
+    assert_eq!(written.sha256, verify, "the second editor's hash matches the writer's");
+    assert_eq!(written.bytes, frank_written.bytes, "both fresh editors write identical bytes");
+    assert_eq!(written.session_data, frank_written.session_data, "and identical identity data");
+    assert_eq!(written.sha256, run.straight.sha256, "a checkpoint-loaded writer matches a straight-through one");
+    assert_eq!(written.entered, run.straight.entered);
+}
+
 /// The archived copy an independent editor writes after typing `text` into A1 and being archived
 /// on its return.
 fn archived_copy(text: &str) -> Vec<u8> {
