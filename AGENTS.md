@@ -122,7 +122,9 @@ People trust GridCraft with their numbers; a crash loses their work. **This outr
   `ThineCraft/GridCraft#2` (coauthor-g3 → sharecraft) is open. Task briefs, reports and reviews
   are in the git-ignored `plan/` folder.
 - The fork builds ShareCraft's `collab-live`, `collab-core` and `protocol` through the path
-  `../ShareCraft/crates/...` until G5 Task 7 pins a git revision.
+  `../ShareCraft/crates/...` until G5 Task 7 pins a git revision. Pin ShareCraft `main`
+  (5411a7b or later): it holds all of G4 and the G5 ShareCraft tasks done so far.
+- `coauthor-g5` is not yet pushed; the owner must approve pushing it.
 - Build from `%TEMP%` with an absolute `--manifest-path` and `--locked --offline`: the parent
   folder's `.cargo/config.toml` holds a personal patch override. Put build output on J:
   (`CARGO_TARGET_DIR=J:\cargo-target\gridcraft-g5`, `CARGO_INCREMENTAL=0`). The wasm test runner
