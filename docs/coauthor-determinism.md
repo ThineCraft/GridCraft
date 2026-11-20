@@ -66,6 +66,22 @@ in a shared session (`sheet_add_undo_is_refused_locally` and
 `sheet_delete_undo_is_refused_locally_without_falling_through_history`); G3 does not serialize a
 whole sheet into an undo entry.
 
+## Working against local ShareCraft sources
+
+GridCraft's committed lock file pins ShareCraft's `collab-core`, `collab-live` and `protocol`
+crates to one ShareCraft git revision. A committed lock file never points at a local path.
+
+When changing GridCraft and ShareCraft together, pass all three local sources to Cargo on the
+command line:
+
+```text
+cargo build --config 'patch."https://github.com/ThineCraft/ShareCraft".collab-core.path="H:/Source/repos/ThineCraft/ShareCraft/crates/collab-core"' --config 'patch."https://github.com/ThineCraft/ShareCraft".collab-live.path="H:/Source/repos/ThineCraft/ShareCraft/crates/collab-live"' --config 'patch."https://github.com/ThineCraft/ShareCraft".protocol.path="H:/Source/repos/ThineCraft/ShareCraft/crates/protocol"'
+```
+
+This override applies only to the invocation. It must not be copied into
+`.cargo/config.toml`, and it must not replace the pinned revisions in `Cargo.toml` or
+`Cargo.lock`.
+
 ## Hash maps and sets
 
 ### calc

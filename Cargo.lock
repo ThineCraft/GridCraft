@@ -792,6 +792,7 @@ dependencies = [
 [[package]]
 name = "collab-core"
 version = "0.1.0"
+source = "git+https://github.com/ThineCraft/ShareCraft?rev=52927c5b83700a84f422b75c52dbf0811c98cd44#52927c5b83700a84f422b75c52dbf0811c98cd44"
 dependencies = [
  "serde",
  "thiserror 2.0.21",
@@ -801,6 +802,7 @@ dependencies = [
 [[package]]
 name = "collab-live"
 version = "0.1.0"
+source = "git+https://github.com/ThineCraft/ShareCraft?rev=52927c5b83700a84f422b75c52dbf0811c98cd44#52927c5b83700a84f422b75c52dbf0811c98cd44"
 dependencies = [
  "collab-core",
  "protocol",
@@ -3996,6 +3998,7 @@ checksum = "3d595e54a326bc53c1c197b32d295e14b169e3cfeaa8dc82b529f947fba6bcf5"
 [[package]]
 name = "protocol"
 version = "0.1.0"
+source = "git+https://github.com/ThineCraft/ShareCraft?rev=52927c5b83700a84f422b75c52dbf0811c98cd44#52927c5b83700a84f422b75c52dbf0811c98cd44"
 dependencies = [
  "collab-core",
  "serde",
@@ -5278,7 +5281,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.4.3",
+ "getrandom 0.3.4",
  "once_cell",
  "rustix 1.1.5",
  "windows-sys 0.61.2",
@@ -7138,3 +7141,11 @@ source = "git+https://github.com/storytold/egui.git?rev=6d518fc799681571963842f9
 name = "egui_system_font_provider"
 version = "0.37.0"
 source = "git+https://github.com/storytold/egui.git?rev=6d518fc799681571963842f95b55a6b68431b15a#6d518fc799681571963842f95b55a6b68431b15a"
+
+[[patch.unused]]
+name = "solidcore"
+version = "1.0.1"
+
+[[patch.unused]]
+name = "solidcore-record"
+version = "0.1.0"

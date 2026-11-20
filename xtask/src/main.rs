@@ -14,7 +14,6 @@ mod layers;
 mod parity;
 mod stats;
 mod version;
-
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, Stdio};
 
@@ -251,4 +250,39 @@ fn cmd_ci() -> Result<(), String> {
     }
     println!("\nCI summary: all {} steps passed ({})", done.len(), done.join(", "));
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn workspace_has_no_path_dependency_outside_the_repository() {
+        let metadata = metadata().expect("cargo metadata should succeed");
+        let workspace_root = root().canonicalize().expect("workspace root should be an existing path");
+        let mut outside = Vec::new();
+
+        for package in metadata["packages"].as_array().into_iter().flatten() {
+            let package_name = package["name"].as_str().unwrap_or("<unknown>");
+            for dependency in package["dependencies"].as_array().into_iter().flatten() {
+                let Some(path) = dependency["path"].as_str() else {
+                    continue;
+                };
+                let dependency_path = Path::new(path);
+                let absolute = if dependency_path.is_absolute() {
+                    dependency_path.to_path_buf()
+                } else {
+                    let package_manifest = package["manifest_path"].as_str().unwrap_or("");
+                    Path::new(package_manifest).parent().unwrap_or(Path::new("")).join(dependency_path)
+                };
+                let absolute = absolute.canonicalize().unwrap_or(absolute);
+                if !absolute.starts_with(&workspace_root) {
+                    let dependency_name = dependency["name"].as_str().unwrap_or("<unknown>");
+                    outside.push(format!("{} ({}) -> {}", dependency_name, package_name, absolute.display()));
+                }
+            }
+        }
+
+        assert!(outside.is_empty(), "path dependencies outside the workspace repository:\n{}", outside.join("\n"));
+    }
 }
