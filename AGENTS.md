@@ -114,6 +114,28 @@ People trust GridCraft with their numbers; a crash loses their work. **This outr
 - Never add, edit, guess or copy anyone else's entry or name (not from git config, commit authors or
   GitHub profiles). Never hand-edit `contributors.json`.
 
+## ShareCraft co-authoring work (handoff, 20 November 2026)
+
+- The co-authoring tracks G3–G5 are planned in ShareCraft (`../ShareCraft/plans/*.html`); start
+  with `../ShareCraft/handoff.html`, which says where every task stands and what is next.
+- This fork's work branch is `coauthor-g5` (contains `coauthor-g3` and `coauthor-g4`). PR
+  `ThineCraft/GridCraft#2` (coauthor-g3 → sharecraft) is open. Task briefs, reports and reviews
+  are in the git-ignored `plan/` folder.
+- The fork builds ShareCraft's `collab-live`, `collab-core` and `protocol` through the path
+  `../ShareCraft/crates/...` until G5 Task 7 pins a git revision.
+- Build from `%TEMP%` with an absolute `--manifest-path` and `--locked --offline`: the parent
+  folder's `.cargo/config.toml` holds a personal patch override. Put build output on J:
+  (`CARGO_TARGET_DIR=J:\cargo-target\gridcraft-g5`, `CARGO_INCREMENTAL=0`). The wasm test runner
+  is `J:\tools\wasm-bindgen-0.2.129\bin\wasm-bindgen-test-runner.exe`. If `xtask` adds
+  `[[patch.unused]]` lines to `Cargo.lock`, revert them.
+- Gates for co-authoring changes: fmt; clippy `--all-targets -D warnings` on the touched crates;
+  `cargo test -p gridcraft-engine --test it coauthor_`; engine `--lib`; `gridcraft-web` tests;
+  native and wasm32 `wasm_replay`.
+- Known failures that exist at the fork's base: clippy at `apps/gridcraft-cli/src/check.rs:281`,
+  `functions engineering::tests::complex_numbers`, `caret_after_typing_arabic_is_drawn_at_its_left_end`,
+  `xtask keytips --check`, and two ui glyph tests that need `CRAFT_FONTS_DIR`.
+- Never print `.env` contents or secrets. Pushing and merging need the owner's go-ahead.
+
 ## CI workflows
 - Workflows in `.github/workflows/` call the shared workflows in [`storytold/craft-common-actions`](https://github.com/storytold/craft-common-actions) at `@main`, with their inputs and secrets. No other jobs: if no shared workflow does what's needed, it doesn't go here.
 - Don't add or change CI in a feature or fix PR. If the existing workflows can't build or test a change, link an existing craft-common-actions issue or PR, or open a new issue, or a PR only for a small fix that is safe for every app and does not increase CI time.
