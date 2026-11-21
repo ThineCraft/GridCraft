@@ -371,7 +371,7 @@ impl GridCoauthor {
     /// for any other event. A failure is answered with the `checkpoint_failed` frame only.
     pub fn answer_ticket(&self, event: &Event) -> Option<TicketAnswer> {
         let failed = |ticket| TicketAnswer::Failed { send: serde_json::to_string(&protocol::live::LiveClientMsg::CheckpointFailed { ticket }).ok() };
-        if let Event::CheckpointRequested { ticket, at, base, major: Some(MajorReason::ReturningClientArchive) } = event {
+        if let Event::CheckpointRequested { ticket, at, base, major: Some(MajorReason::ReturningClientBefore) } = event {
             // The room keeps the person's old copy below the current file (C23): answer with
             // the copy written when the return was archived, never the agreed state.
             return Some(match self.archived.clone() {

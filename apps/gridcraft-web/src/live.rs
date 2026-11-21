@@ -1014,7 +1014,7 @@ fn hex(bytes: &[u8]) -> String {
 /// The kind of an error that makes the page reconnect; never its text.
 fn reset_kind(error: &GridLiveError) -> &'static str {
     match error {
-        GridLiveError::Client(ClientError::Malformed(_)) => "malformed",
+        GridLiveError::Client(ClientError::Malformed { .. }) => "malformed",
         GridLiveError::Client(ClientError::OutOfOrder { .. }) => "out_of_order",
         GridLiveError::Client(ClientError::Desync(_)) => "desync",
         GridLiveError::Client(ClientError::AgreedUnavailable { .. }) => "agreed_unavailable",
