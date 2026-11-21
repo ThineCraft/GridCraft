@@ -972,3 +972,32 @@ fn rollback_and_rerun_timings_wasm() {
     wasm_bindgen_test::console_log!("headline wasm mixed 100000 cells 10 pending clone+apply p95 {measured:.3} ms (threshold 150 ms)");
     assert!(measured <= 150.0, "wasm 100,000-cell/10-command clone+apply p95 {measured:.3} ms exceeds 150 ms");
 }
+
+/// The WebAssembly counterpart of `it/coauthor_timing.rs::fragmented_axis_timing`: 1,000
+/// `cell.set` entries on an untouched row axis and on one of 60,001 runs with 30,000 owned
+/// deletions. Report only, apart from the same counted-work bound as the native test.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen_test::wasm_bindgen_test]
+#[ignore = "release-only browser fragmented identity axis timing report"]
+fn fragmented_axis_timing_wasm() {
+    if cfg!(debug_assertions) {
+        panic!("timings must be run with cargo test --release");
+    }
+    let clock = wasm_clock();
+    for pairs in [0, 30_000] {
+        let run = live::fragmented_cell_run(pairs, 1_000, &mut || clock());
+        assert_eq!(run.entered[0], run.entered[1], "the two clients disagree on a {}-run axis", run.runs);
+        assert!(run.runs_visited <= 1_000, "1000 entries on a {}-run axis copied or walked {} identity runs", run.runs, run.runs_visited);
+        let total: f64 = run.entry_ms.iter().sum();
+        let stats = sequences::timing_stats(run.entry_ms).expect("the entries were timed");
+        wasm_bindgen_test::console_log!(
+            "wasm {} runs, {} owned deletions: 1000 cell.set entries in {total:.1} ms, per entry p50 {:.3} ms p95 {:.3} ms max {:.3} ms, {} identity runs copied or walked",
+            run.runs,
+            run.owners,
+            stats.p50_ms,
+            stats.p95_ms,
+            stats.max_ms,
+            run.runs_visited
+        );
+    }
+}
