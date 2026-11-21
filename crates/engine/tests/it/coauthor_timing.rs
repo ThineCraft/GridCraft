@@ -15,6 +15,7 @@
 
 use std::time::Instant;
 
+use crate::live::fragmented_cell_run;
 use crate::sequences::{
     Step, TIMING_REPETITIONS, check_rerun, headline_p95, heavier_timing_document, is_structural, kind_table, rerun_pending, time_all_workloads,
     time_command_kinds, time_workload, timing_command_kinds, timing_document, timing_stats, timing_table, timing_workbook, timing_workloads,
@@ -121,5 +122,35 @@ fn heavier_formula_rerun_report() -> Result<(), String> {
         println!("{line}");
     }
     println!("repetitions {TIMING_REPETITIONS} after one excluded warm-up; report only, no wall-clock gate");
+    Ok(())
+}
+
+/// Release-only: 1,000 `cell.set` entries, each ordered and applied by two clients, on an
+/// untouched row axis and on one of 60,001 runs (ShareCraft's limit is 65,536). Report only, no
+/// wall-clock gate; the counted proof is `coauthor_live::fragmented_axis_entries_touch_few_runs`.
+/// The WebAssembly counterpart runs the same `fragmented_cell_run` (Task 14).
+#[test]
+#[ignore = "release-only fragmented identity axis timing report"]
+fn fragmented_axis_timing() -> Result<(), String> {
+    if cfg!(debug_assertions) {
+        return Err("timings must be run with cargo test --release".into());
+    }
+    let clock = native_clock();
+    for pairs in [0, 30_000] {
+        let run = fragmented_cell_run(pairs, 1_000, &mut || clock());
+        if run.entered[0] != run.entered[1] {
+            return Err(format!("the two clients disagree on a {}-run axis", run.runs));
+        }
+        // Counted work, not wall-clock time: a copy of the tables or owners per entry fails here.
+        if run.runs_visited > 1_000 {
+            return Err(format!("1000 entries on a {}-run axis copied or walked {} identity runs", run.runs, run.runs_visited));
+        }
+        let total: f64 = run.entry_ms.iter().sum();
+        let stats = timing_stats(run.entry_ms)?;
+        println!(
+            "native {} runs, {} owned deletions: 1000 cell.set entries in {total:.1} ms, per entry p50 {:.3} ms p95 {:.3} ms max {:.3} ms, {} identity runs copied or walked",
+            run.runs, run.owners, stats.p50_ms, stats.p95_ms, stats.max_ms, run.runs_visited
+        );
+    }
     Ok(())
 }

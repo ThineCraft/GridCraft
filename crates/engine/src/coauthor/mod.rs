@@ -25,11 +25,12 @@ pub use command::{
 };
 pub use editor::{CrashNote, GridLiveEditor, GridSnapshot, SharedDocumentSnapshot};
 pub use host::{
-    LOCAL_COMMANDS, LOCAL_QUERIES, LiveBase, LiveNotice, NotAppliedReason, Route, UNSHARED_REASON, explicit_params, is_local_command, route,
+    LOCAL_COMMANDS, LOCAL_QUERIES, LiveBase, LiveNotice, NotAppliedReason, NotSentReason, Route, UNSHARED_REASON, explicit_params, is_local_command,
+    route,
 };
 pub use ids::{
     CellId, IdentityDelete, IdentityInsert, IdentityPosition, IdentityRange, IdentityRangeKind, IdentityRanges, IdentityRun, IdentitySheetInsert,
-    IdentityStructural, MAX_SESSION_DATA_BYTES, SheetIds, TargetGone, WorkbookIds,
+    IdentityStructural, MAX_SESSION_DATA_BYTES, SheetIds, TargetGone, WorkbookIds, identity_runs_visited,
 };
 pub use presence::{MAX_PRESENCE_BYTES, MIN_PRESENCE_INTERVAL_MS, Presence, ShownPresence};
 pub use undo::{
@@ -118,6 +119,8 @@ pub enum CoauthorError {
     UnknownIdentity(String),
     #[error("live target was deleted: {0}")]
     DeletedTarget(String),
+    #[error("the live identity axis would become too fragmented")]
+    TooFragmented,
     #[error(transparent)]
     Engine(#[from] crate::EngineError),
     #[error("live entry is {bytes} bytes; the limit is {max}")]
@@ -461,7 +464,16 @@ impl GridCoauthor {
         let next_action = self.next_action.checked_add(1).ok_or(GridLiveError::ActionExhausted)?;
         let action = self.next_action;
         let client = &mut self.client;
-        let prepared = self.editor.prepare(action, id, &params, origin_year, &mut |count| client.new_ids(count))?;
+        let prepared = match self.editor.prepare(action, id, &params, origin_year, &mut |count| client.new_ids(count)) {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                // Every machine would refuse it, so it is not sent; the person is told why.
+                if matches!(error, CoauthorError::TooFragmented) {
+                    self.notices.push(LiveNotice::ChangeNotSent { reason: NotSentReason::TooFragmented });
+                }
+                return Err(error.into());
+            }
+        };
         let step = self.client.local(&mut self.editor, prepared.payload, prepared.mode, now_ms)?;
         let history = self.editor.take_history_update(action).unwrap_or(None);
         self.pending_history.insert(action, PendingHistory::Original(history));
@@ -494,6 +506,12 @@ impl GridCoauthor {
     fn submit_history_patch(&mut self, patch: GuardedPatch, pending: PendingHistory, now_ms: u64) -> Result<Step, GridLiveError> {
         let next_action = self.next_action.checked_add(1).ok_or(GridLiveError::ActionExhausted)?;
         let action = self.next_action;
+        // A structural Undo or Redo every machine would refuse is not sent.
+        if undo::check_guarded_fragmentation(self.editor.ids(), &patch).is_err() {
+            self.history.refused(action);
+            self.notices.push(LiveNotice::ChangeNotSent { reason: NotSentReason::TooFragmented });
+            return Err(CoauthorError::TooFragmented.into());
+        }
         let mode = mode_for_guarded(&patch, self.editor.stored_cells());
         let entry = command::guarded_entry(action, patch);
         let payload = serde_json::to_string(&entry).map_err(|error| CoauthorError::MalformedPayload(error.to_string()))?;
@@ -684,6 +702,11 @@ impl GridCoauthor {
         let reason = self.editor.take_own_no_effect(settled.action);
         let kept_text = self.pending_texts.remove(&settled.action);
         if settled.history_move {
+            // An Undo or Redo that would have fragmented its axis did nothing anywhere.
+            if reason == Some(NotAppliedReason::TooFragmented) {
+                self.notices.push(LiveNotice::NotApplied { seq, kept_text: None, reason: NotAppliedReason::TooFragmented });
+                return;
+            }
             if let Some(cells) = self.last_undo_report.as_ref().map(|report| report.left).filter(|left| *left > 0) {
                 self.notices.push(LiveNotice::UndoLeft { cells });
             }

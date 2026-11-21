@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::sync::Arc;
 
 use collab_live::ids::{LiveId, Lookup};
 use gridcraft_core::{CellRef, RangeRef, Value};
@@ -845,6 +846,7 @@ fn target_error(error: TargetGone) -> CoauthorError {
         TargetGone::UnknownColumn(id) => CoauthorError::UnknownIdentity(format!("column {id:?}")),
         TargetGone::Malformed(message) => CoauthorError::MalformedPayload(message),
         TargetGone::UnrepresentableReference => CoauthorError::MalformedPayload("unrepresentable identity reference".into()),
+        TargetGone::TooFragmented => CoauthorError::TooFragmented,
     }
 }
 
@@ -1378,10 +1380,9 @@ fn apply_axis_patch(
     let count = validate_runs(&state.affected, limit).map_err(|error| EngineError::Other(error.to_string()))?;
     let label = if rows { "rows" } else { "columns" };
     let sheet_index = ids.resolve_sheet(state.sheet).map_err(|error| EngineError::Other(target_error(error).to_string()))?;
-    let ordered = {
-        let axes = ids.by_id.get(&state.sheet).ok_or_else(|| EngineError::Other(format!("unknown sheet identity {:?}", state.sheet)))?;
-        if rows { axes.rows.clone() } else { axes.cols.clone() }
-    };
+    // A shared handle, not a copy: the exchange below copies the sheet's tables once anyway.
+    let axes = Arc::clone(ids.by_id.get(&state.sheet).ok_or_else(|| EngineError::Other(format!("unknown sheet identity {:?}", state.sheet)))?);
+    let ordered = if rows { &axes.rows } else { &axes.cols };
     let engine = |error: CoauthorError| EngineError::Other(error.to_string());
     // The identities this entry revives must have been deleted by this entry's participant,
     // according to the ordered entries this client has applied. A forged revival of someone
@@ -1391,7 +1392,7 @@ fn apply_axis_patch(
         return Err(EngineError::Other(format!("the {label} to restore were not deleted by this participant")));
     }
     if state.expected_present {
-        let Some(at) = live_block_position(&ordered, &state.affected).map_err(engine)? else { return Ok(untouched_refusal(label)) };
+        let Some(at) = live_block_position(ordered, &state.affected).map_err(engine)? else { return Ok(untouched_refusal(label)) };
         if axis_entered(ids, &session.doc()?.wb, state.sheet, &state.affected, rows).map_err(engine)? != Some(state.entered) {
             return Ok(untouched_refusal(label));
         }
@@ -1404,12 +1405,12 @@ fn apply_axis_patch(
         Ok(UndoReport { restored: 1, left: 0, reason: None })
     } else {
         let expected_tail = limit.checked_sub(count).ok_or_else(|| EngineError::Other("structural identity count exceeds the worksheet".into()))?;
-        if live_block_position(&ordered, &state.fillers).map_err(engine)? != Some(expected_tail)
+        if live_block_position(ordered, &state.fillers).map_err(engine)? != Some(expected_tail)
             || axis_entered(ids, &session.doc()?.wb, state.sheet, &state.fillers, rows).map_err(engine)? != Some(state.filler_entered)
         {
             return Ok(untouched_refusal(label));
         }
-        let Some(at) = resolve_axis_position(&ordered, state.before, count)? else { return Ok(untouched_refusal(label)) };
+        let Some(at) = resolve_axis_position(ordered, state.before, count)? else { return Ok(untouched_refusal(label)) };
         let command = if rows { "home.insertRows" } else { "home.insertColumns" };
         let range = axis_range(at, count, rows)?;
         let params = if rows { serde_json::json!({"sheet":sheet_index,"rows":range}) } else { serde_json::json!({"sheet":sheet_index,"cols":range}) };
@@ -1433,6 +1434,31 @@ fn apply_axis_patch(
         }
         report.restored = report.restored.saturating_add(1);
         Ok(report)
+    }
+}
+
+/// Refuses a structural Undo or Redo that would pass the live limits on its axis. Each
+/// machine checks before applying the entry, and the sender before sending it, alike from the
+/// identity tables. Other faults are left to the apply, which reports them as before.
+pub(crate) fn check_guarded_fragmentation(ids: &WorkbookIds, patch: &GuardedPatch) -> Result<(), TargetGone> {
+    let GuardedPatch::Structural(structural) = patch else { return Ok(()) };
+    let (state, rows) = match structural.as_ref() {
+        GuardedStructural::InsertRows { state } | GuardedStructural::DeleteRows { state } => (state, true),
+        GuardedStructural::InsertColumns { state } | GuardedStructural::DeleteColumns { state } => (state, false),
+        GuardedStructural::RenameSheet { .. } => return Ok(()),
+    };
+    // Undoing an insert removes the inserted block and revives the fillers at the end; undoing
+    // a deletion removes the fillers and revives the deleted block where it was.
+    let (remove, restore, insert_at) = if state.expected_present {
+        let limit = if rows { gridcraft_core::MAX_ROWS } else { gridcraft_core::MAX_COLS };
+        let count = state.affected.iter().fold(0u32, |total, run| total.saturating_add(run.count));
+        (&state.affected, &state.fillers, limit.saturating_sub(count))
+    } else {
+        (&state.fillers, &state.affected, 0)
+    };
+    match ids.check_exchange_fragmentation(state.sheet, rows, remove, insert_at, restore) {
+        Err(CoauthorError::TooFragmented) => Err(TargetGone::TooFragmented),
+        _ => Ok(()),
     }
 }
 

@@ -1315,3 +1315,335 @@ fn coauthor_checkpoint_joiner_fingerprint_matches_peers_after_more_edits() {
         "a checkpoint either writes verifies against the other"
     );
 }
+
+// ------------------------------------------- shared identity tables and fragmentation (G5.8, I7)
+
+/// The most separate blocks one structural change may touch, and the most runs an axis may hold
+/// (ShareCraft's `OrderedIds` limits, which the live wire shares).
+const MAX_BLOCKS: u32 = collab_live::ids::OrderedIds::MAX_BLOCKS_PER_CHANGE as u32;
+const MAX_RUNS: usize = collab_live::ids::OrderedIds::MAX_RUNS;
+
+fn applied_effects(step: &Step) -> Vec<Effect> {
+    step.events
+        .iter()
+        .filter_map(|event| match event {
+            Event::Applied { effect, .. } => Some(effect.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+fn is_no_effect(step: &Step) -> bool {
+    matches!(applied_effects(step).as_slice(), [Effect::NoEffect { .. }])
+}
+
+fn is_applied(step: &Step) -> bool {
+    applied_effects(step) == [Effect::Applied]
+}
+
+/// Both copies agree in entered content and in every identity table.
+fn assert_agree(alice: &GridCoauthor, bob: &GridCoauthor, when: &str) {
+    assert_eq!(alice.editor().agreement_digest(), bob.editor().agreement_digest(), "entered content agrees {when}");
+    assert_eq!(alice.editor().ids(), bob.editor().ids(), "identity tables agree {when}");
+}
+
+/// A snapshot holds pointers to the sheet tables, not copies: after a change on one sheet the
+/// other sheets' tables are the very same ones, and only the changed sheet was copied.
+#[test]
+fn snapshot_shares_unchanged_sheet_tables() {
+    let mut editor = GridLiveEditor::new(session_with_sheets(&["Data", "View"])).expect("editor builds");
+    let data = editor.ids().sheet_id(0).expect("Data has an identity");
+    let view = editor.ids().sheet_id(1).expect("View has an identity");
+    let third_row = editor.ids().by_id[&data].rows.id_at(2).expect("row 3 has an identity");
+
+    let visited = gridcraft_engine::coauthor::identity_runs_visited();
+    let before = editor.snapshot();
+    assert_eq!(gridcraft_engine::coauthor::identity_runs_visited(), visited, "taking a snapshot copies no identity table");
+    assert!(Arc::ptr_eq(&before.ids().by_id[&data], &editor.ids().by_id[&data]), "a snapshot shares the tables");
+    // 500 separate owned deletions on View: 500 owner entries and about 1,000 runs, so copying
+    // View's tables or owners would show in the count below.
+    let mut next = 100_000;
+    let rows = (0..500).map(|i| format!("{0}:{0}", 2 * i + 1)).collect::<Vec<_>>().join(",");
+    let owned = prepare(&mut editor, 1, "home.deleteRows", json!({"sheet":1,"rows":rows}), &mut next);
+    assert_eq!(editor.apply(&remote_entry(&owned.payload, 1)).expect("the delete applies").effect, Effect::Applied);
+    let before = editor.snapshot();
+
+    let mut next = 0;
+    let delete = prepare(&mut editor, 2, "home.deleteRows", json!({"sheet":0,"rows":"3:3"}), &mut next);
+    let visited = gridcraft_engine::coauthor::identity_runs_visited();
+    assert_eq!(editor.apply(&remote_entry(&delete.payload, 2)).expect("the delete applies").effect, Effect::Applied);
+    let copied = gridcraft_engine::coauthor::identity_runs_visited() - visited;
+    let after = editor.snapshot();
+    // Data's tables (one run per axis before the delete) were copied; View's owners and tables
+    // were not, or the count would include them.
+    assert!(copied <= 16, "a delete on Data copied or walked {copied} runs");
+
+    assert!(Arc::ptr_eq(&before.ids().by_id[&view], &after.ids().by_id[&view]), "the unchanged sheet's tables are shared");
+    assert!(Arc::ptr_eq(&after.ids().by_id[&view], &editor.ids().by_id[&view]));
+    assert!(!Arc::ptr_eq(&before.ids().by_id[&data], &after.ids().by_id[&data]), "the changed sheet was copied");
+    assert_eq!(before.ids().by_id[&data].rows.find(third_row), Lookup::At(2), "the copy left the older snapshot as it was");
+    assert!(matches!(after.ids().by_id[&data].rows.find(third_row), Lookup::Deleted { .. }));
+}
+
+/// The identity data written beside a checkpoint for a fixed run. The run covers row and column
+/// inserts and deletes, a deletion with an owner, content and a new sheet across four sheets.
+fn sharing_session_data() -> Vec<u8> {
+    let mut editor = GridLiveEditor::new(session_with_sheets(&["Data", "View", "Tail"])).expect("editor builds");
+    let mut next = 0;
+    let steps = [
+        ("home.insertRows", json!({"sheet":0,"rows":"5:6"})),
+        ("home.deleteRows", json!({"sheet":1,"rows":"2:4"})),
+        ("home.deleteColumns", json!({"sheet":0,"cols":"C:C"})),
+        ("cell.set", json!({"sheet":2,"cell":"B2","input":"kept"})),
+        ("home.insertSheet", json!({"name":"Extra","before":1})),
+        ("home.deleteRows", json!({"sheet":0,"rows":"1:1,9:9"})),
+    ];
+    for (i, (id, params)) in steps.into_iter().enumerate() {
+        let change = prepare(&mut editor, i as u64 + 1, id, params, &mut next);
+        assert_eq!(editor.apply(&remote_entry(&change.payload, i as u64 + 1)).expect("the step applies").effect, Effect::Applied, "{id}");
+    }
+    editor.ids().session_data().expect("identity data")
+}
+
+/// Sharing the tables changes nothing that is written. The digest below was taken from the same
+/// run before the tables were shared (at `417e50e5`); a shared snapshot, a copied sheet and a
+/// reload all write the same bytes.
+#[test]
+fn session_data_bytes_are_unchanged_by_sharing() {
+    const BEFORE_SHARING: &str = "cb69383abeee71e92821a1174bd39bcb7dbc3a6caf881e5a41575adf149733fb";
+    use sha2::Digest;
+    let bytes = sharing_session_data();
+    let digest: [u8; 32] = sha2::Sha256::digest(&bytes).into();
+    let hex: String = digest.iter().map(|byte| format!("{byte:02x}")).collect();
+    assert_eq!(bytes.len(), 1_960);
+    assert_eq!(hex, BEFORE_SHARING, "the session data is byte-for-byte what it was before sharing");
+
+    let session = session_with_sheets(&["Data", "View", "Tail"]);
+    let mut editor = GridLiveEditor::new(session).expect("editor builds");
+    let snapshot = editor.snapshot();
+    let mut next = 0;
+    let change = prepare(&mut editor, 1, "home.insertRows", json!({"sheet":1,"rows":"2:2"}), &mut next);
+    editor.apply(&remote_entry(&change.payload, 1)).expect("the insert applies");
+    let unchanged = snapshot.ids().session_data().expect("the snapshot's identity data");
+    assert_eq!(unchanged, GridLiveEditor::new(session_with_sheets(&["Data", "View", "Tail"])).expect("editor").ids().session_data().expect("data"));
+    let reloaded = WorkbookIds::from_session_data(&bytes, &{
+        let mut workbook = gridcraft_model::Workbook::new();
+        workbook.sheets.clear();
+        for name in ["Data", "Extra", "View", "Tail"] {
+            workbook.sheets.push(Arc::new(gridcraft_model::Sheet::new(name)));
+        }
+        workbook
+    })
+    .expect("the data loads");
+    assert_eq!(reloaded.session_data().expect("reloaded data"), bytes, "loading and writing again gives the same bytes");
+}
+
+/// 1,000 `cell.set` entries on a 60,000-run axis, whose 30,000 deleted runs all have owners,
+/// copy or walk no identity run at all: lookups go through the library's index, and snapshots
+/// share the tables and the owner table. Copying either even once per entry would cost
+/// 30,000 or more. Both copies agree with each other and with the same entries on an untouched
+/// axis, so every lookup found its row.
+#[test]
+fn fragmented_axis_entries_touch_few_runs() {
+    let fragmented = crate::live::fragmented_cell_run(30_000, 1_000, &mut || 0.0);
+    assert_eq!(fragmented.runs, 60_001);
+    assert_eq!(fragmented.owners, 30_000, "every deleted run has an owner, as after live deletions");
+    assert!(fragmented.runs_visited <= 1_000, "1,000 entries visited {} identity runs", fragmented.runs_visited);
+    assert_eq!(fragmented.entered[0], fragmented.entered[1], "both copies agree");
+    let untouched = crate::live::fragmented_cell_run(0, 1_000, &mut || 0.0);
+    assert_eq!(untouched.runs, 1);
+    assert_eq!(fragmented.entered[0], untouched.entered[0], "each edit landed on the same row as on an untouched axis");
+}
+
+/// An entry from an older or hostile sender deletes 2,000 alternate rows: 2,000 blocks, over the
+/// 1,024 one change may touch. It does nothing on either machine, and both keep the same
+/// content and identities. One block of 2,000 rows is still fine.
+#[test]
+fn structural_entry_over_the_block_cap_has_no_effect_everywhere() {
+    let mut server = DeterministicServer::new();
+    let mut alice = GridCoauthor::new(live_config(), GridLiveEditor::new(session_with_sheets(&["Data"])).expect("editor builds"));
+    let mut bob = GridCoauthor::new(live_config(), GridLiveEditor::new(session_with_sheets(&["Data"])).expect("editor builds"));
+    let mut mallory = GridCoauthor::new(live_config(), GridLiveEditor::new(session_with_sheets(&["Data"])).expect("editor builds"));
+    let alice_place = server.join(&mut alice, 10);
+    server.join(&mut bob, 10);
+    let mallory_place = server.join(&mut mallory, 10);
+    let content =
+        server.one_proposal(&alice_place, &alice.submit("cell.set", json!({"sheet":0,"cell":"A3","input":"row three"}), 2026, 20).expect("edit"));
+    let ordered = server.order(&content, 1_795_219_200_000, 1);
+    server.deliver_both(&mut alice, &mut bob, &ordered, 21);
+    let before_entered = alice.editor().agreement_digest();
+    let before_ids = alice.editor().ids().clone();
+
+    let sheet = before_ids.sheet_id(0).expect("Data has an identity");
+    let rows: Vec<LiveId> = (0..2_000).map(|i| before_ids.by_id[&sheet].rows.id_at(2 * i).expect("a row")).collect();
+    let payload = crate::live::delete_rows_payload(1, sheet, rows, LiveId(mallory_place.participant.0, 0));
+    let forged = ProposedEntry {
+        client: mallory_place.client,
+        participant: mallory_place.participant,
+        local: protocol::live::LocalNo(1),
+        seen: server.head(),
+        payload,
+    };
+    let ordered = server.order(&forged, 1_795_219_201_000, 2);
+    let (alice_step, bob_step) = server.deliver_both(&mut alice, &mut bob, &ordered, 30);
+
+    assert!(is_no_effect(&alice_step), "no effect for Alice: {alice_step:?}");
+    assert!(is_no_effect(&bob_step), "no effect for Bob: {bob_step:?}");
+    assert_eq!(alice.editor().agreement_digest(), before_entered, "row 3 and its content are still there");
+    assert_eq!(alice.editor().ids(), &before_ids, "no identity changed");
+    assert_agree(&alice, &bob, "after the refused entry");
+
+    let block = server.one_proposal(&alice_place, &alice.submit("home.deleteRows", json!({"sheet":0,"rows":"1:2000"}), 2026, 40).expect("one block"));
+    let ordered = server.order(&block, 1_795_219_202_000, 3);
+    let (alice_step, bob_step) = server.deliver_both(&mut alice, &mut bob, &ordered, 41);
+    assert!(is_applied(&alice_step) && is_applied(&bob_step), "one block of 2,000 rows applies");
+    assert_ne!(alice.editor().agreement_digest(), before_entered);
+    assert_agree(&alice, &bob, "after the block deletion");
+}
+
+/// An axis seven runs short of the limit takes one more row insert (which needs room for six),
+/// but a second insert, sent at the same time from the same state, does nothing on both
+/// machines and its author is told why. Content edits carry on, and a further insert is refused
+/// before it is sent.
+#[test]
+fn axis_at_the_run_cap_refuses_further_fragmentation() {
+    let pairs = (MAX_RUNS as u32 - 8) / 2;
+    let mut server = DeterministicServer::new();
+    let mut alice = crate::live::fragmented_coauthor(pairs);
+    let mut bob = crate::live::fragmented_coauthor(pairs);
+    let alice_place = server.join(&mut alice, 10);
+    let bob_place = server.join(&mut bob, 10);
+    let sheet = alice.editor().ids().sheet_id(0).expect("Data has an identity");
+    assert_eq!(crate::live::row_axis_runs(alice.editor().ids(), sheet), MAX_RUNS - 7);
+    let _ = (alice.take_notices(), bob.take_notices());
+
+    let first = server.one_proposal(&alice_place, &alice.submit("home.insertRows", json!({"sheet":0,"rows":"40001:40001"}), 2026, 20).expect("room"));
+    let second = server.one_proposal(&bob_place, &bob.submit("home.insertRows", json!({"sheet":0,"rows":"50001:50001"}), 2026, 21).expect("room"));
+    let ordered = server.order(&first, 1_795_219_200_000, 1);
+    let (alice_step, bob_step) = server.deliver_both(&mut alice, &mut bob, &ordered, 30);
+    assert!(is_applied(&alice_step) && is_applied(&bob_step), "the first insert applies");
+    let at_cap = crate::live::row_axis_runs(alice.editor().ids(), sheet);
+    assert_eq!(at_cap, MAX_RUNS - 4);
+    let before_ids = alice.editor().ids().clone();
+
+    let ordered = server.order(&second, 1_795_219_201_000, 2);
+    let (alice_step, bob_step) = server.deliver_both(&mut alice, &mut bob, &ordered, 40);
+    assert!(is_no_effect(&alice_step) && is_no_effect(&bob_step), "the second insert does nothing anywhere: {bob_step:?}");
+    assert_eq!(alice.editor().ids(), &before_ids, "the refused insert changed no identity");
+    assert_agree(&alice, &bob, "after the refusal");
+    let told = bob.take_notices();
+    assert!(
+        told.iter().any(|notice| matches!(notice, LiveNotice::NotApplied { reason: NotAppliedReason::TooFragmented, .. })),
+        "Bob is told why: {told:?}"
+    );
+
+    let edit =
+        server.one_proposal(&bob_place, &bob.submit("cell.set", json!({"sheet":0,"cell":"B40001","input":"still works"}), 2026, 50).expect("edit"));
+    let ordered = server.order(&edit, 1_795_219_202_000, 3);
+    let (alice_step, bob_step) = server.deliver_both(&mut alice, &mut bob, &ordered, 51);
+    assert!(is_applied(&alice_step) && is_applied(&bob_step), "content edits still apply at the cap");
+    assert!(alice.submit("home.insertRows", json!({"sheet":0,"rows":"3:3"}), 2026, 60).is_err(), "a further insert is refused at once");
+    assert_eq!(crate::live::row_axis_runs(alice.editor().ids(), sheet), at_cap);
+    assert_agree(&alice, &bob, "at the end");
+}
+
+/// A deletion of 1,024 separate rows (with the fillers, 1,025 blocks) is refused before anything
+/// is sent or shown, and the person is told why; nothing changes, and their next change is sent
+/// as usual. 1,023 separate rows are sent.
+#[test]
+fn sender_refuses_an_over_cap_delete_before_sending() {
+    let mut server = DeterministicServer::new();
+    let mut alice = GridCoauthor::new(live_config(), GridLiveEditor::new(session_with_sheets(&["Data"])).expect("editor builds"));
+    let place = server.join(&mut alice, 10);
+    let _ = alice.take_notices();
+    let alternate = |count: u32| (0..count).map(|i| format!("{0}:{0}", 2 * i + 1)).collect::<Vec<_>>().join(",");
+    let before_entered = alice.editor().agreement_digest();
+    let before_ids = alice.editor().ids().clone();
+
+    let refused = alice.submit("home.deleteRows", json!({"sheet":0,"rows":alternate(MAX_BLOCKS)}), 2026, 20);
+    assert!(refused.is_err(), "the deletion is refused");
+    assert_eq!(
+        alice.take_notices(),
+        vec![LiveNotice::ChangeNotSent { reason: gridcraft_engine::coauthor::NotSentReason::TooFragmented }],
+        "the person is told why"
+    );
+    assert_eq!(
+        serde_json::to_value(LiveNotice::ChangeNotSent { reason: gridcraft_engine::coauthor::NotSentReason::TooFragmented }).expect("serialises"),
+        json!({"kind":"change_refused","reason":"too_fragmented"}),
+        "the page shows it with the server's refusals"
+    );
+    assert_eq!(alice.waiting(), 0, "nothing waits to be sent");
+    assert!(alice.tick(30).iter().all(|frame| !frame.contains("\"type\":\"entry\"")), "nothing is sent");
+    assert_eq!(alice.editor().agreement_digest(), before_entered, "nothing is shown");
+    assert_eq!(alice.editor().ids(), &before_ids);
+
+    let next = alice.submit("home.deleteRows", json!({"sheet":0,"rows":alternate(MAX_BLOCKS - 1)}), 2026, 40).expect("1,023 rows are sent");
+    let proposed = server.one_proposal(&place, &next);
+    assert_eq!(proposed.local, protocol::live::LocalNo(1), "the refused deletion used no local number");
+}
+
+/// Alice and Bob on an axis near the limit: a deletion and inserts fill it, Alice's Undo of her
+/// deletion crosses an insert of Bob's and does nothing on either machine (Alice is told), a
+/// further change of hers is refused before sending, and both copies agree after every entry.
+#[test]
+fn two_clients_agree_after_fragmentation_refusals() {
+    let pairs = (MAX_RUNS as u32 - 14) / 2;
+    let mut server = DeterministicServer::new();
+    let mut alice = crate::live::fragmented_coauthor(pairs);
+    let mut bob = crate::live::fragmented_coauthor(pairs);
+    let alice_place = server.join(&mut alice, 10);
+    let bob_place = server.join(&mut bob, 10);
+    let sheet = alice.editor().ids().sheet_id(0).expect("Data has an identity");
+    assert_eq!(crate::live::row_axis_runs(alice.editor().ids(), sheet), MAX_RUNS - 13);
+    let _ = (alice.take_notices(), bob.take_notices());
+    let mut now = 20;
+    let mut seed = 0;
+    let mut share = |server: &mut DeterministicServer, alice: &mut GridCoauthor, bob: &mut GridCoauthor, proposed: &ProposedEntry| {
+        now += 10;
+        seed += 1;
+        let ordered = server.order(proposed, 1_795_219_200_000 + i64::from(seed), seed);
+        let steps = server.deliver_both(alice, bob, &ordered, now);
+        assert_agree(alice, bob, &format!("after entry {seed}"));
+        steps
+    };
+
+    let content =
+        server.one_proposal(&alice_place, &alice.submit("cell.set", json!({"sheet":0,"cell":"A40002","input":"below"}), 2026, 20).expect("edit"));
+    share(&mut server, &mut alice, &mut bob, &content);
+    let delete =
+        server.one_proposal(&alice_place, &alice.submit("home.deleteRows", json!({"sheet":0,"rows":"40001:40001"}), 2026, 30).expect("delete"));
+    let (step, _) = share(&mut server, &mut alice, &mut bob, &delete);
+    assert!(is_applied(&step));
+    let insert = server.one_proposal(&bob_place, &bob.submit("home.insertRows", json!({"sheet":0,"rows":"45001:45001"}), 2026, 40).expect("insert"));
+    let (step, _) = share(&mut server, &mut alice, &mut bob, &insert);
+    assert!(is_applied(&step));
+    assert_eq!(crate::live::row_axis_runs(alice.editor().ids(), sheet), MAX_RUNS - 8);
+
+    // Alice's Undo fits the axis as she sees it, but Bob's second insert is ordered first.
+    let undo = server.one_proposal(&alice_place, &alice.undo(50).expect("the Undo is sent"));
+    let late = server.one_proposal(&bob_place, &bob.submit("home.insertRows", json!({"sheet":0,"rows":"50001:50001"}), 2026, 51).expect("insert"));
+    let (alice_step, bob_step) = share(&mut server, &mut alice, &mut bob, &late);
+    assert!(is_applied(&alice_step) && is_applied(&bob_step));
+    let filled = alice.editor().ids().clone();
+    assert_eq!(crate::live::row_axis_runs(&filled, sheet), MAX_RUNS - 5);
+    let _ = alice.take_notices();
+    let (alice_step, bob_step) = share(&mut server, &mut alice, &mut bob, &undo);
+    assert!(is_no_effect(&alice_step) && is_no_effect(&bob_step), "the Undo does nothing anywhere: {alice_step:?}");
+    assert_eq!(alice.editor().ids(), &filled, "the refused Undo changed no identity");
+    let told = alice.take_notices();
+    assert!(
+        told.iter().any(|notice| matches!(notice, LiveNotice::NotApplied { reason: NotAppliedReason::TooFragmented, .. })),
+        "Alice is told why: {told:?}"
+    );
+
+    assert!(alice.submit("home.deleteRows", json!({"sheet":0,"rows":"7:7"}), 2026, 70).is_err(), "a further deletion is not sent");
+    assert_eq!(alice.take_notices(), vec![LiveNotice::ChangeNotSent { reason: gridcraft_engine::coauthor::NotSentReason::TooFragmented }]);
+    // Bob's Undo of his last insert would need room for six more runs: it is not sent either.
+    let _ = bob.take_notices();
+    assert!(bob.undo(75).is_err(), "Bob's Undo is not sent");
+    assert_eq!(bob.take_notices(), vec![LiveNotice::ChangeNotSent { reason: gridcraft_engine::coauthor::NotSentReason::TooFragmented }]);
+    assert_eq!(bob.waiting(), 0);
+    let edit = server.one_proposal(&bob_place, &bob.submit("cell.set", json!({"sheet":0,"cell":"C3","input":"after"}), 2026, 80).expect("edit"));
+    let (alice_step, bob_step) = share(&mut server, &mut alice, &mut bob, &edit);
+    assert!(is_applied(&alice_step) && is_applied(&bob_step));
+}

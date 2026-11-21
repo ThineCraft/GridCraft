@@ -1,3 +1,4 @@
+use std::cell::Cell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
@@ -17,12 +18,93 @@ pub struct CellId {
     pub col: LiveId,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+/// One sheet's row and column identity tables. [`WorkbookIds`] keeps each behind an `Arc`, so
+/// a snapshot shares the tables and a change copies only the sheet it touches.
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct SheetIds {
     pub id: LiveId,
     pub rows: OrderedIds,
     pub cols: OrderedIds,
+}
+
+/// Copying a sheet's tables costs time in proportion to their runs, so every copy is counted
+/// (see [`identity_runs_visited`]).
+impl Clone for SheetIds {
+    fn clone(&self) -> Self {
+        count_runs_visited(self.rows.runs().saturating_add(self.cols.runs()));
+        Self { id: self.id, rows: self.rows.clone(), cols: self.cols.clone() }
+    }
+}
+
+thread_local! {
+    /// Identity runs this thread has copied or walked one by one (see [`identity_runs_visited`]).
+    static RUNS_VISITED: Cell<u64> = const { Cell::new(0) };
+}
+
+fn count_runs_visited(runs: usize) {
+    let runs = u64::try_from(runs).unwrap_or(u64::MAX);
+    RUNS_VISITED.with(|visited| visited.set(visited.get().saturating_add(runs)));
+}
+
+/// How many identity runs this thread has copied or walked one by one: each copy of a sheet's
+/// tables and each pass over a whole axis adds its runs. Lookups are not counted, because the
+/// library answers them by binary search over its index. A change that touches no axis (a
+/// `cell.set`, say) adds nothing however fragmented the axes are; the fragmentation tests and
+/// timings read this. It counts work only and holds no content.
+#[doc(hidden)]
+pub fn identity_runs_visited() -> u64 {
+    RUNS_VISITED.with(Cell::get)
+}
+
+/// [`IdError::TooFragmented`] as the co-authoring error every caller matches on.
+pub(crate) fn fragmentation_error(error: IdError) -> CoauthorError {
+    match error {
+        IdError::TooFragmented { .. } => CoauthorError::TooFragmented,
+        other => CoauthorError::Identity(other),
+    }
+}
+
+/// Whether inserting `count` identities at `at` keeps the axis within the live limits. The
+/// axis keeps its fixed length, so the insert also takes `count` identities off its end: two
+/// blocks. The library counts each block at its worst, so a change this accepts is never
+/// refused part-way through.
+///
+/// `OrderedIds::check_fragmentation` uses only the number of blocks and the table's run count,
+/// never the `(at, count)` positions. The positions here and in the other checks describe the
+/// blocks for a reader; making them exact would not change any decision.
+pub(crate) fn check_insert_fragmentation(ordered: &OrderedIds, at: u32, count: u32) -> Result<(), CoauthorError> {
+    ordered.check_fragmentation(&[(at, count), (ordered.len(), count)]).map_err(fragmentation_error)
+}
+
+/// Whether deleting the identities at `positions` keeps the axis within the live limits.
+/// Consecutive positions are one block, exactly as [`delete_exact`] deletes them, and the
+/// fillers appended at the end of the fixed-length axis are one more.
+pub(crate) fn check_delete_fragmentation(ordered: &OrderedIds, mut positions: Vec<u32>) -> Result<(), CoauthorError> {
+    positions.sort_unstable();
+    positions.dedup();
+    let count = u32::try_from(positions.len()).map_err(|_| CoauthorError::MalformedPayload("too many structural identities".into()))?;
+    let mut blocks: Vec<(u32, u32)> = Vec::new();
+    for at in positions {
+        match blocks.last_mut() {
+            Some((start, len)) if start.checked_add(*len) == Some(at) => *len += 1,
+            _ => blocks.push((at, 1)),
+        }
+    }
+    blocks.push((ordered.len(), count));
+    ordered.check_fragmentation(&blocks).map_err(fragmentation_error)
+}
+
+/// The positions of those deletion targets that are live. The others are refused when the
+/// deletion is made, so they touch no block.
+fn live_positions(ordered: &OrderedIds, targets: &[LiveId]) -> Vec<u32> {
+    targets
+        .iter()
+        .filter_map(|id| match ordered.find(*id) {
+            Lookup::At(at) => Some(at),
+            Lookup::Deleted { .. } | Lookup::Unknown => None,
+        })
+        .collect()
 }
 
 /// `count` consecutive identities of one participant, starting at `first`. Structural undo
@@ -117,10 +199,55 @@ struct DeletedOwner {
     by: u32,
 }
 
+/// One sheet's deletion owners. Copying it costs time in proportion to its entries, so every
+/// copy is counted (see [`identity_runs_visited`]).
+#[derive(Debug, Default, PartialEq, Eq)]
+struct SheetOwners(BTreeMap<DeletedKey, DeletedOwner>);
+
+impl Clone for SheetOwners {
+    fn clone(&self) -> Self {
+        count_runs_visited(self.0.len());
+        Self(self.0.clone())
+    }
+}
+
+/// Who deleted each deleted row and column identity, per sheet. Like the sheets' identity
+/// tables, each sheet's owners sit behind an `Arc`: a snapshot shares them and a change copies
+/// only the sheet it touches. A sheet with no owners has no entry, so equal tables compare
+/// equal. Iteration is in [`DeletedKey`] order, which sorts by sheet first, exactly as one map
+/// over every sheet did, so the session data is unchanged.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct DeletedOwners(BTreeMap<LiveId, Arc<SheetOwners>>);
+
+impl DeletedOwners {
+    fn insert(&mut self, key: DeletedKey, owner: DeletedOwner) -> Option<DeletedOwner> {
+        Arc::make_mut(self.0.entry(key.sheet).or_default()).0.insert(key, owner)
+    }
+
+    fn remove(&mut self, key: &DeletedKey) {
+        if let Some(owners) = self.0.get_mut(&key.sheet) {
+            let owners = Arc::make_mut(owners);
+            owners.0.remove(key);
+            if owners.0.is_empty() {
+                self.0.remove(&key.sheet);
+            }
+        }
+    }
+
+    /// The owner entry with the greatest key at or before `probe`, on `probe`'s sheet.
+    fn at_or_before(&self, probe: DeletedKey) -> Option<(DeletedKey, DeletedOwner)> {
+        self.0.get(&probe.sheet)?.0.range(..=probe).next_back().map(|(key, owner)| (*key, *owner))
+    }
+
+    fn iter(&self) -> impl Iterator<Item = (&DeletedKey, &DeletedOwner)> {
+        self.0.values().flat_map(|owners| owners.0.iter())
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct WorkbookIds {
     pub sheets: OrderedIds,
-    pub by_id: BTreeMap<LiveId, SheetIds>,
+    pub by_id: BTreeMap<LiveId, Arc<SheetIds>>,
     /// Stable XLSX `sheetId` values, including identities of deleted sheets. Imported nonzero
     /// ids are preserved; sheets created in a live session receive a deterministic unused id.
     file_ids: BTreeMap<LiveId, u32>,
@@ -130,7 +257,7 @@ pub struct WorkbookIds {
     /// Who deleted each deleted row and column identity, indexed by run. It is derived from
     /// ordered entries while the room is live and stored in validated checkpoint session data,
     /// so a later joiner makes exactly the same structural-undo decision as its peers.
-    deleted_by: BTreeMap<DeletedKey, DeletedOwner>,
+    deleted_by: DeletedOwners,
 }
 
 /// The most identity session data one checkpoint may carry.
@@ -277,6 +404,8 @@ pub enum TargetGone {
     UnknownColumn(LiveId),
     #[error("malformed live target: {0}")]
     Malformed(String),
+    #[error("the live identity axis would become too fragmented")]
+    TooFragmented,
     #[error("formula reference no longer has one coordinate across its 3-D sheet span")]
     UnrepresentableReference,
 }
@@ -289,10 +418,10 @@ impl WorkbookIds {
         let mut by_id = BTreeMap::new();
         for position in 0..sheet_count {
             let id = LiveId(0, position);
-            by_id.insert(id, SheetIds { id, rows: OrderedIds::base(MAX_ROWS), cols: OrderedIds::base(MAX_COLS) });
+            by_id.insert(id, Arc::new(SheetIds { id, rows: OrderedIds::base(MAX_ROWS), cols: OrderedIds::base(MAX_COLS) }));
         }
         let (file_ids, reserved_file_ids) = canonical_file_ids(wb, &sheets)?;
-        Ok(Self { sheets, by_id, file_ids, reserved_file_ids, deleted_by: BTreeMap::new() })
+        Ok(Self { sheets, by_id, file_ids, reserved_file_ids, deleted_by: DeletedOwners::default() })
     }
 
     /// Loads and validates the opaque identity data stored beside a checkpoint.
@@ -308,7 +437,8 @@ impl WorkbookIds {
             if entry.key != entry.value.id {
                 return Err(CoauthorError::MalformedPayload("a sheet identity does not match its map key".into()));
             }
-            let value = SheetIds { id: entry.value.id, rows: ordered_from_wire(entry.value.rows)?, cols: ordered_from_wire(entry.value.cols)? };
+            let value =
+                Arc::new(SheetIds { id: entry.value.id, rows: ordered_from_wire(entry.value.rows)?, cols: ordered_from_wire(entry.value.cols)? });
             if by_id.insert(entry.key, value).is_some() {
                 return Err(CoauthorError::MalformedPayload("the sheet identity map contains a duplicate key".into()));
             }
@@ -329,7 +459,7 @@ impl WorkbookIds {
             return Err(CoauthorError::MalformedPayload("preserved file identities are repeated".into()));
         }
 
-        let mut deleted_by = BTreeMap::new();
+        let mut deleted_by = DeletedOwners::default();
         for owner in wire.deleted_by {
             if owner.count == 0 || u64::from(owner.first.1).saturating_add(u64::from(owner.count)) > u64::from(u32::MAX) + 1 {
                 return Err(CoauthorError::MalformedPayload("a deletion-owner run is empty or overflows".into()));
@@ -465,7 +595,7 @@ impl WorkbookIds {
     fn validate_deleted_owners(&self) -> Result<(), CoauthorError> {
         let coverage = deleted_coverage(&self.by_id)?;
         let mut previous: Option<(DeletedKey, u64)> = None;
-        for (&key, owner) in &self.deleted_by {
+        for (&key, owner) in self.deleted_by.iter() {
             if owner.len == 0 || owner.by == 0 {
                 return Err(CoauthorError::MalformedPayload("a deletion-owner run is empty or has no participant".into()));
             }
@@ -596,6 +726,7 @@ impl WorkbookIds {
     ) -> Result<(), CoauthorError> {
         let axis = DeletedAxis::of(rows);
         let label = if rows { "row" } else { "column" };
+        self.check_exchange_fragmentation(sheet, rows, remove, insert_at, restore)?;
         let mut next = self.clone();
         next.claim_deleted(sheet, axis, restore, participant)?;
         let axes = next.live_sheet_mut(sheet)?;
@@ -628,7 +759,7 @@ impl WorkbookIds {
             while cursor < end {
                 let at = u32::try_from(cursor).map_err(|_| CoauthorError::MalformedPayload("identity run overflows".into()))?;
                 let probe = DeletedKey { sheet, axis, participant: run.first.0, start: at };
-                let found = self.deleted_by.range(..=probe).next_back().map(|(key, owner)| (*key, *owner));
+                let found = self.deleted_by.at_or_before(probe);
                 let Some((key, owner)) = found.filter(|(key, owner)| {
                     key.sheet == sheet
                         && key.axis == axis
@@ -700,7 +831,57 @@ impl WorkbookIds {
         next.apply_structural_in_place(change)
     }
 
+    /// The check [`Self::exchange_axis`] makes before it changes anything: the live block it
+    /// removes, and each run it revives (a revived run can also cut a deleted run in two).
+    pub(crate) fn check_exchange_fragmentation(
+        &self,
+        sheet: LiveId,
+        rows: bool,
+        remove: &[IdentityRun],
+        insert_at: u32,
+        restore: &[IdentityRun],
+    ) -> Result<(), CoauthorError> {
+        let axes = self.by_id.get(&sheet).ok_or_else(|| CoauthorError::UnknownIdentity(format!("sheet {sheet:?}")))?;
+        let ordered = if rows { &axes.rows } else { &axes.cols };
+        // The library decides from the number of blocks alone (see
+        // `check_insert_fragmentation`); the positions are only descriptive, so the removed
+        // block is not looked up.
+        let removed = remove.iter().fold(0u32, |total, run| total.saturating_add(run.count));
+        let mut blocks = Vec::with_capacity(restore.len().saturating_add(1));
+        blocks.push((insert_at, removed));
+        let mut at = insert_at;
+        for run in restore {
+            blocks.push((at, run.count));
+            at = at.saturating_add(run.count);
+        }
+        ordered.check_fragmentation(&blocks).map_err(fragmentation_error)
+    }
+
+    /// Refuses a structural change that would pass the live limits on its axis, before
+    /// anything is copied or changed.
+    fn check_structural_fragmentation(&self, change: &IdentityStructural) -> Result<(), CoauthorError> {
+        let axis = |sheet: &LiveId, rows: bool| {
+            self.by_id
+                .get(sheet)
+                .map(|axes| if rows { &axes.rows } else { &axes.cols })
+                .ok_or_else(|| CoauthorError::UnknownIdentity(format!("sheet {sheet:?}")))
+        };
+        match change {
+            IdentityStructural::InsertRows { sheet, before, count, .. } | IdentityStructural::InsertColumns { sheet, before, count, .. } => {
+                let ordered = axis(sheet, matches!(change, IdentityStructural::InsertRows { .. }))?;
+                check_insert_fragmentation(ordered, position(ordered, *before, "axis")?, *count)
+            }
+            IdentityStructural::DeleteRows { sheet, ids, .. } | IdentityStructural::DeleteColumns { sheet, ids, .. } => {
+                let ordered = axis(sheet, matches!(change, IdentityStructural::DeleteRows { .. }))?;
+                check_delete_fragmentation(ordered, live_positions(ordered, ids))
+            }
+            IdentityStructural::InsertSheet { .. } | IdentityStructural::DeleteSheet { .. } => Ok(()),
+        }
+    }
+
     fn apply_structural_in_place(&mut self, change: &IdentityStructural) -> Result<(), CoauthorError> {
+        // Checked first, so a refused change has copied nothing and says why on every machine.
+        self.check_structural_fragmentation(change)?;
         match change {
             IdentityStructural::InsertRows { sheet, before, first, count } => {
                 let axes = self.live_sheet_mut(*sheet)?;
@@ -722,7 +903,7 @@ impl WorkbookIds {
                 let file_id = next_file_id(self.file_ids.values().copied().chain(self.reserved_file_ids.iter().copied()))?;
                 let at = position(&self.sheets, *before, "sheet")?;
                 self.sheets.insert(at, *id, 1)?;
-                self.by_id.insert(*id, SheetIds { id: *id, rows: OrderedIds::base(MAX_ROWS), cols: OrderedIds::base(MAX_COLS) });
+                self.by_id.insert(*id, Arc::new(SheetIds { id: *id, rows: OrderedIds::base(MAX_ROWS), cols: OrderedIds::base(MAX_COLS) }));
                 self.file_ids.insert(*id, file_id);
             }
             IdentityStructural::DeleteSheet { id } => delete_exact(&mut self.sheets, &[*id], "sheet")?,
@@ -732,7 +913,7 @@ impl WorkbookIds {
 
     fn live_sheet_mut(&mut self, id: LiveId) -> Result<&mut SheetIds, CoauthorError> {
         match self.sheets.find(id) {
-            Lookup::At(_) => self.by_id.get_mut(&id).ok_or_else(|| CoauthorError::UnknownIdentity(format!("sheet {id:?}"))),
+            Lookup::At(_) => Ok(Arc::make_mut(self.by_id.get_mut(&id).ok_or_else(|| CoauthorError::UnknownIdentity(format!("sheet {id:?}")))?)),
             Lookup::Deleted { .. } => Err(CoauthorError::DeletedTarget(format!("sheet {id:?}"))),
             Lookup::Unknown => Err(CoauthorError::UnknownIdentity(format!("sheet {id:?}"))),
         }
@@ -795,8 +976,10 @@ fn take_next_file_id(used: &mut BTreeSet<u32>) -> Result<u32, CoauthorError> {
 }
 
 fn ordered_wire(ids: &OrderedIds) -> Result<OrderedIdsWire, CoauthorError> {
-    serde_json::from_value(serde_json::to_value(ids).map_err(|error| CoauthorError::MalformedPayload(error.to_string()))?)
-        .map_err(|error| CoauthorError::MalformedPayload(error.to_string()))
+    let wire: OrderedIdsWire = serde_json::from_value(serde_json::to_value(ids).map_err(|error| CoauthorError::MalformedPayload(error.to_string()))?)
+        .map_err(|error| CoauthorError::MalformedPayload(error.to_string()))?;
+    count_runs_visited(wire.live.len().saturating_add(wire.deleted.len()));
+    Ok(wire)
 }
 
 fn ordered_from_wire(wire: OrderedIdsWire) -> Result<OrderedIds, CoauthorError> {
@@ -809,7 +992,7 @@ type DeletedCoverage = BTreeMap<(LiveId, DeletedAxis, u32), Vec<(u64, u64)>>;
 /// Indexes and merges every deleted identity run once. Checkpoint metadata may contain many
 /// owner runs, so rebuilding and sorting an entire million-cell axis per owner would let a
 /// fragmented payload turn validation quadratic.
-fn deleted_coverage(by_id: &BTreeMap<LiveId, SheetIds>) -> Result<DeletedCoverage, CoauthorError> {
+fn deleted_coverage(by_id: &BTreeMap<LiveId, Arc<SheetIds>>) -> Result<DeletedCoverage, CoauthorError> {
     let mut coverage: DeletedCoverage = BTreeMap::new();
     for (&sheet, axes) in by_id {
         for (axis, ids) in [(DeletedAxis::Row, &axes.rows), (DeletedAxis::Column, &axes.cols)] {
@@ -1090,6 +1273,27 @@ impl From<IdError> for CoauthorError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A deletion is its blocks of consecutive rows plus the fillers appended at the end of the
+    /// axis, so 1,023 separate rows are the most one deletion may name; a refused deletion
+    /// changes nothing.
+    #[test]
+    fn deletion_blocks_count_the_appended_fillers() {
+        let workbook = Workbook::new();
+        let mut ids = WorkbookIds::from_workbook(&workbook).expect("base identities build");
+        let sheet = ids.sheet_id(0).expect("base sheet exists");
+        let alternate = |ids: &WorkbookIds, count: u32| -> Vec<LiveId> { (0..count).filter_map(|at| ids.by_id[&sheet].rows.id_at(at * 2)).collect() };
+        let before = ids.clone();
+        let over = alternate(&ids, 1_024);
+        let result = ids.apply_structural(&IdentityStructural::DeleteRows { sheet, ids: over, first: LiveId(1, 0) });
+        assert!(matches!(result, Err(CoauthorError::TooFragmented)), "{result:?}");
+        assert_eq!(ids, before, "a refused deletion changes nothing");
+        let most = alternate(&ids, 1_023);
+        ids.apply_structural(&IdentityStructural::DeleteRows { sheet, ids: most, first: LiveId(1, 0) }).expect("1,023 blocks and the fillers fit");
+        // Consecutive rows are one block whatever their number.
+        let block: Vec<LiveId> = (5_000..7_000u32).filter_map(|at| ids.by_id[&sheet].rows.id_at(at)).collect();
+        ids.apply_structural(&IdentityStructural::DeleteRows { sheet, ids: block, first: LiveId(1, 1_023) }).expect("one block of 2,000 rows");
+    }
 
     #[test]
     fn fragmented_multi_owner_checkpoint_metadata_round_trips() {

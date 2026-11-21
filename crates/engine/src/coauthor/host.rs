@@ -306,8 +306,20 @@ pub enum NotAppliedReason {
     ChangedSinceUndo,
     /// The change is not valid on any machine.
     Invalid,
+    /// The structural change would fragment an identity axis past the live limit.
+    TooFragmented,
     /// The change could not be applied.
     Failed,
+}
+
+/// Why one of the person's changes was not sent.
+#[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum NotSentReason {
+    /// It would split a sheet's rows or columns into more pieces than editing together allows
+    /// (`OrderedIds::MAX_RUNS` runs, or `OrderedIds::MAX_BLOCKS_PER_CHANGE` blocks in one
+    /// change).
+    TooFragmented,
 }
 
 /// Something the host shows the person, in ShareCraft's frame.
@@ -318,6 +330,11 @@ pub enum LiveNotice {
     NotApplied { seq: Seq, kept_text: Option<String>, reason: NotAppliedReason },
     /// The server refused the person's change.
     ChangeRefused { reason: RefusedReason },
+    /// The editor did not send the person's change, and nothing changed. It reaches the page
+    /// as a `change_refused` notice with its own reason, so a page that does not know the
+    /// reason still says that the change was not kept.
+    #[serde(rename = "change_refused")]
+    ChangeNotSent { reason: NotSentReason },
     /// Undo or Redo left this many cells unchanged.
     UndoLeft { cells: usize },
     /// Undo or Redo was refused.
@@ -358,6 +375,7 @@ impl fmt::Debug for LiveNotice {
                 .field("reason", reason)
                 .finish(),
             Self::ChangeRefused { reason } => f.debug_struct("ChangeRefused").field("reason", reason).finish(),
+            Self::ChangeNotSent { reason } => f.debug_struct("ChangeNotSent").field("reason", reason).finish(),
             Self::UndoLeft { cells } => f.debug_struct("UndoLeft").field("cells", cells).finish(),
             Self::UndoRefused { reason } => f.debug_struct("UndoRefused").field("reason_len", &reason.len()).finish(),
             Self::Unshared { command } => f.debug_struct("Unshared").field("command", command).finish(),

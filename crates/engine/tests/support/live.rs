@@ -2,7 +2,8 @@ use collab_core::ids::{ClientId, Seq};
 use collab_live::client::{EntryView, Event, LiveClient, LiveConfig, Stamp, Step};
 use collab_live::ids::LiveId;
 use gridcraft_engine::coauthor::{
-    GRIDCRAFT_LIVE_FORMAT, GridCheckpoint, GridCoauthor, GridLiveEditor, LiveBase, Phase, PreparedChange, TicketAnswer,
+    GRIDCRAFT_LIVE_FORMAT, GridCheckpoint, GridCoauthor, GridLiveEditor, IdentityDelete, LiveBase, Phase, PreparedChange, SharedCommand, SharedEntry,
+    TicketAnswer, WorkbookIds, identity_runs_visited,
 };
 use gridcraft_engine::{DocState, Session, Trust};
 use gridcraft_model::{Sheet, Workbook};
@@ -486,4 +487,104 @@ pub fn checkpoint_run() -> CheckpointRun {
     let bob_verify = verified(ticket_answer(&mut clients[bob], false, head, 5, 502));
     let suffix = log.into_iter().filter(|entry| entry.seq > base_at).collect();
     CheckpointRun { base, base_at, base_stamp, suffix, head, straight, late, bob_verify }
+}
+
+// ------------------------------------------------- fragmented identity axes (G5 task 8, I7)
+
+/// The live and deleted runs of one sheet's row axis.
+pub fn row_axis_runs(ids: &WorkbookIds, sheet: LiveId) -> usize {
+    let rows = serde_json::to_value(&ids.by_id.get(&sheet).expect("the sheet has identities").rows).expect("the row axis serialises");
+    let count = |part: &str| rows[part].as_array().map_or(0, Vec::len);
+    count("live") + count("deleted")
+}
+
+/// The participant the fixture's deletions are owned by: someone who has left, so no test
+/// client can revive them.
+pub const FRAGMENTED_OWNER: u32 = 99;
+
+/// Identity data for `session`'s workbook whose first sheet's row axis holds `2 * pairs + 1`
+/// runs: `pairs` single live rows, each followed by one deleted row, then one long run. That is
+/// the axis `pairs` separate one-row deletions leave (here the fillers they appended carry on
+/// the long run), with each deletion owned by [`FRAGMENTED_OWNER`] as a checkpoint written
+/// after live deletions records it. Making those deletions one entry at a time would take
+/// minutes in a debug build.
+pub fn fragmented_session_data(session: &Session, pairs: u32) -> Vec<u8> {
+    let ids = WorkbookIds::from_workbook(&session.doc().expect("a document").wb).expect("base identities build");
+    let mut data: Json = serde_json::from_slice(&ids.session_data().expect("base identity data")).expect("identity data is JSON");
+    let mut live = Vec::with_capacity(pairs as usize + 1);
+    let mut deleted = Vec::with_capacity(pairs as usize);
+    let mut owners = Vec::with_capacity(pairs as usize);
+    let sheet = data["by_id"][0]["key"].clone();
+    for i in 0..pairs {
+        live.push(json!({"participant":0,"start":2 * i,"len":1}));
+        deleted.push(json!({"run":{"participant":0,"start":2 * i + 1,"len":1},"was_at":i + 1,"after":[0, 2 * i]}));
+        owners.push(json!({"sheet":sheet,"rows":true,"first":[0, 2 * i + 1],"count":1,"by":FRAGMENTED_OWNER}));
+    }
+    data["deleted_by"] = Json::Array(owners);
+    live.push(json!({"participant":0,"start":2 * pairs,"len":gridcraft_core::MAX_ROWS - pairs}));
+    data["by_id"][0]["value"]["rows"] = json!({"live":live,"deleted":deleted});
+    serde_json::to_vec(&data).expect("identity data serialises")
+}
+
+/// A co-author on one sheet, `Data`, whose row axis is fragmented as
+/// [`fragmented_session_data`] describes (`pairs` 0 is an untouched axis).
+pub fn fragmented_coauthor(pairs: u32) -> GridCoauthor {
+    let session = session_with_sheets(&["Data"]);
+    let data = fragmented_session_data(&session, pairs);
+    let editor = GridLiveEditor::from_session_data(session, &data).expect("fragmented identity data loads");
+    GridCoauthor::new(LiveConfig { format: GRIDCRAFT_LIVE_FORMAT.to_string(), crashed_at: None }, editor)
+}
+
+/// A `home.deleteRows` entry naming `rows`, made by hand as an older or hostile sender could:
+/// it skips the sender's own fragmentation check.
+pub fn delete_rows_payload(action: u64, sheet: LiveId, rows: Vec<LiveId>, first: LiveId) -> String {
+    let entry = SharedEntry { version: 1, action, command: SharedCommand::DeleteRows { sheet, rows: IdentityDelete { ids: rows, first } } };
+    serde_json::to_string(&entry).expect("the entry serialises")
+}
+
+/// What [`fragmented_cell_run`] measured.
+pub struct FragmentedRun {
+    /// Live and deleted runs of the row axis.
+    pub runs: usize,
+    /// Owned deleted runs in the identity data (each a `deleted_by` entry).
+    pub owners: usize,
+    /// Identity runs copied or walked during the entries (`identity_runs_visited`).
+    pub runs_visited: u64,
+    /// Each entry's time from submit until both clients applied it, in milliseconds.
+    pub entry_ms: Vec<f64>,
+    /// Both clients' entered digests at the end.
+    pub entered: [[u8; 32]; 2],
+}
+
+/// Alice and Bob, on an axis of `2 * pairs + 1` runs, make `entries` `cell.set` entries in
+/// turn, spread over the first 60,000 rows; each is ordered and applied by both. `now_ms` is the
+/// clock the per-entry times are read from (a run that only counts can pass a constant).
+pub fn fragmented_cell_run(pairs: u32, entries: u32, now_ms: &mut dyn FnMut() -> f64) -> FragmentedRun {
+    let mut server = DeterministicServer::new();
+    let mut alice = fragmented_coauthor(pairs);
+    let mut bob = fragmented_coauthor(pairs);
+    let places = [server.join(&mut alice, 10), server.join(&mut bob, 20)];
+    let sheet = alice.editor().ids().sheet_id(0).expect("the sheet has an identity");
+    let runs = row_axis_runs(alice.editor().ids(), sheet);
+    let data: Json = serde_json::from_slice(&alice.editor().ids().session_data().expect("identity data")).expect("identity data is JSON");
+    let owners = data["deleted_by"].as_array().map_or(0, Vec::len);
+    let mut entry_ms = Vec::with_capacity(entries as usize);
+    let visited = identity_runs_visited();
+    for i in 0..entries {
+        let column = char::from(b'A' + (i % 26) as u8);
+        let cell = format!("{column}{}", 1 + (u64::from(i) * 7_919) % 60_000);
+        // Five entries a second, inside the client's pace limit.
+        let clock = 100 + u64::from(i) * 200;
+        let params = json!({"sheet":0,"cell":cell,"input":format!("v{i}")});
+        let started = now_ms();
+        let author = if i % 2 == 0 { &mut alice } else { &mut bob };
+        let step = author.submit("cell.set", params, 2026, clock).expect("the edit is made");
+        let proposed = server.one_proposal(&places[(i % 2) as usize], &step);
+        let ordered = server.order(&proposed, 1_795_219_200_000 + i64::from(i), i);
+        server.deliver_both(&mut alice, &mut bob, &ordered, clock + 1);
+        entry_ms.push(now_ms() - started);
+    }
+    let runs_visited = identity_runs_visited() - visited;
+    let entered = [alice.editor().agreement_digest(), bob.editor().agreement_digest()];
+    FragmentedRun { runs, owners, runs_visited, entry_ms, entered }
 }

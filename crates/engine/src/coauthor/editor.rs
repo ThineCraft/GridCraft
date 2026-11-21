@@ -9,6 +9,7 @@ use collab_live::ids::{IdError, LiveId};
 use gridcraft_model::{Sheet, SheetViewMode, ShowObjects, Workbook, WorkbookView};
 use serde_json::Value as Json;
 
+use super::undo::check_guarded_fragmentation;
 use super::{
     CoauthorError, GuardedPatch, GuardedStructural, NotAppliedReason, PreparedChange, SharedCommand, TargetGone, UndoAction, UndoReport, WorkbookIds,
     allocates_only_own_identities, apply_guarded_patch, build_undo_action, decode_entry, encode_command, mode_for, resolve_command,
@@ -96,6 +97,14 @@ pub struct GridSnapshot {
     document: SharedDocumentSnapshot,
     ids: WorkbookIds,
     stored_view: StoredFileView,
+}
+
+impl GridSnapshot {
+    /// The identity tables this rollback point holds; each sheet's tables are shared with the
+    /// editor's until one of them changes.
+    pub fn ids(&self) -> &WorkbookIds {
+        &self.ids
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -543,12 +552,16 @@ impl GridLiveEditor {
             .ok()
             .and_then(|value| value.get("id").and_then(Json::as_str).map(str::to_owned))
             .unwrap_or_else(|| "shared change".to_string());
+        if matches!(error, TargetGone::TooFragmented) {
+            return Self::no_effect(&format!("The `{action}` change would split the sheet's rows or columns into too many pieces."), false);
+        }
         let kind = match error {
             TargetGone::DeletedSheet(_) | TargetGone::UnknownSheet(_) => "sheet",
             TargetGone::DeletedRow(_) | TargetGone::UnknownRow(_) => "row",
             TargetGone::DeletedColumn(_) | TargetGone::UnknownColumn(_) => "column",
             TargetGone::UnrepresentableReference => "formula reference",
             TargetGone::Malformed(_) => "target",
+            TargetGone::TooFragmented => "axis",
         };
         let state = match error {
             TargetGone::DeletedSheet(_) | TargetGone::DeletedRow(_) | TargetGone::DeletedColumn(_) => "was deleted",
@@ -563,6 +576,7 @@ impl GridLiveEditor {
             TargetGone::DeletedRow(_) => NotAppliedReason::RowDeleted,
             TargetGone::DeletedColumn(_) => NotAppliedReason::ColumnDeleted,
             TargetGone::Malformed(_) => NotAppliedReason::Invalid,
+            TargetGone::TooFragmented => NotAppliedReason::TooFragmented,
             _ => NotAppliedReason::TargetUnavailable,
         }
     }
@@ -631,6 +645,12 @@ impl LiveEditor for GridLiveEditor {
             return Ok(Self::no_effect("The shared change is not valid.", false));
         }
         if let SharedCommand::Guarded { patch } = &decoded.command {
+            // A structural Undo or Redo that would fragment its axis past the live limits does
+            // nothing on every machine, before anything is applied.
+            if let Err(error) = check_guarded_fragmentation(&self.ids, patch) {
+                self.note_own(entry.own, decoded.action, Some(Self::not_applied_reason(&error)));
+                return Ok(Self::target_no_effect(&decoded.command, &error));
+            }
             let view = self.capture_view();
             let before = self.snapshot();
             // A guarded patch can bring back `=NOW()` or `=RAND()`: it calculates under the
@@ -696,10 +716,15 @@ impl LiveEditor for GridLiveEditor {
             return Self::engine_error_outcome(error, entry.stamp.is_none() && stamp_was_read);
         }
         if let Some(structural) = &resolved.structural
-            && self.ids.apply_structural_owned(structural, entry.participant.0).is_err()
+            && let Err(error) = self.ids.apply_structural_owned(structural, entry.participant.0)
         {
             self.restore_shared(&before, view.as_ref(), true);
-            self.note_own(entry.own, decoded.action, Some(NotAppliedReason::Failed));
+            let reason = if matches!(&error, CoauthorError::TooFragmented | CoauthorError::Identity(IdError::TooFragmented { .. })) {
+                NotAppliedReason::TooFragmented
+            } else {
+                NotAppliedReason::Failed
+            };
+            self.note_own(entry.own, decoded.action, Some(reason));
             return Ok(Self::no_effect("The shared identities could not be updated.", entry.stamp.is_none() && stamp_was_read));
         }
         if resolved.structural.is_some() {
