@@ -236,7 +236,69 @@ tables as session data. Branch `coauthor-g4`, November 2026.
 
 Still open after G4: one maths library for desktop and browser (until then a browser writer and a
 desktop verifier can disagree on bytes for the same entered content); runs in real browsers rather
-than Node; the G5 host bridge; large content (C20); and commands outside the shared set.
+than Node (done in G5 Task 14, see Real-browser results; the Chrome, Edge and Firefox timings are
+missing); the G5 host bridge; large content (C20); and commands outside the shared set.
+
+## Real-browser results (G5, Task 14)
+
+The wasm32 tests were built for the browser (release, including the ignored timing tests) and served
+by `wasm-bindgen-test-runner` in its interactive mode, which serves the tests on a local address
+instead of running them under Node. Nothing was downloaded to do this. Run on 2026-11-21 on the G5 branch
+(the new timing test was committed afterwards as `f0074681`). The Node runs above are unchanged, and the G1 measurements are not
+changed by this section.
+
+| Browser | How it was run | Correctness tests | Timing tests |
+| --- | --- | --- | --- |
+| Built-in browser (Chromium 156.0.8078.100, the Claude desktop pane, pane visible) | Run by the controller at `127.0.0.1:8123` | All ran without error | All ran; results below |
+| Chrome | Run by the owner by hand at `127.0.0.1:8124` | All non-timing tests ran without error | Started; the owner's timings were not received |
+| Edge | Run by the owner by hand at `127.0.0.1:8124` | All non-timing tests ran without error | Started; the owner's timings were not received |
+| Firefox | Run by the owner by hand at `127.0.0.1:8124` | `wasm_maths`, displayed text, fixtures, ulp, step differences, checkpoint and `maths_inputs` ran without error | Not run (see below) |
+
+Claude in Chrome could not reach this PC's local ports, so the owner ran Chrome, Edge and Firefox
+by hand at a runner address that was started outside the app's container.
+
+### What agreed
+
+- **Displayed text:** 1,584 formula cells in 5 formats were compared; 6 differ, and all 6 are in
+  the allowed list (`allowed-text-differences.json`). This is the same in the built-in browser,
+  Chrome, Edge and Firefox, and the same as the Node run.
+- **Checkpoint:** the head SHA-256 is `8c464a91dad58f948a05118aa99ecbc961c5b66e3a0f4f262e77576f0d3175c0`
+  in all four browsers, identical to the native one. As noted under Checkpoints in G4, that match is
+  reported, not asserted.
+
+### Timings (built-in browser only)
+
+The headline figure is the wasm mixed workload on 100,000 cells with 10 pending changes (1
+structural): clone and apply p95 is **59.665 ms** against the 150 ms threshold. Other rows from the
+same run (milliseconds):
+
+| Cells | Pending (structural) | Apply p50 / p95 | Recalculation p50 / p95 |
+| --- | --- | --- | --- |
+| 10,000 | 10 (1) | 6.165 / 6.465 | 7.785 / 8.105 |
+| 100,000 | 10 (1) | 50.250 / 59.665 | 74.625 / 93.105 |
+| 100,000 | 10 (0), content only | 5.295 / 5.635 | 27.790 / 31.485 |
+| 100,000 | 10 (1), one structural | 44.775 / 48.900 | 64.960 / 69.185 |
+| 1,000,000 | 10 (1) | 515.675 / 559.935 | 835.630 / 928.955 |
+| 1,000,000 | 50 (7) | 3,638.780 / 7,432.910 | 3,987.290 / 7,767.675 |
+
+The single-command rows at 100,000 cells (30 repetitions after one excluded warm-up) took p95
+0.32 to 0.99 ms for `clone`, `cell.set` and the formatting commands, and 36.4 to 53.7 ms for row
+and column insert and delete.
+
+Fragmented axis (`fragmented_axis_timing_wasm`, 1,000 `cell.set` entries each): with 1 run and no
+owned deletions, per entry p50 0.110 ms, p95 0.205 ms, max 8.635 ms; with 60,001 runs and 30,000
+owned deletions, per entry p50 0.105 ms, p95 0.200 ms, max 8.590 ms. In both, 0 identity runs were
+copied or walked, so a fragmented axis does not slow later entries.
+
+### What was not run
+
+- Chrome and Edge timing tests: both were started and the owner did not send their results, so
+  there are no Chrome or Edge timings here.
+- Firefox: the run stopped at `cross_platform_agreement_uses_entered_digest`; the timing tests were
+  not reached and the tests after that point were not run.
+- No other browsers were tried.
+- The maths-library differences (1 ULP in 64 of 1,584 maths cells) are unchanged, and one maths
+  library for desktop and browser is still open.
 
 ## Long run
 
