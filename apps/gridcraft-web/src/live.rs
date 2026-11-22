@@ -707,8 +707,13 @@ impl LiveSeat {
                     self.presence.retain(|participant, _| connected.contains(participant));
                 }
                 Event::Presence { participant, payload } => match payload {
+                    // Bounded: a room holds at most MAX_PEOPLE people, so a flood of notes for
+                    // other participant numbers cannot grow the map (a note may arrive before
+                    // the page's people list, so the cap is by count, not by who is listed).
                     Some(note) => {
-                        self.presence.insert(participant.0, note.clone());
+                        if self.presence.len() < MAX_PEOPLE || self.presence.contains_key(&participant.0) {
+                            self.presence.insert(participant.0, note.clone());
+                        }
                     }
                     None => {
                         self.presence.remove(&participant.0);
@@ -1965,6 +1970,34 @@ mod tests {
         let sent: Json = serde_json::from_str(&frame).unwrap();
         assert_eq!((sent["type"].as_str(), sent["payload"].as_str()), (Some("presence"), Some(note.as_str())));
         assert!(presence_frame(coauthor, "x".repeat(100_000)).is_none(), "an oversized note sends nothing");
+        assert!(presence_frame(coauthor, "x".repeat(1024)).is_some(), "the limit itself is allowed");
+        assert!(presence_frame(coauthor, "x".repeat(1025)).is_none(), "one byte over is refused");
+    }
+
+    #[test]
+    fn a_tick_sends_the_presence_note_and_an_oversized_one_pushes_nothing() {
+        let (mut alice, _) = opened(Arc::default(), 10);
+        join_live(&mut alice, 2, 10);
+        alice.coauthor_mut().unwrap().editor_mut().session_mut().execute("selection.set", json!({"range":"B3"})).unwrap();
+        let out = alice.handle(LivePageMsg::Tick, 60_000);
+        assert!(sends(&out).iter().any(|frame| frame["type"] == "presence"), "the tick pushes a presence frame: {out:?}");
+        // Oversized: the flush's own path refuses it and pushes nothing.
+        let coauthor = alice.coauthor_mut().unwrap();
+        assert!(presence_frame(coauthor, "y".repeat(2_000)).is_none());
+    }
+
+    #[test]
+    fn a_flood_of_presence_notes_for_unknown_participants_is_bounded() {
+        let (mut bob, _) = opened(Arc::default(), 10);
+        join_live(&mut bob, 3, 10);
+        for participant in 100..(100 + 3 * MAX_PEOPLE as u32) {
+            let frame = json!({"type":"presence","participant":participant,"payload":"n"});
+            bob.handle(LivePageMsg::Frame(frame.to_string()), 70);
+        }
+        assert!(bob.presence.len() <= MAX_PEOPLE, "the map holds {} notes", bob.presence.len());
+        let frame = json!({"type":"presence","participant":100,"payload":"updated"});
+        bob.handle(LivePageMsg::Frame(frame.to_string()), 71);
+        assert_eq!(bob.presence.get(&100).map(String::as_str), Some("updated"), "a known participant still updates");
     }
 
     /// eframe runs `raw_input_hook` and `logic` for a hidden tab, and never `ui`. Each call lends
