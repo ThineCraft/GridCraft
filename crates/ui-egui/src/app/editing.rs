@@ -231,6 +231,8 @@ impl SheetApp {
                 self.message = Some(("GridCraft".into(), clean_error(&e)));
                 self.editor = Some(ed);
                 self.session.mode = gridcraft_engine::Mode::Edit;
+                // The draft is still open, so others go on seeing that the person is typing.
+                self.live_editing(true);
                 false
             }
         }
@@ -411,6 +413,8 @@ impl SheetApp {
         // other cell (code of spaces is still code). On another cell there is nothing to write.
         let r = match (ed.text.is_empty(), python_cell) {
             (true, false) => return true,
+            // Changes need a live connection: the draft stays open as typed.
+            _ if self.live_offline() => Err(crate::live::OFFLINE_REASON.to_string()),
             (true, true) => self.session.run("cell.set", json!({"sheet": ed.sheet, "cell": ed.cell.a1(), "input": ""})),
             (false, _) => self.session.run("python.set", json!({"sheet": ed.sheet, "cell": ed.cell.a1(), "code": ed.text})),
         };

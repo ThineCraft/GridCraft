@@ -119,9 +119,14 @@ impl SheetApp {
         self.live.as_ref().is_none_or(|link| link.may_edit() && !link.offline())
     }
 
+    /// Whether the live connection is down, so changes are refused with [`OFFLINE_REASON`].
+    pub(crate) fn live_offline(&self) -> bool {
+        self.live.as_ref().is_some_and(|link| link.offline())
+    }
+
     /// Why a change is refused now: the connection is down, else the person may only view.
     pub(crate) fn live_refusal(&self) -> &'static str {
-        if self.live.as_ref().is_some_and(|link| link.offline()) { OFFLINE_REASON } else { READ_ONLY_REASON }
+        if self.live_offline() { OFFLINE_REASON } else { READ_ONLY_REASON }
     }
 
     /// Tells others whether the person is typing (live mode only).
@@ -190,6 +195,12 @@ impl SheetApp {
             return;
         };
         if link.history_waiting() {
+            return;
+        }
+        // A drop between the steps: say so, and leave the history as it is.
+        if link.offline() {
+            self.live_undo_steps = 0;
+            self.toast = Some((OFFLINE_REASON.into(), now_ms()));
             return;
         }
         match link.undo(&mut self.session) {
@@ -687,6 +698,68 @@ mod tests {
         assert_eq!(app.run("edit.redo", json!({})).unwrap_err(), OFFLINE_REASON);
         assert_eq!(app.undo_labels(), labels, "the undo history is unchanged");
         assert_eq!(seat.entries().len(), 1);
+    }
+
+    #[test]
+    fn a_drop_in_the_middle_of_a_multi_step_undo_says_offline() {
+        let (mut app, seat, _) = live_app(true, true, vec![]);
+        app.run("cell.set", json!({"cell":"A1","input":"1"})).unwrap();
+        seat.confirm(&mut app.session, 0, 1);
+        app.run("cell.set", json!({"cell":"A2","input":"2"})).unwrap();
+        seat.confirm(&mut app.session, 1, 2);
+        app.run("edit.undo", json!({"steps": 2})).unwrap();
+        seat.confirm(&mut app.session, 2, 3);
+        let labels = app.undo_labels();
+        drop_connection(&seat);
+        app.toast = None;
+        app.continue_live_undo();
+        assert_eq!(app.toast.as_ref().map(|(t, _)| t.as_str()), Some(OFFLINE_REASON));
+        assert_eq!(app.live_undo_steps, 0);
+        assert_eq!(app.undo_labels(), labels, "the undo history is unchanged");
+        assert_eq!(seat.entries().len(), 3, "nothing more was sent");
+    }
+
+    #[test]
+    fn a_python_draft_open_at_the_drop_is_kept_and_says_offline() {
+        let (mut app, seat, _) = live_app(true, true, vec![]);
+        app.begin_python_edit();
+        assert!(app.editor.is_some(), "the Python draft opens while live");
+        if let Some(editor) = app.editor.as_mut() {
+            editor.text = "1 + 1".into();
+        }
+        drop_connection(&seat);
+        assert!(!app.commit_python_edit());
+        assert_eq!(app.editor.as_ref().map(|e| e.text.as_str()), Some("1 + 1"), "the code is kept");
+        assert_eq!(app.message.as_ref().map(|(_, m)| m.as_str()), Some(OFFLINE_REASON));
+        assert!(seat.entries().is_empty());
+    }
+
+    #[test]
+    fn the_script_interface_returns_the_sentence_offline() {
+        let (mut app, seat, _) = live_app(true, true, vec![]);
+        drop_connection(&seat);
+        let ctx = egui::Context::default();
+        let params = json!({"command":"cell.set","params":{"cell":"A1","input":"5"}});
+        let outcome = crate::control::handle(&mut app, &ctx, "engine.execute", &params);
+        match outcome {
+            crate::control::Outcome::Done(answer) => {
+                assert_eq!(answer["ok"], false);
+                assert_eq!(answer["error"], OFFLINE_REASON);
+            }
+            crate::control::Outcome::Screenshot { .. } => panic!("not a screenshot"),
+        }
+        assert!(seat.entries().is_empty());
+    }
+
+    #[test]
+    fn a_refused_commit_keeps_the_typing_mark() {
+        let (mut app, seat, _) = live_app(true, true, vec![]);
+        app.begin_edit(Some("4".into()), false);
+        assert!(seat.editing.get());
+        drop_connection(&seat);
+        assert!(!app.commit_edit(1, 0, false, false));
+        assert!(app.editor.is_some());
+        assert!(seat.editing.get(), "the draft is still open, so presence still says typing");
     }
 
     #[test]
