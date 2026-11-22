@@ -20,7 +20,7 @@ impl SheetApp {
         }
         // A person who may only view a live workbook gets no draft at all.
         if !self.live_may_edit() {
-            self.toast = Some((crate::live::READ_ONLY_REASON.into(), now_ms()));
+            self.toast = Some((self.live_refusal().into(), now_ms()));
             return;
         }
         let Some(d) = self.session.active() else { return };
@@ -313,7 +313,7 @@ impl SheetApp {
             return;
         }
         if !self.live_may_edit() {
-            self.toast = Some((crate::live::READ_ONLY_REASON.into(), now_ms()));
+            self.toast = Some((self.live_refusal().into(), now_ms()));
             return;
         }
         if let Err(e) = self.commit_text_box_edit() {

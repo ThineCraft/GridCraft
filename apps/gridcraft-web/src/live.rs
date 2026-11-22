@@ -607,6 +607,11 @@ impl LiveSeat {
         self.page_may_edit && self.coauthor.as_ref().is_some_and(GridCoauthor::can_edit)
     }
 
+    /// Whether the connection is not in its live phase (dropped, reconnecting, catching up).
+    pub fn offline(&self) -> bool {
+        self.coauthor.as_ref().is_some_and(|coauthor| coauthor.phase() != Phase::Live)
+    }
+
     /// Whether the person is typing in a cell, for presence.
     pub fn set_editing(&mut self, editing: bool) {
         if let Some(coauthor) = self.coauthor.as_mut() {
@@ -1248,6 +1253,10 @@ pub mod web {
             self.0.seat().try_borrow().is_ok_and(|seat| seat.may_edit())
         }
 
+        fn offline(&self) -> bool {
+            self.0.seat().try_borrow().is_ok_and(|seat| seat.offline())
+        }
+
         fn submit(&self, session: &mut Session, id: &str, params: Json, origin_year: i32) -> Result<(), String> {
             self.local(session, |seat, now| seat.submit(id, params, origin_year, now))
         }
@@ -1876,6 +1885,21 @@ mod tests {
         assert!(!accepts_message("https://other.example", "https://share.example", true), "another origin");
         assert!(!accepts_message("https://share.example", "https://share.example", false), "another window on this origin");
         assert!(!accepts_message("null", "https://share.example", true));
+    }
+
+    #[test]
+    fn the_seat_is_offline_while_the_connection_is_down() {
+        let core = LiveCore::new(Arc::new(MemoryNotes::default()));
+        core.hear(start_msg(true), 10);
+        core.hear(LivePageMsg::Open, 11);
+        assert!(core.seat().borrow().offline(), "not yet live (joining)");
+        {
+            let mut seat = core.seat().borrow_mut();
+            join_live(&mut seat, 3, 12);
+        }
+        assert!(!core.seat().borrow().offline(), "live");
+        core.hear(LivePageMsg::Closed, 13);
+        assert!(core.seat().borrow().offline(), "the connection dropped");
     }
 
     #[test]

@@ -30,6 +30,9 @@ use crate::{SheetApp, now_ms};
 /// Why an edit is refused when the person may only view.
 pub const READ_ONLY_REASON: &str = "You can view this workbook but not change it while editing together";
 
+/// Why an edit is refused while the live connection is down: changes need a live connection.
+pub const OFFLINE_REASON: &str = "You're offline. Changes can be made again when the connection is back.";
+
 /// The most Undo steps one click on the Undo list asks for.
 const MAX_UNDO_STEPS: usize = 100;
 
@@ -43,6 +46,9 @@ pub const SAVED_BY_ROOM: &str = "Changes are saved automatically while editing t
 pub trait LiveLink {
     /// Whether the person may make shared changes now: the page and the room both allow it.
     fn may_edit(&self) -> bool;
+    /// Whether the live connection is not in its live phase (dropped, reconnecting, catching up):
+    /// changes need a live connection, so they are refused with [`OFFLINE_REASON`].
+    fn offline(&self) -> bool;
     /// Sends one shared change with explicit targets. `session` is the shown session, moved into
     /// the coauthor for the call and back.
     fn submit(&self, session: &mut Session, id: &str, params: Json, origin_year: i32) -> Result<(), String>;
@@ -110,7 +116,12 @@ impl SheetApp {
 
     /// Whether a change may be made here: always outside live mode.
     pub(crate) fn live_may_edit(&self) -> bool {
-        self.live.as_ref().is_none_or(|link| link.may_edit())
+        self.live.as_ref().is_none_or(|link| link.may_edit() && !link.offline())
+    }
+
+    /// Why a change is refused now: the connection is down, else the person may only view.
+    pub(crate) fn live_refusal(&self) -> &'static str {
+        if self.live.as_ref().is_some_and(|link| link.offline()) { OFFLINE_REASON } else { READ_ONLY_REASON }
     }
 
     /// Tells others whether the person is typing (live mode only).
@@ -129,6 +140,7 @@ impl SheetApp {
                 self.toast = Some((SAVED_BY_ROOM.into(), now_ms()));
                 return Some(Ok(Json::Null));
             }
+            "edit.undo" | "edit.redo" if link.offline() => Err(OFFLINE_REASON.to_string()),
             "edit.undo" | "edit.redo" if !link.may_edit() => Err(READ_ONLY_REASON.to_string()),
             "edit.undo" => {
                 // Each Undo waits for the server before the next; the rest of a multi-step
@@ -148,6 +160,7 @@ impl SheetApp {
                 match route(id) {
                     Route::Local => return None,
                     Route::Refused(reason) => Err(reason.to_string()),
+                    Route::Shared if link.offline() => Err(OFFLINE_REASON.to_string()),
                     Route::Shared if !link.may_edit() => Err(READ_ONLY_REASON.to_string()),
                     Route::Shared => match explicit_params(&self.session, id, params.clone()) {
                         Ok(explicit) => {
@@ -359,6 +372,10 @@ mod tests {
     impl LiveLink for Link {
         fn may_edit(&self) -> bool {
             self.0.page_may_edit && self.0.coauthor.borrow().can_edit()
+        }
+
+        fn offline(&self) -> bool {
+            self.0.coauthor.borrow().phase() != gridcraft_engine::coauthor::Phase::Live
         }
 
         fn submit(&self, session: &mut Session, id: &str, params: Json, origin_year: i32) -> Result<(), String> {
@@ -592,6 +609,84 @@ mod tests {
             assert!(seat.entries().is_empty());
             assert_eq!(entered(&app), before);
         }
+    }
+
+    /// The seat's connection drops (the client keeps its place and history).
+    fn drop_connection(seat: &Seat) {
+        let now = seat.tick();
+        seat.coauthor.borrow_mut().disconnected(now);
+    }
+
+    /// The connection comes back and the room takes the same place again, caught up.
+    fn restore_connection(seat: &Seat) {
+        let now = seat.tick();
+        let frames = seat.coauthor.borrow_mut().connected(now);
+        seat.keep(frames);
+        let joined = json!({"type":"live_joined","session":"00000000-0000-0000-0000-00000000005e","participant":2,"place":{"is":"kept"},
+            "can_edit":true,"heartbeat_ms":60_000,"people":[]});
+        let now = seat.tick();
+        seat.coauthor.borrow_mut().receive(&joined.to_string(), now).unwrap();
+        let now = seat.tick();
+        let catchup = json!({"type":"catchup","base":0,"revision":null,"from":0,"head":0});
+        seat.coauthor.borrow_mut().receive(&catchup.to_string(), now).unwrap();
+    }
+
+    #[test]
+    fn offline_refuses_a_new_draft_and_says_so() {
+        let (mut app, seat, _) = live_app(true, true, vec![]);
+        drop_connection(&seat);
+        assert!(!app.live_may_edit());
+        app.begin_edit(Some("typed".into()), false);
+        assert!(app.editor.is_none(), "no draft opens while offline");
+        assert_eq!(app.toast.as_ref().map(|(t, _)| t.as_str()), Some(OFFLINE_REASON));
+        assert!(app.message.is_none());
+        assert!(seat.entries().is_empty(), "nothing is submitted");
+    }
+
+    #[test]
+    fn a_draft_open_at_the_drop_keeps_its_text_and_commits_after_reconnecting() {
+        let (mut app, seat, _) = live_app(true, true, vec![]);
+        app.begin_edit(Some("4".into()), false);
+        if let Some(editor) = app.editor.as_mut() {
+            editor.text = "42".into();
+        }
+        drop_connection(&seat);
+        assert!(!app.commit_edit(1, 0, false, false), "Enter does not commit offline");
+        assert_eq!(app.editor.as_ref().map(|e| e.text.as_str()), Some("42"), "the draft keeps its text");
+        assert_eq!(app.message.as_ref().map(|(_, m)| m.as_str()), Some(OFFLINE_REASON));
+        assert!(seat.entries().is_empty());
+        app.message = None;
+        restore_connection(&seat);
+        assert!(app.live_may_edit(), "no stuck offline state");
+        assert!(app.commit_edit(1, 0, false, false), "Enter commits once the connection is back");
+        assert_eq!(seat.entries().len(), 1, "the change is sent");
+        assert_eq!(value(&app, "A1"), Value::Number(42.0));
+    }
+
+    #[test]
+    fn a_change_command_offline_returns_the_sentence() {
+        let (mut app, seat, _) = live_app(true, true, vec![]);
+        drop_connection(&seat);
+        assert_eq!(app.run("cell.set", json!({"cell":"A1","input":"5"})).unwrap_err(), OFFLINE_REASON);
+        assert_eq!(app.run("home.bold", json!({"range":"A1"})).unwrap_err(), OFFLINE_REASON);
+        assert!(seat.entries().is_empty());
+        restore_connection(&seat);
+        app.run("cell.set", json!({"cell":"A1","input":"5"})).unwrap();
+        assert_eq!(seat.entries().len(), 1);
+    }
+
+    #[test]
+    fn undo_offline_is_refused_and_the_history_is_kept() {
+        let (mut app, seat, _) = live_app(true, true, vec![]);
+        app.run("cell.set", json!({"cell":"A1","input":"5"})).unwrap();
+        seat.confirm(&mut app.session, 0, 1);
+        let labels = app.undo_labels();
+        assert!(!labels.is_empty());
+        drop_connection(&seat);
+        assert_eq!(app.run("edit.undo", json!({})).unwrap_err(), OFFLINE_REASON);
+        assert_eq!(app.run("edit.redo", json!({})).unwrap_err(), OFFLINE_REASON);
+        assert_eq!(app.undo_labels(), labels, "the undo history is unchanged");
+        assert_eq!(seat.entries().len(), 1);
     }
 
     #[test]

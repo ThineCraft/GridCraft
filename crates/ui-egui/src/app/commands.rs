@@ -183,6 +183,7 @@ impl SheetApp {
             || e == FILES_LOCKED
             || e == gridcraft_engine::coauthor::UNSHARED_REASON
             || e == crate::live::READ_ONLY_REASON
+            || e == crate::live::OFFLINE_REASON
         {
             self.toast = Some((e, now_ms()));
         } else {
