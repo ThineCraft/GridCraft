@@ -1,6 +1,6 @@
 # Roadmap detail
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-11-19 · **Change:** minor (G4 checkpoint fidelity proved; user-facing co-authoring remains G5 work; earlier: first live GridCraft command set and in-process co-author adapter complete) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-11-22 · **Change:** minor (G5: co-authoring connected to ShareCraft's browser frame, development only; earlier: G4 checkpoint fidelity proved; user-facing co-authoring remains G5 work; earlier: first live GridCraft command set and in-process co-author adapter complete) · **Target:** Microsoft Excel (Microsoft 365)
 
 Forward-looking plan. The one-page summary is [`ROADMAP.md`](../ROADMAP.md); the ranked work
 list is [`gaps.md`](gaps.md); numbers and method are in
@@ -90,10 +90,14 @@ Undo/Redo. G4 adds checkpoints: the agreed state at a ticket's position as deter
 plus identity session data, loaded with a full recalculation under its entry's stamp. A late
 joiner on a checkpoint plus the retained entries, and two fresh editors writing the same
 position, produce the same SHA-256 as straight-through clients; desktop and wasm32 agree on
-entered content ([coauthor-determinism.md](coauthor-determinism.md#checkpoints-in-g4)). It is
-not user-facing: G5 supplies sockets, the host bridge, presence, notices and the screen
-integration. One maths library for desktop and browser, real-browser runs and large content
-remain open.
+entered content ([coauthor-determinism.md](coauthor-determinism.md#checkpoints-in-g4)). G5 (2026-11)
+connects it to ShareCraft's browser frame: sockets, the host bridge, presence, notices and the
+screen integration, so people can edit one GridCraft file together in the browser. It is switched
+on only in ShareCraft's development run; production stays off until the owner decides. Editing
+together needs a live connection, and the editor refuses edits while offline with a message. One
+maths library for desktop and browser (desktop sessions wait for it), large content, unshared
+commands and Show Changes remain open, as do the I1 and I2 follow-ups before production
+(see [gaps.md](gaps.md) §16).
 
 Structural changes on workbooks with at least 100,000 stored cells wait for the server instead of
 being shown and re-run locally. Shared sheet insertion and deletion work, but Undo of a sheet add
@@ -143,6 +147,8 @@ platforms.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-22 | minor | G5 Task 15: co-authoring connected to ShareCraft's browser frame (two-person acceptance run in the browser, reproducible editor build, offline refusal with a message); development only, production off |
+| 2026-11-21 | minor | G5 Task 14: co-authoring proofs run in real browsers (built-in Chromium all pass, headline wasm p95 59.665 ms; Chrome, Edge and Firefox correctness matched, timings missing) |
 | 2026-11-19 | minor | G4 checkpoints: agreed-state bytes and identity data, full-recalculation load, checkpoint-plus-suffix, second-writer and native/wasm entered proofs; user-facing work remains G5 |
 | 2026-11-19 | minor | First identity-targeted live command set and in-process G2 adapter complete; checkpoints and user-facing G4/G5 integration remain |
 | 2026-10-23 | minor | Measuring: tests run through `cargo xtask test` |

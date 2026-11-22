@@ -1,6 +1,6 @@
 # Gaps
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-11-19 · **Change:** minor (§16: G4 checkpoints proved; deletion-ownership note resolved; earlier: §16: gestures refused while editing together; earlier: §16: G3 review carries for G4 and G5; earlier: §16: first live command set and in-process co-author adapter complete; no user-facing co-authoring yet; earlier: §17: equations; earlier: §13: Solver Sensitivity report; earlier: §4: chart resizing is no longer a gap) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-11-22 · **Change:** minor (§16: co-authoring is user-facing in ShareCraft's browser frame (G5); I7 resolved with its limits; earlier: §16: G4 checkpoints proved; deletion-ownership note resolved; earlier: §16: gestures refused while editing together; earlier: §16: G3 review carries for G4 and G5; earlier: §16: first live command set and in-process co-author adapter complete; no user-facing co-authoring yet; earlier: §17: equations; earlier: §13: Solver Sensitivity report; earlier: §4: chart resizing is no longer a gap) · **Target:** Microsoft Excel (Microsoft 365)
 
 Every known shortfall against Excel, one entry each, ranked by user impact (what blocks someone
 using GridCraft for real work first). This is the work list: pick from the top, check the open
@@ -166,8 +166,8 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
   resizing a floating object, setting a form control's value, the Watch Window list, editing a
   Python cell, and File › Save a Copy. Sort, cut and paste, fill, merge, objects, charts,
   pivots, macros and scripts stay refused too. Save hands over no file (checkpoints are
-  automatic); Export as PDF still works. Other people's selections are drawn only once the
-  live wire carries presence (ShareCraft G5 task 1).
+  automatic); Export as PDF still works. Other people's names and selections are drawn from
+  presence, which is not stored or logged.
 - **Added in G4 (engine):** checkpoints. A ticket writes the agreed state at its position as
   deterministic XLSX bytes plus identity session data (including who deleted each row and
   column); a waiting change is never written. A checkpoint loads with a full recalculation under
@@ -175,17 +175,42 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
   plus the retained entries writes the same bytes and SHA-256 as straight-through clients, and
   two fresh editors writing the same position agree. Cross-platform agreement compares entered
   content only. Detail and tests: [coauthor-determinism.md](coauthor-determinism.md#checkpoints-in-g4).
-- **Still missing:** G5 sockets, the host bridge, presence, notices and the screen integration.
-  There is no user-facing co-authoring until G5 lands. Also open: one maths library for desktop
-  and browser (checkpoint bytes carry computed values, so a browser writer and a desktop verifier
-  can disagree on the hash), runs in real browsers rather than Node, large content (C20) and
-  commands outside the shared set. Known before a real room (G3 final review):
-  - **G5 (P, S):** live identity tables are scanned in full per target, and every applied entry
-    clones the whole table, so a co-author who fragments an axis (one delete naming tens of
-    thousands of alternate rows) makes every later entry slow on every client. Index the
-    ordered identities in collab-live, share per-sheet tables, and cap distinct blocks per
-    structural entry, with a timing test on a fragmented axis. Show Changes is also missing; cloud storage is requested (#86). Comment navigation
-  and notes ↔ comments conversion have landed. **Estimate:** 35–55 h.
+- **Added in G5 (web, 2026-11-21 and 2026-11-22):** user-facing co-authoring in ShareCraft's
+  browser frame. Two or more people open the same GridCraft file from a ShareCraft library and see
+  each other in the bar and each other's selection in the grid. Edits, personal Undo, conflict
+  notices (including "Your change wasn't applied because someone deleted that row. Your text is
+  kept." with Copy text), save status, revisions crediting everyone, read-only people and removal
+  of access all work. Run by hand in the built-in browser with two people (Ann and Bob, in two
+  tabs) and recorded in ShareCraft's sequencing document (checks A07 and A17); real-browser proofs
+  are in [coauthor-determinism.md](coauthor-determinism.md#real-browser-results-g5-task-14). The
+  desktop app is unchanged. ShareCraft's built-in default is that live editing is off; it was
+  switched on only for the development run (production stays off until the owner decides).
+- **I7 resolved, with limits:** live identity tables are indexed and shared per sheet, and a
+  distinct-block cap per structural entry applies. On the browser a 60,001-run axis with 30,000
+  owned deletions took 0.200 ms p95 per entry with no identity run walked. Limit: deleted runs are
+  not compacted yet (follow-up I2), so an axis that reaches its run cap refuses row and column
+  changes for the rest of that session.
+- **Editing together needs a live connection (D16, unchanged).** While the connection is down the
+  editor refuses edits and says "You're offline. Changes can be made again when the connection is
+  back.", and it keeps any text already being typed. Changes already sent but not confirmed are
+  kept and sent again. The status shows "Connecting…" while nothing is waiting, and "Offline —
+  changes kept" only when changes are waiting. There is no offline queue.
+- **Still missing:**
+  - Desktop sessions, and the one shared Rust maths library for desktop and browser (checkpoint
+    bytes carry computed values, so a browser writer and a desktop verifier can disagree on the
+    hash). Desktop GridCraft, WordCraft, PdfCraft and SolidCraft wait for it (C5/C16).
+  - Large content (C20).
+  - Commands outside the shared set (unshared commands such as the filter toggle and
+    `range.setValues` are refused with "Not available while editing together").
+  - Show Changes.
+  - Chrome, Edge and Firefox timings in real browsers (correctness matched; see the determinism
+    audit).
+  - Follow-ups before production switch-on: I1, store the live-base stamp (at and seed) on the
+    checkpoint row so the 30-day sweep cannot strand a file; I2, identity-run compaction.
+  - Only automated tests cover returning after expiry and the 30-day archive, the log-limit pause,
+    crash cancellation, checkpoint mismatch and stale-base recovery.
+- Also open: cloud storage is requested (#86). Comment navigation and notes ↔ comments conversion
+  have landed. **Estimate:** 35–55 h.
 
 ### 17. Insert objects (F)
 - Ink strokes now survive XLSX save/reopen as editable polylines. Inserted icons still lose their
@@ -228,6 +253,7 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-22 | minor | §16: user-facing co-authoring in ShareCraft's browser frame (G5): presence, conflicts, personal Undo, revisions; I7 resolved with its limits and the I2 compaction follow-up; offline editing refused with a message (D16); still missing: desktop sessions and the shared maths library, large content, unshared commands, Show Changes |
 | 2026-11-19 | minor | §16: G4 checkpoints (agreed-state bytes, identity data, full-recalculation load, checkpoint-plus-suffix and second-writer proofs); the G4 deletion-ownership note is resolved |
 | 2026-11-19 | minor | §16: G3 final-review carries: deletion ownership in checkpoints (G4), identity-table cost under fragmentation (G5) |
 | 2026-11-19 | minor | §16: first identity-targeted live command set and in-process G2 adapter complete; checkpoints and user-facing G4/G5 integration remain |
