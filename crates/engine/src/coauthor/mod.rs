@@ -289,6 +289,13 @@ impl GridCoauthor {
         self.editing = editing;
     }
 
+    /// Hands a presence note (from [`Self::presence`]) to the live client; returns the frame to
+    /// send now, or `None` while the client is not live (it keeps the newest note and sends it
+    /// itself on resume). A note over the library's limit is `LocalError::TooLarge`.
+    pub fn presence_frame(&mut self, note: String) -> Result<Option<String>, LocalError> {
+        self.client.presence(note)
+    }
+
     /// The person's presence note when it changed since the last one sent, at most one every
     /// [`MIN_PRESENCE_INTERVAL_MS`]; a change held back by the interval goes on a later call.
     pub fn presence(&mut self, now_ms: u64) -> Option<String> {

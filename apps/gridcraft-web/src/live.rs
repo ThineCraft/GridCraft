@@ -380,8 +380,7 @@ pub struct LiveSeat {
     finished: Option<Session>,
     /// Who may edit, by participant, from the room's people list.
     room_can_edit: BTreeMap<u32, bool>,
-    /// Other people's latest presence notes, by participant. STAND-IN: stays empty until the
-    /// live wire carries presence (ShareCraft G5 task 1, `LiveServerMsg::Presence`).
+    /// Other people's latest presence notes, by participant, from the live wire.
     presence: BTreeMap<u32, String>,
 }
 
@@ -707,6 +706,14 @@ impl LiveSeat {
                     let connected: Vec<u32> = people.iter().filter(|person| person.connected).map(|person| person.participant.0).collect();
                     self.presence.retain(|participant, _| connected.contains(participant));
                 }
+                Event::Presence { participant, payload } => match payload {
+                    Some(note) => {
+                        self.presence.insert(participant.0, note.clone());
+                    }
+                    None => {
+                        self.presence.remove(&participant.0);
+                    }
+                },
                 _ => {}
             }
         }
@@ -716,7 +723,7 @@ impl LiveSeat {
     fn flush(&mut self, now_ms: u64, out: &mut Vec<LiveEditorMsg>) {
         let Some(coauthor) = self.coauthor.as_mut() else { return };
         out.extend(coauthor.tick(now_ms).into_iter().map(LiveEditorMsg::Send));
-        if let Some(frame) = coauthor.presence(now_ms).and_then(presence_frame_stand_in) {
+        if let Some(frame) = coauthor.presence(now_ms).and_then(|note| presence_frame(coauthor, note)) {
             out.push(LiveEditorMsg::Send(frame));
         }
         for notice in coauthor.take_notices() {
@@ -975,12 +982,16 @@ pub fn accepts_message(event_origin: &str, own_origin: &str, from_parent: bool) 
     from_parent && event_origin == own_origin
 }
 
-/// STAND-IN for ShareCraft G5 task 1. The live wire has no presence message yet
-/// (`LiveClientMsg::Presence`, sent through `LiveClient::presence`), so a note cannot be framed
-/// and nothing is sent. Replace this with the client's presence frame once task 1 lands.
-fn presence_frame_stand_in(note: String) -> Option<String> {
-    drop(note);
-    None
+/// The frame that carries a presence note, or `None` while not live. Presence is best effort: a
+/// note over the wire's limit is dropped quietly.
+fn presence_frame(coauthor: &mut GridCoauthor, note: String) -> Option<String> {
+    match coauthor.presence_frame(note) {
+        Ok(frame) => frame,
+        Err(error) => {
+            log::debug!("live: a presence note was not sent: {error}");
+            None
+        }
+    }
 }
 
 fn ticket_messages(answer: TicketAnswer) -> Vec<LiveEditorMsg> {
@@ -1911,8 +1922,9 @@ mod tests {
         join_live(&mut bob, 3, 10);
         let people = vec![PagePerson { participant: 2, name: "Ann".into(), initials: "A".into(), colour: "#336699".into(), connected: true }];
         bob.handle(LivePageMsg::People(people), 60);
-        assert!(bob.others().is_empty(), "no place without a presence note (presence is still a stand-in on the wire)");
-        bob.presence.insert(2, note);
+        assert!(bob.others().is_empty(), "no place without a presence note");
+        let heard = json!({"type":"presence","participant":2,"payload":note});
+        bob.handle(LivePageMsg::Frame(heard.to_string()), 65);
         let others = bob.others();
         assert_eq!(others.len(), 1);
         assert_eq!(others[0].colour, egui::Color32::from_rgb(0x33, 0x66, 0x99));
@@ -1923,6 +1935,36 @@ mod tests {
         assert!(bob.others().is_empty(), "a dropped connection takes the place away at once");
         assert_eq!(colour("blue"), egui::Color32::GRAY);
         assert!(bob.take_finished().is_none());
+    }
+
+    #[test]
+    fn a_cleared_presence_note_takes_the_place_away() {
+        let (mut alice, _) = opened(Arc::default(), 10);
+        join_live(&mut alice, 2, 10);
+        let coauthor = alice.coauthor_mut().unwrap();
+        coauthor.editor_mut().session_mut().execute("selection.set", json!({"range":"B3"})).unwrap();
+        let note = coauthor.presence(5_000).unwrap();
+        let (mut bob, _) = opened(Arc::default(), 10);
+        join_live(&mut bob, 3, 10);
+        let people = vec![PagePerson { participant: 2, name: "Ann".into(), initials: "A".into(), colour: "#336699".into(), connected: true }];
+        bob.handle(LivePageMsg::People(people), 60);
+        bob.handle(LivePageMsg::Frame(json!({"type":"presence","participant":2,"payload":note}).to_string()), 65);
+        assert_eq!(bob.others().len(), 1);
+        bob.handle(LivePageMsg::Frame(json!({"type":"presence","participant":2,"payload":null}).to_string()), 66);
+        assert!(bob.others().is_empty(), "a cleared note removes the place");
+    }
+
+    #[test]
+    fn a_note_made_while_live_is_framed_and_an_oversized_one_sends_nothing() {
+        let (mut alice, _) = opened(Arc::default(), 10);
+        join_live(&mut alice, 2, 10);
+        let coauthor = alice.coauthor_mut().unwrap();
+        coauthor.editor_mut().session_mut().execute("selection.set", json!({"range":"B3"})).unwrap();
+        let note = coauthor.presence(5_000).unwrap();
+        let frame = presence_frame(coauthor, note.clone()).unwrap();
+        let sent: Json = serde_json::from_str(&frame).unwrap();
+        assert_eq!((sent["type"].as_str(), sent["payload"].as_str()), (Some("presence"), Some(note.as_str())));
+        assert!(presence_frame(coauthor, "x".repeat(100_000)).is_none(), "an oversized note sends nothing");
     }
 
     /// eframe runs `raw_input_hook` and `logic` for a hidden tab, and never `ui`. Each call lends
