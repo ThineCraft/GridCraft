@@ -180,7 +180,7 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
   each other in the bar and each other's selection in the grid. Edits, personal Undo, conflict
   notices (including "Your change wasn't applied because someone deleted that row. Your text is
   kept." with Copy text), save status, revisions crediting everyone, read-only people and removal
-  of access all work. Run by hand in the built-in browser with two people (Ann and Bob, in two
+  of access all work. Run by hand in the built-in browser by one operator driving two test accounts (Ann and Bob, in two
   tabs) and recorded in ShareCraft's sequencing document (checks A07 and A17); real-browser proofs
   are in [coauthor-determinism.md](coauthor-determinism.md#real-browser-results-g5-task-14). The
   desktop app is unchanged. ShareCraft's built-in default is that live editing is off; it was
