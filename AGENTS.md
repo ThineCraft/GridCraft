@@ -114,17 +114,17 @@ People trust GridCraft with their numbers; a crash loses their work. **This outr
 - Never add, edit, guess or copy anyone else's entry or name (not from git config, commit authors or
   GitHub profiles). Never hand-edit `contributors.json`.
 
-## ShareCraft co-authoring work (handoff, 20 November 2026)
+## ShareCraft co-authoring work (handoff, updated 22 November 2026)
 
 - The co-authoring tracks G3–G5 are planned in ShareCraft (`../ShareCraft/plans/*.html`); start
   with `../ShareCraft/handoff.html`, which says where every task stands and what is next.
-- This fork's work branch is `coauthor-g5` (contains `coauthor-g3` and `coauthor-g4`). PR
-  `ThineCraft/GridCraft#2` (coauthor-g3 → sharecraft) is open. Task briefs, reports and reviews
-  are in the git-ignored `plan/` folder.
-- The fork builds ShareCraft's `collab-live`, `collab-core` and `protocol` through the path
-  `../ShareCraft/crates/...` until G5 Task 7 pins a git revision. Pin ShareCraft `main`
-  (5411a7b or later): it holds all of G4 and the G5 ShareCraft tasks done so far.
-- `coauthor-g5` is pushed to origin (20 November 2026).
+- ShareCraft builds this fork's `sharecraft` branch, at the commit its `editors.toml` pins
+  (`8a7c0bbc` on 22 November 2026). The co-authoring work was done on `coauthor-g3` to
+  `coauthor-g5`, all now contained in `sharecraft`. Task briefs, reports and reviews are in the
+  git-ignored `plan/` folder.
+- The fork builds ShareCraft's `collab-core`, `collab-live` and `protocol` from git, pinned in
+  `Cargo.toml` to ShareCraft revision `52927c5` (on ShareCraft `main`), not through a path. Move
+  all three together, to a revision whose live protocol matches the server's.
 - Build from `%TEMP%` with an absolute `--manifest-path` and `--locked --offline`: the parent
   folder's `.cargo/config.toml` holds a personal patch override. Put build output on J:
   (`CARGO_TARGET_DIR=J:\cargo-target\gridcraft-g5`, `CARGO_INCREMENTAL=0`). The wasm test runner
