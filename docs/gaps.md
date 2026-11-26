@@ -1,6 +1,6 @@
 # Gaps
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-11-22 · **Change:** minor (§16: co-authoring is user-facing in ShareCraft's browser frame (G5); I7 resolved with its limits; earlier: §16: G4 checkpoints proved; deletion-ownership note resolved; earlier: §16: gestures refused while editing together; earlier: §16: G3 review carries for G4 and G5; earlier: §16: first live command set and in-process co-author adapter complete; no user-facing co-authoring yet; earlier: §17: equations; earlier: §13: Solver Sensitivity report; earlier: §4: chart resizing is no longer a gap) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-11-26 · **Change:** minor (§16: deleted rows and columns compacted between live sessions; earlier: §16: co-authoring is user-facing in ShareCraft's browser frame (G5); I7 resolved with its limits; earlier: §16: G4 checkpoints proved; deletion-ownership note resolved; earlier: §16: gestures refused while editing together; earlier: §16: G3 review carries for G4 and G5; earlier: §16: first live command set and in-process co-author adapter complete; no user-facing co-authoring yet; earlier: §17: equations; earlier: §13: Solver Sensitivity report; earlier: §4: chart resizing is no longer a gap) · **Target:** Microsoft Excel (Microsoft 365)
 
 Every known shortfall against Excel, one entry each, ranked by user impact (what blocks someone
 using GridCraft for real work first). This is the work list: pick from the top, check the open
@@ -205,8 +205,10 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
   - Show Changes.
   - Chrome, Edge and Firefox timings in real browsers (correctness matched; see the determinism
     audit).
-  - Follow-ups before production switch-on: I1, store the live-base stamp (at and seed) on the
-    checkpoint row so the 30-day sweep cannot strand a file; I2, identity-run compaction.
+  - Deleted row and column identities are forgotten between sessions only: a session that starts
+    from an earlier session's checkpoint compacts it as it loads (live protocol 2), but one very
+    long session can still fill an axis's 65,536 runs. A returning person's change that names a
+    row deleted before the compaction does nothing ("not available") instead of a `#REF!`.
   - Only automated tests cover returning after expiry and the 30-day archive, the log-limit pause,
     crash cancellation, checkpoint mismatch and stale-base recovery.
 - Also open: cloud storage is requested (#86). Comment navigation and notes ↔ comments conversion

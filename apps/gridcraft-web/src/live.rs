@@ -373,6 +373,8 @@ pub struct LiveSeat {
     page_may_edit: bool,
     /// The base the editor asked for and waits for.
     expected_base: Option<(Option<String>, u64)>,
+    /// Whether that base, if a checkpoint, forgets its deleted row and column identities.
+    compact_base: bool,
     people: Vec<PagePerson>,
     crashed_at: Option<u64>,
     last_state: Option<LiveEditorMsg>,
@@ -392,6 +394,7 @@ impl LiveSeat {
             coauthor: None,
             page_may_edit: false,
             expected_base: None,
+            compact_base: false,
             people: Vec::new(),
             crashed_at: None,
             last_state: Some(idle),
@@ -662,9 +665,12 @@ impl LiveSeat {
             }
             // A re-stored file (an outside replacement, a major mark) carries no identities: it
             // is a file base, with fresh identities alike on every machine.
-            (Some(_), Some(session_data), Some((at_ms, seed))) if !session_data.is_empty() => {
-                coauthor.load_base(LiveBase::Checkpoint { bytes: &base.bytes, session_data, stamp: Stamp { at_ms, seed } })
-            }
+            (Some(_), Some(session_data), Some((at_ms, seed))) if !session_data.is_empty() => coauthor.load_base(LiveBase::Checkpoint {
+                bytes: &base.bytes,
+                session_data,
+                stamp: Stamp { at_ms, seed },
+                compact: self.compact_base,
+            }),
             (Some(_), _, _) => coauthor.load_base(LiveBase::File { bytes: &base.bytes }),
         };
         if loaded.is_err() {
@@ -692,8 +698,9 @@ impl LiveSeat {
         let Some(coauthor) = self.coauthor.as_ref() else { return };
         for event in &step.events {
             match event {
-                Event::LoadBase { revision, at } => {
+                Event::LoadBase { revision, at, compact } => {
                     self.expected_base = Some((revision.clone(), at.0));
+                    self.compact_base = *compact;
                     out.push(LiveEditorMsg::Load { revision: revision.clone(), at: at.0 });
                 }
                 Event::CheckpointRequested { .. } | Event::VerifyRequested { .. } => {

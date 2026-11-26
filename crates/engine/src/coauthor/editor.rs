@@ -257,15 +257,26 @@ impl GridLiveEditor {
 
     /// Builds a fresh editor from one durable checkpoint. Identity validation happens against
     /// the parsed workbook before any caller-owned editor is replaced.
-    pub(super) fn from_checkpoint(bytes: &[u8], session_data: &[u8], stamp: Stamp) -> Result<Self, super::CoauthorError> {
-        Self::from_checkpoint_in(Session::new(), bytes, session_data, stamp)
+    /// With `compact`, the checkpoint's deleted row and column identities are forgotten
+    /// ([`WorkbookIds::compact_deleted_lines`]).
+    pub(super) fn from_checkpoint(bytes: &[u8], session_data: &[u8], stamp: Stamp, compact: bool) -> Result<Self, super::CoauthorError> {
+        Self::from_checkpoint_in(Session::new(), bytes, session_data, stamp, compact)
     }
 
     /// [`Self::from_checkpoint`] in the host's own session, whose documents the checkpoint
     /// replaces.
-    pub(super) fn from_checkpoint_in(mut session: Session, bytes: &[u8], session_data: &[u8], stamp: Stamp) -> Result<Self, super::CoauthorError> {
+    pub(super) fn from_checkpoint_in(
+        mut session: Session,
+        bytes: &[u8],
+        session_data: &[u8],
+        stamp: Stamp,
+        compact: bool,
+    ) -> Result<Self, super::CoauthorError> {
         let (workbook, _) = crate::io::open_checkpoint_bytes("checkpoint.xlsx", bytes)?;
-        let ids = WorkbookIds::from_session_data(session_data, &workbook)?;
+        let mut ids = WorkbookIds::from_session_data(session_data, &workbook)?;
+        if compact {
+            ids.compact_deleted_lines();
+        }
         close_all_documents(&mut session);
         // No row fitting on load: the checkpoint's heights are the agreed ones (see
         // `DocState::new_configured`).

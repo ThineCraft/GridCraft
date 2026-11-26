@@ -480,6 +480,25 @@ impl WorkbookIds {
         Ok(ids)
     }
 
+    /// Forgets every deleted row and column identity, and who deleted it, on every sheet;
+    /// returns how many deleted runs were dropped. Sheet identities are kept. Every editor of a
+    /// session that starts from an earlier session's checkpoint does this as it loads it, so
+    /// deleted runs no longer pile up from session to session towards
+    /// [`OrderedIds::MAX_RUNS`]. The result depends only on the tables, so all editors agree.
+    pub fn compact_deleted_lines(&mut self) -> usize {
+        let mut dropped = 0usize;
+        for sheet in self.by_id.values_mut() {
+            if sheet.rows.total_runs() == sheet.rows.runs() && sheet.cols.total_runs() == sheet.cols.runs() {
+                continue;
+            }
+            let sheet = Arc::make_mut(sheet);
+            dropped = dropped.saturating_add(sheet.rows.compact()).saturating_add(sheet.cols.compact());
+        }
+        // Deletion owners name only deleted row and column runs, all of which are gone now.
+        self.deleted_by = DeletedOwners::default();
+        dropped
+    }
+
     /// Serialises the validated identity graph stored beside a checkpoint.
     pub fn session_data(&self) -> Result<Vec<u8>, CoauthorError> {
         self.validate_without_workbook()?;

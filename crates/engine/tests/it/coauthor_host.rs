@@ -341,13 +341,67 @@ fn starting_from_a_checkpoint_keeps_its_identities() {
     let stamp = collab_live::client::Stamp { at_ms: 1_795_219_200_000, seed: 7 };
     let joined = GridCoauthor::start(
         Session::new(),
-        LiveBase::Checkpoint { bytes: &checkpoint.bytes, session_data: &checkpoint.session_data, stamp },
+        LiveBase::Checkpoint { bytes: &checkpoint.bytes, session_data: &checkpoint.session_data, stamp, compact: false },
         live_config(),
     )
     .expect("a checkpoint base starts");
 
     assert_eq!(joined.editor().ids(), alice.editor().ids(), "the checkpoint's identities are kept");
     assert_eq!(entered(&joined), checkpoint.entered);
+}
+
+/// The deleted runs one sheet's row and column tables hold.
+fn deleted_runs(client: &GridCoauthor, sheet: usize) -> usize {
+    let id = client.editor().ids().sheet_id(sheet).expect("sheet identity");
+    let axes = client.editor().ids().by_id.get(&id).expect("sheet tables");
+    (axes.rows.total_runs() - axes.rows.runs()) + (axes.cols.total_runs() - axes.cols.runs())
+}
+
+#[test]
+fn a_checkpoint_of_an_earlier_session_loads_compacted() {
+    let mut server = DeterministicServer::new();
+    let mut alice = coauthor(&["Data"]);
+    let place = server.join(&mut alice, 10);
+    let delete_rows = submit(&mut alice, &server, &place, "home.deleteRows", json!({"sheet":0,"rows":"2:3"}), 20);
+    let ordered = server.order(&delete_rows, 1_795_219_200_000, 7);
+    server.deliver(&mut alice, &ordered, 30);
+    let delete_column = submit(&mut alice, &server, &place, "home.deleteColumns", json!({"sheet":0,"cols":"B:B"}), 40);
+    let ordered = server.order(&delete_column, 1_795_219_200_100, 8);
+    server.deliver(&mut alice, &ordered, 50);
+    assert!(deleted_runs(&alice, 0) >= 2, "the session remembers its deleted rows and column");
+    let checkpoint = alice.checkpoint(server.head()).expect("checkpoint writes");
+
+    let stamp = collab_live::client::Stamp { at_ms: 1_795_219_200_100, seed: 8 };
+    let load = || {
+        GridCoauthor::start(
+            Session::new(),
+            LiveBase::Checkpoint { bytes: &checkpoint.bytes, session_data: &checkpoint.session_data, stamp, compact: true },
+            live_config(),
+        )
+        .expect("a compacted checkpoint base starts")
+    };
+    let (first, second) = (load(), load());
+
+    assert_eq!(deleted_runs(&first, 0), 0, "the deleted rows and column are forgotten");
+    assert_eq!(first.editor().ids(), second.editor().ids(), "every editor compacts alike");
+    assert_eq!(first.editor().ids().session_data().expect("data"), second.editor().ids().session_data().expect("data"));
+    assert_eq!(entered(&first), checkpoint.entered, "the content is the checkpoint's");
+    // The live rows and columns keep their identities and places.
+    let sheet = alice.editor().ids().sheet_id(0).expect("sheet");
+    let (kept, compacted) = (&alice.editor().ids().by_id[&sheet], &first.editor().ids().by_id[&sheet]);
+    for pos in [0, 1, 2, 100] {
+        assert_eq!(compacted.rows.id_at(pos), kept.rows.id_at(pos), "row {pos}");
+        assert_eq!(compacted.cols.id_at(pos), kept.cols.id_at(pos), "column {pos}");
+    }
+    // A compacted table saved again and loaded compacted again is unchanged.
+    let again = first.editor().ids().session_data().expect("compacted identity data");
+    let reloaded = GridCoauthor::start(
+        Session::new(),
+        LiveBase::Checkpoint { bytes: &checkpoint.bytes, session_data: &again, stamp, compact: true },
+        live_config(),
+    )
+    .expect("starts");
+    assert_eq!(reloaded.editor().ids(), first.editor().ids());
 }
 
 #[test]

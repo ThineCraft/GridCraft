@@ -288,8 +288,10 @@ pub enum LiveBase<'a> {
     /// way: entries name identities, and fresh ones match only the session that began on this
     /// file. The room guarantees it (a base with identity data loads as `Checkpoint`).
     File { bytes: &'a [u8] },
-    /// A durable checkpoint with its identity tables, loaded under its stamp.
-    Checkpoint { bytes: &'a [u8], session_data: &'a [u8], stamp: Stamp },
+    /// A durable checkpoint with its identity tables, loaded under its stamp. With `compact`
+    /// (the room's word for a checkpoint of an earlier session, `Event::LoadBase`), its deleted
+    /// row and column identities are forgotten as it loads.
+    Checkpoint { bytes: &'a [u8], session_data: &'a [u8], stamp: Stamp, compact: bool },
 }
 
 /// Why one of the person's own changes did nothing on every machine.

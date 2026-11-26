@@ -311,7 +311,7 @@ pub fn join_from_checkpoint(
     let step = client.receive(&catchup.to_string(), now_ms.saturating_add(2)).expect("catch-up is accepted");
     assert!(step.events.iter().any(|event| matches!(event, Event::LoadBase { at: base_at, .. } if *base_at == at)), "the checkpoint is the base");
     client
-        .load_base(LiveBase::Checkpoint { bytes: &base.bytes, session_data: &base.session_data, stamp })
+        .load_base(LiveBase::Checkpoint { bytes: &base.bytes, session_data: &base.session_data, stamp, compact: false })
         .expect("the checkpoint and its identity data load");
     assert_eq!(client.editor().agreement_digest(), base.entered, "the loaded base is the checkpoint's entered content");
     client.base_ready(now_ms.saturating_add(3)).expect("the loaded base is accepted");

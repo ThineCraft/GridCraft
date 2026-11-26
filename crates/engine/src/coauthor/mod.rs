@@ -257,7 +257,9 @@ impl GridCoauthor {
     pub fn start(session: crate::Session, base: LiveBase<'_>, config: LiveConfig) -> Result<Self, GridLiveError> {
         let editor = match base {
             LiveBase::File { bytes } => GridLiveEditor::from_file_in(session, bytes)?,
-            LiveBase::Checkpoint { bytes, session_data, stamp } => GridLiveEditor::from_checkpoint_in(session, bytes, session_data, stamp)?,
+            LiveBase::Checkpoint { bytes, session_data, stamp, compact } => {
+                GridLiveEditor::from_checkpoint_in(session, bytes, session_data, stamp, compact)?
+            }
             LiveBase::Empty => GridLiveEditor::blank_in(session)?,
         };
         Ok(Self::new(config, editor))
@@ -426,7 +428,7 @@ impl GridCoauthor {
         let mut editor = match base {
             LiveBase::Empty => GridLiveEditor::blank()?,
             LiveBase::File { bytes } => GridLiveEditor::from_file_in(crate::Session::new(), bytes)?,
-            LiveBase::Checkpoint { bytes, session_data, stamp } => GridLiveEditor::from_checkpoint(bytes, session_data, stamp)?,
+            LiveBase::Checkpoint { bytes, session_data, stamp, compact } => GridLiveEditor::from_checkpoint(bytes, session_data, stamp, compact)?,
         };
         editor.take_crash_note_from(&mut self.editor);
         self.editor = editor;
@@ -436,7 +438,7 @@ impl GridCoauthor {
     /// Replaces the shown editor with a fully recalculated durable checkpoint. Work is done in a
     /// temporary editor, so malformed bytes or identity data leave the current editor untouched.
     pub fn load_checkpoint(&mut self, bytes: &[u8], session_data: &[u8], stamp: collab_live::client::Stamp) -> Result<(), GridLiveError> {
-        let mut editor = GridLiveEditor::from_checkpoint(bytes, session_data, stamp)?;
+        let mut editor = GridLiveEditor::from_checkpoint(bytes, session_data, stamp, false)?;
         editor.take_crash_note_from(&mut self.editor);
         self.editor = editor;
         Ok(())
