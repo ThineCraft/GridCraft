@@ -123,7 +123,7 @@ People trust GridCraft with their numbers; a crash loses their work. **This outr
   `coauthor-g5`, all now contained in `sharecraft`. Task briefs, reports and reviews are in the
   git-ignored `plan/` folder.
 - The fork builds ShareCraft's `collab-core`, `collab-live` and `protocol` from git, pinned in
-  `Cargo.toml` to ShareCraft revision `52927c5` (on ShareCraft `main`), not through a path. Move
+  `Cargo.toml` to ShareCraft revision `f718048` (branch `g5-prod-followups`, live protocol 2), not through a path. Move
   all three together, to a revision whose live protocol matches the server's.
 - Build from `%TEMP%` with an absolute `--manifest-path` and `--locked --offline`: the parent
   folder's `.cargo/config.toml` holds a personal patch override. Put build output on J:
